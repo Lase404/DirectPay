@@ -1,4 +1,3 @@
-```markdown
 # DirectPay Telegram Bot
 
 ![DirectPay Logo](![image](https://github.com/user-attachments/assets/bcc975e5-7c7c-43a9-8bf7-6f89ceb1a537)
