@@ -18,7 +18,7 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-// API Keys & other credentials
+// API Keys & other credentials 
 const BOT_TOKEN = '7404771579:AAEY0HpgC-3ZmFGq0-bToPkAczGbJ-WND-Q';
 const PAYSTACK_API_KEY = 'sk_test_cd857e88d5d474db8238d30d027ea2911cd7fa17';
 const BLOCKRADAR_API_KEY = 'grD8lJpMPjvjChMo5SnOl0eZmaabikn2z2S2rXKkAxCM1oWsZDMwFQL9LWgrc';
@@ -547,8 +547,7 @@ The user has successfully linked a bank account with the following details:
 
 Please verify the details and proceed accordingly.`
   );
-
-}); // Added missing closing brace and parenthesis
+});
 
 // Handle Bank Confirmation No
 bot.action('confirm_bank_no', async (ctx) => {
