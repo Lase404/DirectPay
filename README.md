@@ -1,9 +1,5 @@
 # DirectPay Telegram Bot
 
-![DirectPay Logo](![image](https://github.com/user-attachments/assets/51634f65-3994-4628-8888-6f77f8d50d24)
-)
-)
-
 ## Table of Contents
 
 - [Overview](#overview)
