@@ -929,6 +929,6 @@ bot.launch({
   .then(() => console.log('DirectPay bot is live!'))
   .catch((err) => console.error('Error launching bot:', err));
 
-// Graceful Shutdown
+// Shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
