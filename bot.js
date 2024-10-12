@@ -10,7 +10,7 @@ const path = require('path');
 // Firebase setup with Enhanced Error Handling
 let db;
 try {
-  const serviceAccountPath = '.directpayngn-firebase-adminsdk-d11t3-17c3c57aa5.json';
+  const serviceAccountPath = './directpayngn-firebase-adminsdk-d11t3-17c3c57aa5.json';
   if (!fs.existsSync(serviceAccountPath)) {
     console.error(`Service account key file not found at path: ${serviceAccountPath}`);
     process.exit(1);
