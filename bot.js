@@ -1,7 +1,7 @@
 // DirectPay Telegram Bot 
 ////////////////////////////
 // Founder: Toluwalase Adunbi
-/////////////////////////////
+////////////////////////////
 const Web3 = require('web3');
 const { Telegraf, Markup } = require('telegraf');
 const axios = require('axios');
@@ -36,7 +36,7 @@ app.use(express.json());
 // Max wallets per user
 const MAX_WALLETS = 3;
 
-//  Bank List for bank linking logic
+// Bank List for bank linking logic
 const bankList = [
   { name: '9mobile 9Payment Service Bank', code: '120001', aliases: ['9PSB', '9mobile PSB'] },
   { name: 'Abbey Mortgage Bank', code: '801', aliases: ['Abbey Mortgage'] },
@@ -444,7 +444,7 @@ bot.on('text', async (ctx) => {
     userState.awaitingAccountNumber = false;
     await saveUserState(userId, userState); // Save user state
   } else if (isAdmin(userId) && userState.awaitingUserIdForMessage) {
-    // Info logging to admin
+    // Functionality to send messages to users
     userState.messageRecipientId = ctx.message.text.trim();
     userState.awaitingUserIdForMessage = false;
     userState.awaitingMessageContent = true;
@@ -518,12 +518,12 @@ bot.action('confirm_bank_yes', async (ctx) => {
   userState.awaitingAccountNumber = false;
   await saveUserState(userId, userState); // Save user state
 
- await ctx.reply(
+  await ctx.reply(
     `✅ Your bank account has been linked successfully!
 
 You can now send **USDT**, **USDC**, or **ETH** on the **Base Network** to your wallet address:
 
-\`${walletAddress}\`
+\`${userState.wallets[walletIndex].address}\`
 
 🔔 *Important:* We support these tokens exclusively on the Base Network. Sending unsupported tokens or using a different network may result in loss of funds. If you are unsure, please contact support.
 
@@ -531,10 +531,10 @@ Thank you for choosing DirectPay for your seamless crypto-to-cash transactions.`
     { parse_mode: 'Markdown', ...getMainMenu(true) }
   );
 
-// Log to Admin
-await bot.telegram.sendMessage(
-  PERSONAL_CHAT_ID,
-  `🔔 **User Bank Account Linked**
+  // Log to Admin
+  await bot.telegram.sendMessage(
+    PERSONAL_CHAT_ID,
+    `🔔 **User Bank Account Linked**
 
 User ID: ${userId}
 Username: @${ctx.from.username || 'N/A'}
@@ -546,8 +546,11 @@ The user has successfully linked a bank account with the following details:
 - **Account Name:** ${userState.wallets[walletIndex].bank.accountName}
 
 Please verify the details and proceed accordingly.`
-);
-  
+  );
+
+}); // Added missing closing brace and parenthesis
+
+// Handle Bank Confirmation No
 bot.action('confirm_bank_no', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
@@ -568,7 +571,22 @@ bot.action('confirm_bank_no', async (ctx) => {
 
 // Learn About Base
 const baseContent = [
-  // ... (baseContent remains unchanged)
+  {
+    title: 'Welcome to Base',
+    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
+  },
+  {
+    title: 'Why Choose Base?',
+    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
+  },
+  {
+    title: 'Getting Started',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at https://base.org/bridge.',
+  },
+  {
+    title: 'Learn More',
+    text: 'Visit the official documentation at https://docs.base.org for in-depth guides and resources.',
+  },
 ];
 
 bot.hears('📘 Learn About Base', async (ctx) => {
