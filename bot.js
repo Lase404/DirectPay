@@ -36,93 +36,12 @@ const MAX_WALLETS = 3; // Max wallets per user
 
 // Manual Bank List with Aliases
 const bankList = [
-  { name: '9mobile 9Payment Service Bank', code: '120001', aliases: ['9PSB', '9mobile PSB'] },
-  { name: 'Abbey Mortgage Bank', code: '801', aliases: ['Abbey Mortgage'] },
-  { name: 'Above Only MFB', code: '51204', aliases: ['Above Only Microfinance Bank'] },
-  { name: 'Abulesoro MFB', code: '51312', aliases: ['Abulesoro Microfinance Bank'] },
-  { name: 'Access Bank', code: '044', aliases: ['Access', 'Diamond Bank'] },
-  { name: 'Access Bank (Diamond)', code: '063', aliases: ['Access Diamond', 'Diamond Bank'] },
-  { name: 'Airtel Smartcash PSB', code: '120004', aliases: ['Smartcash', 'Airtel PSB'] },
-  { name: 'ALAT by WEMA', code: '035A', aliases: ['ALAT', 'Wema ALAT'] },
-  { name: 'Amju Unique MFB', code: '50926', aliases: ['Amju Unique Microfinance Bank'] },
-  { name: 'Aramoko MFB', code: '50083', aliases: ['Aramoko Microfinance Bank'] },
-  { name: 'ASO Savings and Loans', code: '401', aliases: ['ASO Savings'] },
-  { name: 'Astrapolaris MFB LTD', code: 'MFB50094', aliases: ['Astrapolaris Microfinance Bank'] },
-  { name: 'Bainescredit MFB', code: '51229', aliases: ['Bainescredit Microfinance Bank'] },
-  { name: 'Bowen Microfinance Bank', code: '50931', aliases: ['Bowen MFB'] },
-  { name: 'Carbon', code: '565', aliases: ['Paylater'] },
-  { name: 'CEMCS Microfinance Bank', code: '50823', aliases: ['CEMCS MFB'] },
-  { name: 'Chanelle Microfinance Bank Limited', code: '50171', aliases: ['Chanelle MFB'] },
-  { name: 'Citibank Nigeria', code: '023', aliases: ['Citibank', 'Citi Bank'] },
-  { name: 'Corestep MFB', code: '50204', aliases: ['Corestep Microfinance Bank'] },
-  { name: 'Coronation Merchant Bank', code: '559', aliases: ['Coronation Bank'] },
-  { name: 'Crescent MFB', code: '51297', aliases: ['Crescent Microfinance Bank'] },
-  { name: 'Ecobank Nigeria', code: '050', aliases: ['Ecobank'] },
-  { name: 'Ekimogun MFB', code: '50263', aliases: ['Ekimogun Microfinance Bank'] },
-  { name: 'Ekondo Microfinance Bank', code: '562', aliases: ['Ekondo MFB'] },
-  { name: 'Eyowo', code: '50126', aliases: ['Eyowo Microfinance Bank'] },
-  { name: 'Fidelity Bank', code: '070', aliases: ['Fidelity'] },
-  { name: 'Firmus MFB', code: '51314', aliases: ['Firmus Microfinance Bank'] },
-  { name: 'First Bank of Nigeria', code: '011', aliases: ['First Bank', 'FBN'] },
-  { name: 'First City Monument Bank', code: '214', aliases: ['FCMB'] },
-  { name: 'FSDH Merchant Bank Limited', code: '501', aliases: ['FSDH Bank'] },
-  { name: 'Gateway Mortgage Bank LTD', code: '812', aliases: ['Gateway Mortgage Bank'] },
-  { name: 'Globus Bank', code: '00103', aliases: ['Globus'] },
-  { name: 'GoMoney', code: '100022', aliases: ['Go Money'] },
-  { name: 'Guaranty Trust Bank', code: '058', aliases: ['GTBank', 'GTB', 'Guarantee Trust Bank'] },
-  { name: 'Hackman Microfinance Bank', code: '51251', aliases: ['Hackman MFB'] },
-  { name: 'Hasal Microfinance Bank', code: '50383', aliases: ['Hasal MFB'] },
-  { name: 'Heritage Bank', code: '030', aliases: ['Heritage'] },
-  { name: 'HopePSB', code: '120002', aliases: ['Hope PSB'] },
-  { name: 'Ibile Microfinance Bank', code: '51244', aliases: ['Ibile MFB'] },
-  { name: 'Ikoyi Osun MFB', code: '50439', aliases: ['Ikoyi Osun Microfinance Bank'] },
-  { name: 'Infinity MFB', code: '50457', aliases: ['Infinity Microfinance Bank'] },
-  { name: 'Jaiz Bank', code: '301', aliases: ['Jaiz'] },
-  { name: 'Kadpoly MFB', code: '50502', aliases: ['Kadpoly Microfinance Bank'] },
-  { name: 'Keystone Bank', code: '082', aliases: ['Keystone'] },
-  { name: 'Kredi Money MFB LTD', code: '50200', aliases: ['Kredi Money'] },
-  { name: 'Kuda Bank', code: '50211', aliases: ['Kuda'] },
-  { name: 'Lagos Building Investment Company Plc.', code: '90052', aliases: ['LBIC'] },
-  { name: 'Links MFB', code: '50549', aliases: ['Links Microfinance Bank'] },
-  { name: 'Living Trust Mortgage Bank', code: '031', aliases: ['Living Trust Bank'] },
-  { name: 'Lotus Bank', code: '303', aliases: ['Lotus'] },
-  { name: 'Mayfair MFB', code: '50563', aliases: ['Mayfair Microfinance Bank'] },
-  { name: 'Mint MFB', code: '50304', aliases: ['Mint Microfinance Bank'] },
-  { name: 'MTN Momo PSB', code: '120003', aliases: ['Momo PSB', 'MTN PSB'] },
-  { name: 'Paga', code: '100002', aliases: ['Pagatech', 'PagaPay'] },
-  { name: 'PalmPay', code: '999991', aliases: ['Palm Pay'] },
-  { name: 'Parallex Bank', code: '104', aliases: ['Parallex'] },
-  { name: 'Parkway - ReadyCash', code: '311', aliases: ['ReadyCash', 'Parkway'] },
-  { name: 'Paycom', code: '999992', aliases: ['OPay', 'Paycom'] },
-  { name: 'Petra Mircofinance Bank Plc', code: '50746', aliases: ['Petra MFB'] },
-  { name: 'Polaris Bank', code: '076', aliases: ['Polaris'] },
-  { name: 'Polyunwana MFB', code: '50864', aliases: ['Polyunwana Microfinance Bank'] },
-  { name: 'PremiumTrust Bank', code: '105', aliases: ['Premium Trust Bank'] },
-  { name: 'Providus Bank', code: '101', aliases: ['Providus'] },
-  { name: 'QuickFund MFB', code: '51293', aliases: ['QuickFund Microfinance Bank'] },
-  { name: 'Rand Merchant Bank', code: '502', aliases: ['RMB'] },
-  { name: 'Refuge Mortgage Bank', code: '90067', aliases: ['Refuge Mortgage'] },
-  { name: 'Rubies MFB', code: '125', aliases: ['Rubies Bank'] },
-  { name: 'Safe Haven MFB', code: '51113', aliases: ['Safe Haven Microfinance Bank'] },
-  { name: 'Solid Rock MFB', code: '50800', aliases: ['Solid Rock Microfinance Bank'] },
-  { name: 'Sparkle Microfinance Bank', code: '51310', aliases: ['Sparkle'] },
-  { name: 'Stanbic IBTC Bank', code: '221', aliases: ['Stanbic', 'IBTC', 'Stanbic Bank'] },
-  { name: 'Standard Chartered Bank', code: '068', aliases: ['Standard Chartered', 'StanChart'] },
-  { name: 'Stellas MFB', code: '51253', aliases: ['Stellas Microfinance Bank'] },
-  { name: 'Sterling Bank', code: '232', aliases: ['Sterling'] },
-  { name: 'Suntrust Bank', code: '100', aliases: ['SunTrust'] },
-  { name: 'TAJ Bank', code: '302', aliases: ['TAJ'] },
-  { name: 'Tangerine Money', code: '51269', aliases: ['Tangerine'] },
-  { name: 'TCF MFB', code: '51211', aliases: ['TCF Microfinance Bank'] },
-  { name: 'Titan Bank', code: '102', aliases: ['Titan Trust Bank'] },
-  { name: 'Titan Paystack', code: '100039', aliases: ['Paystack Bank'] },
-  { name: 'Unical MFB', code: '50871', aliases: ['Unical Microfinance Bank'] },
-  { name: 'Union Bank of Nigeria', code: '032', aliases: ['Union Bank'] },
-  { name: 'United Bank For Africa', code: '033', aliases: ['UBA'] },
-  { name: 'Unity Bank', code: '215', aliases: ['Unity'] },
-  { name: 'VFD Microfinance Bank Limited', code: '566', aliases: ['VFD MFB', 'V Bank'] },
-  { name: 'Wema Bank', code: '035', aliases: ['Wema'] },
-  { name: 'Zenith Bank', code: '057', aliases: ['Zenith'] },
+  { name: 'Access Bank', code: '044', aliases: ['access bank', 'access'] },
+  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank'] },
+  { name: 'Zenith Bank', code: '057', aliases: ['zenith bank', 'zenith'] },
+  { name: 'First Bank', code: '011', aliases: ['first bank', 'first'] },
+  { name: 'UBA', code: '033', aliases: ['uba', 'united bank of africa'] },
+  // Add all banks here with possible aliases
 ];
 
 // Utility Functions
@@ -171,26 +90,39 @@ const isAdmin = (userId) => userId.toString() === PERSONAL_CHAT_ID;
 
 // Persistent User State Functions
 async function getUserState(userId) {
-  let userState = userStates[userId];
-  if (userState) {
+  try {
+    let userState = userStates[userId];
+    if (!userState) {
+      const doc = await db.collection('userStates').doc(userId).get();
+      if (doc.exists) {
+        userState = doc.data();
+        userStates[userId] = userState;
+        console.log(`User state retrieved for user ${userId}`);
+      } else {
+        // Initialize a new user state if none exists
+        userState = { wallets: [], bankDetails: null, hasReceivedDeposit: false };
+        userStates[userId] = userState;
+        await saveUserState(userId); // Save the new state to Firestore
+        console.log(`New user state initialized and saved for user ${userId}`);
+      }
+    }
     return userState;
-  }
-  const doc = await db.collection('userStates').doc(userId).get();
-  if (doc.exists) {
-    userState = doc.data();
-    userStates[userId] = userState;
-    return userState;
-  } else {
-    userState = { wallets: [], bankDetails: null, hasReceivedDeposit: false };
-    userStates[userId] = userState;
-    return userState;
+  } catch (error) {
+    console.error(`Error retrieving user state for user ${userId}:`, error);
+    throw new Error('Unable to retrieve user state.');
   }
 }
 
 async function saveUserState(userId) {
-  const userState = userStates[userId];
-  if (userState) {
-    await db.collection('userStates').doc(userId).set(userState);
+  try {
+    const userState = userStates[userId];
+    if (userState) {
+      await db.collection('userStates').doc(userId).set(userState, { merge: true });
+      console.log(`User state saved for user ${userId}`);
+    }
+  } catch (error) {
+    console.error(`Error saving user state for user ${userId}:`, error);
+    throw new Error('Unable to save user state.');
   }
 }
 
@@ -394,8 +326,6 @@ async function sendBaseContent(ctx, index) {
   }
 
   // Send or Edit Message Based on Existing Message ID
-  const inlineMessageId = ctx.callbackQuery ? ctx.callbackQuery.inline_message_id : null;
-
   if (ctx.callbackQuery && ctx.callbackQuery.message) {
     // Edit existing message
     await ctx.editMessageText(`*${content.title}*\n\n${content.text}`, {
@@ -577,7 +507,7 @@ bot.action(/mark_paid_(.+)/, async (ctx) => {
   // Detailed Paid Message
   const paidMessage = `Hello ${wallet.bank.accountName},
 
-We’ve converted the ${transactionData.amount} ${transactionData.asset} you deposited and successfully sent NGN ${transactionData.cashAmount} in your linked account.
+We’ve converted the *${transactionData.amount} ${transactionData.asset}* you deposited and successfully sent *NGN ${transactionData.cashAmount}* in your linked account.
 
 *Transaction Details*
 - **Crypto Amount:** ${transactionData.amount} ${transactionData.asset}
@@ -593,7 +523,7 @@ We’ve converted the ${transactionData.amount} ${transactionData.asset} you dep
 If you have any questions or need further assistance, please contact us; we’d love to help.
 
 Best Regards,
-DirectPay Team`;
+*DirectPay Team*`;
 
   // Send the detailed message to the user
   await bot.telegram.sendMessage(transactionData.userId, paidMessage, {
@@ -605,24 +535,13 @@ DirectPay Team`;
   await ctx.reply(`✅ Transaction ${referenceId} marked as paid and user notified.`);
 });
 
-// Handle Admin Upload Image
-bot.action('admin_upload_image', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const userState = await getUserState(userId);
-
-  userState.awaitingImageUserId = true;
-  await saveUserState(userId); // Save user state
-
-  await ctx.reply('Please enter the User ID you want to upload an image to:');
-});
-
 // Handle Admin Upload Image Process
 bot.on('photo', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
 
   if (userState.awaitingImageUserId) {
-    const targetUserId = ctx.message.text || ctx.from.id.toString();
+    const targetUserId = ctx.message.text.trim();
     userState.uploadImageTargetUserId = targetUserId;
     userState.awaitingImageUserId = false;
     userState.awaitingImage = true;
@@ -719,22 +638,6 @@ bot.on('text', async (ctx) => {
     await saveUserState(userId); // Save user state
 
     await ctx.reply('Please enter the message you want to send:');
-  } else if (isAdmin(userId) && userState.awaitingMessageContent) {
-    const recipientId = userState.messageRecipientId;
-    const messageContent = ctx.message.text.trim();
-
-    try {
-      await bot.telegram.sendMessage(recipientId, `📩 *Message from Admin:*\n\n${messageContent}`, { parse_mode: 'Markdown' });
-      await ctx.reply('✅ Message sent successfully.');
-    } catch (error) {
-      console.error('Error sending message to user:', error);
-      await ctx.reply('⚠️ Failed to send message to the user.');
-    }
-
-    // Reset Admin State
-    userState.messageRecipientId = null;
-    userState.awaitingMessageContent = false;
-    await saveUserState(userId); // Save user state
   } else {
     // If none of the conditions match, do nothing or send a default message
     return;
@@ -863,7 +766,7 @@ We’ve received your deposit of *${amount} ${asset}* and are processing it for 
 *Transaction Details:*
 - **Crypto Amount:** ${amount} ${asset}
 - **Cash Amount:** NGN ${payout}
-- **Rate:** ${payout / amount} NGN/${asset}
+- **Rate:** ${(payout / amount).toFixed(2)} NGN/${asset}
 - **Network:** ${event.data.network || 'N/A'}
 - **Receiving Account:** ${wallet.bank.bankName} ****${wallet.bank.accountNumber.slice(-4)}
 - **Date:** ${new Date(event.data.timestamp || Date.now()).toLocaleString()}
@@ -896,7 +799,7 @@ Best Regards,
         transactionHash,
         referenceId,
         cashAmount: payout,
-        rate: payout / amount,
+        rate: (payout / amount).toFixed(2),
         network: event.data.network || 'N/A',
         timestamp: new Date(event.data.timestamp || Date.now()).toISOString(),
         status: 'Pending',
