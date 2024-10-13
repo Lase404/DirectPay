@@ -10,7 +10,7 @@ const fs = require('fs');
 const path = require('path');
 
 // Firebase setup
-const serviceAccount = require('./directpayngn-firebase-adminsdk-d11t3-17c3c57aa5.json'); // Ensure this path is correct
+const serviceAccount = require('./directpayngn1-firebase-adminsdk-1vqzj-884f781b60.json'); // Ensure this path is correct
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpayngn.firebaseio.com" // Replace with your actual database URL
