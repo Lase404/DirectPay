@@ -13,7 +13,7 @@ const path = require('path');
 const serviceAccount = require('./directpayngn1-firebase-adminsdk-1vqzj-884f781b60.json'); // Ensure this path is correct
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://directpayngn.firebaseio.com" // Replace with your actual database URL
+  databaseURL: "https://directpayngn1.firebaseio.com" // Replace with your actual database URL
 });
 const db = admin.firestore();
 
