@@ -346,7 +346,9 @@ try {
         address: walletAddress, 
         chain: chain.name, 
         bank: null 
-      });      // Add wallet mapping
+      });      
+  
+  // Add wallet mapping
       await addWalletMapping(walletAddress, userId, chain.name);
 
       // Notify User
