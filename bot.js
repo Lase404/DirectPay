@@ -31,8 +31,6 @@ const app = express();
 app.use(express.json());
 
 // State Management
-// User states are stored in Firestore for persistence.
-// The in-memory `userStates` object acts as a cache to reduce Firestore reads.
 let userStates = {}; // In-memory cache of user states
 const MAX_WALLETS = 3; // Max wallets per user
 
@@ -127,8 +125,6 @@ const bankList = [
   { name: 'Zenith Bank', code: '057', aliases: ['Zenith'] },
 ];
 
-// Utility Functions
-
 // Verify Bank Account with Paystack
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
@@ -148,46 +144,42 @@ function calculatePayout(asset, amount) {
   return (amount * rates[asset]).toFixed(2);
 }
 
-// Generate a unique reference ID for each transaction
+// Generate a reference ID for each transaction
 function generateReferenceId() {
   return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 }
 
-// Main Menu Dynamically Updated Based on Wallet Status
+// Main Menu
 const getMainMenu = (walletExists) =>
   Markup.keyboard([
     [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', '🏦 Link Bank Account'],
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
   ]).resize();
 
-// Admin-only Menu
+// Admin-only menu
 const adminMenu = Markup.inlineKeyboard([
   [Markup.button.callback('View Transactions', 'admin_view_transactions')],
   [Markup.button.callback('Send Message', 'admin_send_message')],
   [Markup.button.callback('Mark Paid', 'admin_mark_paid')],
 ]);
 
-// Check if User is Admin
+// Check if user is admin
 const isAdmin = (userId) => userId.toString() === PERSONAL_CHAT_ID;
 
-// Persistent User State Functions
+// Persistent user state function
 async function getUserState(userId) {
-  // Check in-memory cache first
   let userState = userStates[userId];
   if (userState) {
     return userState;
   }
-
-  // Fetch from Firestore
   const doc = await db.collection('userStates').doc(userId).get();
   if (doc.exists) {
     userState = doc.data();
-    userStates[userId] = userState; // Update cache
+    userStates[userId] = userState;
     return userState;
   } else {
-    // Initialize new user state
     userState = { wallets: [], bankDetails: null, hasReceivedDeposit: false };
-    userStates[userId] = userState; // Update cache
+    userStates[userId] = userState;
     return userState;
   }
 }
@@ -199,7 +191,7 @@ async function saveUserState(userId) {
   }
 }
 
-// Greet User
+// Welcome Greetings
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
@@ -479,7 +471,7 @@ bot.action('confirm_bank_yes', async (ctx) => {
     accountName: userState.accountName,
   };
 
-  // Reset Temporary States
+  // Reset temporary states
   userState.bankName = null;
   userState.bankCode = null;
   userState.accountNumber = null;
@@ -501,7 +493,7 @@ bot.action('confirm_bank_no', async (ctx) => {
 
   await ctx.reply('⚠️ It seems there was an error. Let\'s try again.');
 
-  // Reset Temporary States
+  // Reset temporary states
   userState.bankName = null;
   userState.bankCode = null;
   userState.accountNumber = null;
@@ -525,21 +517,26 @@ const baseContent = [
   },
   {
     title: 'Getting Started',
-    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Base Bridge](https://base.org/bridge).',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at https://base.org/bridge.',
   },
   {
     title: 'Learn More',
-    text: 'Visit the official documentation at [Base Docs](https://docs.base.org) for in-depth guides and resources.',
+    text: 'Visit the official documentation at https://docs.base.org for in-depth guides and resources.',
   },
 ];
 
-// Learn About Base Command
+// Current page tracking for users
+const userBasePage = {};
+
+// Handle 'Learn About Base' Command
 bot.hears('📘 Learn About Base', async (ctx) => {
-  await sendBaseContent(ctx, 0);
+  const userId = ctx.from.id.toString();
+  userBasePage[userId] = 0; // Initialize to first page
+  await sendBaseContent(ctx, userId, 0);
 });
 
 // Function to Send Base Content with Pagination
-async function sendBaseContent(ctx, index) {
+async function sendBaseContent(ctx, userId, index) {
   const content = baseContent[index];
   const totalPages = baseContent.length;
 
@@ -558,14 +555,9 @@ async function sendBaseContent(ctx, index) {
 
 // Handle Base Content Pagination
 bot.action(/base_page_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
   const index = parseInt(ctx.match[1], 10);
-  const chatId = ctx.chat.id;
-  const messageId = ctx.callbackQuery.message.message_id;
-
-  if (isNaN(index) || index < 0 || index >= baseContent.length) {
-    return ctx.answerCbQuery('Invalid page.');
-  }
-
+  userBasePage[userId] = index;
   await ctx.editMessageText(`*${baseContent[index].title}*\n\n${baseContent[index].text}`, {
     parse_mode: 'Markdown',
     reply_markup: {
@@ -575,8 +567,6 @@ bot.action(/base_page_(\d+)/, async (ctx) => {
       ],
     },
   });
-
-  await ctx.answerCbQuery(); // Acknowledge the callback query
 });
 
 // Support Functionality
@@ -591,17 +581,14 @@ bot.hears('ℹ️ Support', async (ctx) => {
 // Support Actions
 bot.action('support_how_it_works', async (ctx) => {
   await ctx.reply('DirectPay allows you to receive crypto payments directly into your bank account seamlessly. Generate a wallet, link your bank, and start receiving payments.');
-  await ctx.answerCbQuery(); // Acknowledge the callback query
 });
 
 bot.action('support_not_received', async (ctx) => {
   await ctx.reply('If you haven’t received your transaction, please ensure that you have linked your bank account. If the issue persists, contact support.');
-  await ctx.answerCbQuery(); // Acknowledge the callback query
 });
 
 bot.action('support_contact', async (ctx) => {
   await ctx.reply('You can contact our support team at @your_support_username.');
-  await ctx.answerCbQuery(); // Acknowledge the callback query
 });
 
 // View Transactions
@@ -648,27 +635,22 @@ bot.action(/view_transaction_(.+)/, async (ctx) => {
     }
 
     const tx = transactionsSnapshot.docs[0].data();
-    const transactionHash = tx.transactionHash;
-
-    // Generate Block Explorer URL
-    const blockExplorerUrl = `https://sepolia.etherscan.io/tx/${transactionHash}`;
 
     let message = '💰 **Transaction Details**:\n\n';
     message += `Reference ID: ${tx.referenceId}\n`;
     message += `Amount: ${tx.amount} ${tx.asset}\n`;
     message += `Status: ${tx.status || 'Pending'}\n`;
     message += `Date: ${new Date(tx.timestamp).toLocaleString()}\n`;
-    message += `\n🔗 [View on Sepolia Etherscan](${blockExplorerUrl})`;
 
-    await ctx.replyWithMarkdown(message, {
-      disable_web_page_preview: true,
-    });
+    // Create a button linking to Sepolia ETH Block Explorer
+    const blockExplorerUrl = `https://sepolia.etherscan.io/tx/${tx.transactionHash}`;
 
-    await ctx.answerCbQuery(); // Acknowledge the callback query
+    await ctx.replyWithMarkdown(message, Markup.inlineKeyboard([
+      [Markup.button.url('🔍 View on Etherscan', blockExplorerUrl)],
+    ]));
   } catch (error) {
     console.error('Error fetching transaction:', error);
     await ctx.reply('⚠️ Unable to fetch transaction details. Please try again later.');
-    await ctx.answerCbQuery(); // Acknowledge the callback query
   }
 });
 
@@ -684,7 +666,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
   const userState = await getUserState(userId);
 
   if (action === 'view_transactions') {
-    // Fetch and display all transactions
+    // Fetch and display transactions
     try {
       const transactionsSnapshot = await db.collection('transactions').get();
 
@@ -734,44 +716,6 @@ bot.action(/admin_(.+)/, async (ctx) => {
       console.error('Error marking transactions as paid:', error);
       await ctx.reply('⚠️ Error marking transactions as paid. Please try again later.');
     }
-  }
-});
-
-// Handle Admin Messaging Input
-bot.on('text', async (ctx, next) => {
-  const userId = ctx.from.id.toString();
-  const userState = await getUserState(userId);
-
-  if (isAdmin(userId) && userState.awaitingUserIdForMessage) {
-    const recipientId = ctx.message.text.trim();
-    // Validate recipientId is a number
-    if (!/^\d+$/.test(recipientId)) {
-      return ctx.reply('❌ Invalid User ID. Please enter a valid numerical User ID:');
-    }
-    userState.messageRecipientId = recipientId;
-    userState.awaitingUserIdForMessage = false;
-    userState.awaitingMessageContent = true;
-    await saveUserState(userId); // Save user state
-    return ctx.reply('Please enter the message you want to send:');
-  } else if (isAdmin(userId) && userState.awaitingMessageContent) {
-    const recipientId = userState.messageRecipientId;
-    const messageContent = ctx.message.text.trim();
-
-    try {
-      await bot.telegram.sendMessage(recipientId, `📩 Message from Admin:\n\n${messageContent}`);
-      await ctx.reply('✅ Message sent successfully.');
-    } catch (error) {
-      console.error('Error sending message to user:', error);
-      await ctx.reply('⚠️ Failed to send message to the user.');
-    }
-
-    // Reset Admin State
-    userState.messageRecipientId = null;
-    userState.awaitingMessageContent = false;
-    await saveUserState(userId); // Save user state
-  } else {
-    // Call next() to allow other handlers to process the message
-    return next();
   }
 });
 
@@ -837,6 +781,10 @@ app.post('/webhook/blockradar', async (req, res) => {
                 {
                   text: '📊 View Transaction',
                   callback_data: `view_transaction_${referenceId}`,
+                },
+                {
+                  text: '🔍 View on Etherscan',
+                  url: `https://sepolia.etherscan.io/tx/${transactionHash}`,
                 },
               ],
             ],
