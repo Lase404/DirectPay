@@ -15,7 +15,7 @@ const PAYSTACK_API_KEY = 'sk_test_cd857e88d5d474db8238d30d027ea2911cd7fa17';
 const PERSONAL_CHAT_ID = '2009305288';
 const MAX_WALLETS = 5; // Maximum number of wallets per user
 
-const FIRESTORE_DB_URL = 'https://directpayngn11.firebaseio.com'; // Replace with your Firestore DB URL
+const FIRESTORE_DB_URL = 'https://directpayngn1.firebaseio.com'; // Replace with your Firestore DB URL
 const PORT = 4000; // Port for Express server
 
 // ** Initialize Firebase Admin SDK **
