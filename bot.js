@@ -143,7 +143,11 @@ async function setUserState(userId, userState) {
  */
 async function addWalletMapping(walletAddress, userId, chainName) {
   try {
-    await db.collection('wallets').doc(walletAddress).set({ userId, chainName });
+    await db.collection('wallets').doc(walletAddress).set({
+      userId, 
+      chainName,
+      createdAt: admin.firestore.FieldValue.serverTimestamp() // Optional: Adds a timestamp
+    });
   } catch (error) {
     console.error('Error adding wallet mapping:', error);
   }
@@ -334,19 +338,15 @@ supportedChains.forEach((chain, index) => {
     }
 
     const generatingMessage = await ctx.reply('🔄 Generating Wallet... Please wait a moment.');
-
-    try {
+try {
       const walletAddress = await generateWallet(chain);
-      const newWallet = { address: walletAddress, chain: chain.name, bank: null };
-
+      
       // Push wallet to user's state
       userState.wallets.push({ 
         address: walletAddress, 
         chain: chain.name, 
-        bank: null;
-    });
-      
-      // Add wallet mapping
+        bank: null 
+      });      // Add wallet mapping
       await addWalletMapping(walletAddress, userId, chain.name);
 
       // Notify User
