@@ -9,22 +9,31 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 
-// Firebase setup
-const serviceAccount = require('./directpayngn1-firebase-adminsdk-1vqzj-884f781b60.json'); // Ensure this path is correct
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://directpayngn1.firebaseapp.com" // Replace with your actual database URL
-});
-const db = admin.firestore();
-
-// Config & API Keys (Use environment variables for security)
+// ** Configuration **
 const BOT_TOKEN = '7404771579:AAEY0HpgC-3ZmFGq0-bToPkAczGbJ-WND-Q';
 const PAYSTACK_API_KEY = 'sk_test_cd857e88d5d474db8238d30d027ea2911cd7fa17';
 const PERSONAL_CHAT_ID = '2009305288';
 const MAX_WALLETS = 5; // Maximum number of wallets per user
 
+const FIRESTORE_DB_URL = 'https://directpayngn11.firebaseio.com'; // Replace with your Firestore DB URL
+const PORT = 4000; // Port for Express server
 
-// Supported Chains Configuration with Specific BlockRadar WALLET IDs and Keys
+// ** Initialize Firebase Admin SDK **
+const serviceAccountPath = path.join(__dirname, 'serviceAccountKey.json'); // Ensure the path is correct
+
+if (!fs.existsSync(serviceAccountPath)) {
+  console.error('❌ Service account JSON file not found at:', serviceAccountPath);
+  process.exit(1);
+}
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccountPath),
+  databaseURL: FIRESTORE_DB_URL
+});
+
+const db = admin.firestore();
+
+// ** Supported Chains Configuration **
 const supportedChains = [
   {
     name: 'Base',
@@ -35,7 +44,6 @@ const supportedChains = [
     walletName: 'DirectPay_Base_Wallet',
     supportedAssets: ['USDT', 'USDC', 'ETH'],
   },
-  // Add other supported chains here like Polygon, BNB, etc.
   {
     name: 'Polygon',
     id: 'f7d5b102-e94a-493a-8e0c-8da96fe70655',
@@ -56,7 +64,7 @@ const supportedChains = [
   },
 ];
 
-// Manual Bank List with Aliases
+// ** Manual Bank List with Aliases **
 const bankList = [
   { 
     name: '9mobile 9Payment Service Bank', 
@@ -73,6 +81,7 @@ const bankList = [
     code: '51204',
     aliases: ['above only mfb', 'above only'],
   },
+  // ... (Include all other banks as per your original list)
   { 
     name: 'Zenith Bank', 
     code: '057',
@@ -80,17 +89,15 @@ const bankList = [
   }
 ];
 
-// Initialize Bot
+// ** Initialize Bot and Express App **
 const bot = new Telegraf(BOT_TOKEN);
-
-// Initialize Express App for Webhook
 const app = express();
 app.use(express.json());
 
-// Initialize Session Middleware for State Management
+// ** Initialize Session Middleware for State Management **
 bot.use(session());
 
-// Utility Functions
+// ** Utility Functions **
 
 /**
  * Retrieves the user state from Firestore.
@@ -180,14 +187,14 @@ function generateReferenceId() {
   return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 }
 
-// Main Menu Dynamically Updated Based on Wallet Status
+// ** Main Menu Dynamically Updated Based on Wallet Status **
 const getMainMenu = (walletExists) =>
   Markup.keyboard([
     [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', '🏦 Link Bank Account'],
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
   ]).resize();
 
-// Admin-only Menu
+// ** Admin-only Menu **
 const getAdminMenu = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('View Transactions', 'admin_view_transactions')],
@@ -239,16 +246,6 @@ Start leveraging the power of Base today to experience a more efficient and user
 }
 
 /**
- * Sends chain content (currently Base only).
- * @param {Context} ctx 
- * @param {number} index 
- */
-async function sendChainContent(ctx, index) {
-  // Since we're only focusing on Base, pagination is not required.
-  await sendChainInfo(ctx);
-}
-
-/**
  * Greets the user upon /start command.
  * @param {Context} ctx 
  */
@@ -270,7 +267,7 @@ async function greetUser(ctx) {
   }
 }
 
-// Handle /start Command
+// ** Handle /start Command **
 bot.start(async (ctx) => {
   try {
     await greetUser(ctx);
@@ -298,7 +295,7 @@ async function generateWallet(chain) {
   }
 }
 
-// Wallet Generation Handlers
+// ** Wallet Generation Handlers **
 
 /**
  * Handles the 'Generate Wallet' command.
@@ -307,8 +304,8 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
 
-  if (userState.wallets.length >= MAX_WALLETS) {
-    return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+  if (userState.wallets.length >= 5) { // Assuming MAX_WALLETS = 5
+    return ctx.reply(`⚠️ You cannot generate more than 5 wallets.`);
   }
 
   try {
@@ -332,23 +329,27 @@ supportedChains.forEach((chain, index) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
 
-    if (userState.wallets.length >= MAX_WALLETS) {
-      return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+    if (userState.wallets.length >= 5) { // Assuming MAX_WALLETS = 5
+      return ctx.reply(`⚠️ You cannot generate more than 5 wallets.`);
     }
 
     const generatingMessage = await ctx.reply('🔄 Generating Wallet... Please wait a moment.');
 
     try {
       const walletAddress = await generateWallet(chain);
-      userState.wallets.push({ address: walletAddress, chain: chain.name, bank: null });
+      const newWallet = { address: walletAddress, chain: chain.name, bank: null };
 
-      // Update User State in Firestore
-      await setUserState(userId, userState);
-
+      // Push wallet to user's state
+      userState.wallets.push({ 
+        address: walletAddress, 
+        chain: chain.name, 
+        bank: null;
+    });
+      
       // Add wallet mapping
       await addWalletMapping(walletAddress, userId, chain.name);
 
-      // Update Menu with Detailed Wallet Information
+      // Notify User
       await ctx.replyWithMarkdown(`
 ✅ Success! Your new wallet on *${chain.name}* has been generated:
 
@@ -401,7 +402,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
       });
     }
 
-    const canCreateNewWallet = userState.wallets.length < MAX_WALLETS;
+    const canCreateNewWallet = userState.wallets.length < 5; // Assuming MAX_WALLETS = 5
 
     await ctx.replyWithMarkdown(walletMessage, Markup.inlineKeyboard([
       canCreateNewWallet
@@ -421,8 +422,8 @@ bot.action('create_new_wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
 
-  if (userState.wallets.length >= MAX_WALLETS) {
-    return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+  if (userState.wallets.length >= 5) { // Assuming MAX_WALLETS = 5
+    return ctx.reply(`⚠️ You cannot generate more than 5 wallets.`);
   }
 
   try {
@@ -446,23 +447,24 @@ supportedChains.forEach((chain, index) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
 
-    if (userState.wallets.length >= MAX_WALLETS) {
-      return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+    if (userState.wallets.length >= 5) { // Assuming MAX_WALLETS = 5
+      return ctx.reply(`⚠️ You cannot generate more than 5 wallets.`);
     }
 
     const generatingMessage = await ctx.reply('🔄 Generating Wallet... Please wait a moment.');
 
     try {
       const walletAddress = await generateWallet(chain);
-      userState.wallets.push({ address: walletAddress, chain: chain.name, bank: null });
+      const newWallet = { address: walletAddress, chain: chain.name, bank: null };
 
       // Update User State in Firestore
+      userState.wallets.push(newWallet);
       await setUserState(userId, userState);
 
       // Add wallet mapping
       await addWalletMapping(walletAddress, userId, chain.name);
 
-      // Update Menu with Detailed Wallet Information
+      // Notify User
       await ctx.replyWithMarkdown(`
 ✅ Success! Your new wallet on *${chain.name}* has been generated:
 
@@ -546,7 +548,7 @@ bot.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
 
-  // Admin Messaging Flow
+  // ** Admin Messaging Flow **
   if (isAdmin(userId)) {
     if (userState.awaiting && userState.awaiting.action === 'send_message') {
       const recipientId = ctx.message.text.trim();
@@ -576,7 +578,7 @@ bot.on('text', async (ctx) => {
     }
   }
 
-  // Bank Linking Flow
+  // ** Bank Linking Flow **
   if (userState.awaiting && userState.awaiting.action === 'link_bank') {
     const bankNameInput = ctx.message.text.trim();
 
@@ -738,7 +740,7 @@ bot.action('support_contact', async (ctx) => {
 });
 
 /**
- * Handles 'View Transactions' command.
+ * Handles viewing of transactions by users.
  */
 bot.hears('💰 Transactions', async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -897,13 +899,13 @@ Thank you for using *DirectPay*! Your funds have been securely transferred to yo
 });
 
 /**
- * Handles Admin Messaging and Image Upload Flows
+ * Handles Admin Messaging Flow
  */
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
 
-  // Admin Messaging Flow
+  // ** Admin Messaging Flow **
   if (isAdmin(userId)) {
     if (userState.awaiting && userState.awaiting.action === 'send_message') {
       const recipientId = ctx.message.text.trim();
@@ -933,7 +935,7 @@ bot.on('text', async (ctx) => {
     }
   }
 
-  // Bank Linking Flow is handled by specific action handlers
+  // ** Bank Linking Flow is handled by specific action handlers **
 });
 
 /**
@@ -1070,18 +1072,17 @@ Processing payout to ${wallet.bank.bankName} account ending with ****${wallet.ba
 /**
  * Launches the bot and starts the Express server.
  */
-bot.launch({
-  dropPendingUpdates: true,
-})
-  .then(() => console.log('DirectPay bot is live!'))
-  .catch((err) => console.error('Error launching bot:', err));
+bot.launch()
+  .then(() => console.log('✅ DirectPay bot is live!'))
+  .catch((err) => console.error('❌ Error launching bot:', err));
 
-// Start Express Server
-const port = process.env.PORT || 4000;
-app.listen(port, () => {
-  console.log(`Webhook server running on port ${port}`);
+// ** Start Express Server **
+app.listen(PORT, () => {
+  console.log(`🔗 Webhook server running on port ${PORT}`);
 });
 
-// Graceful Shutdown
+/**
+ * Graceful Shutdown
+ */
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
