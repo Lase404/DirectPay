@@ -345,7 +345,7 @@ try {
       userState.wallets.push({ 
         address: walletAddress, 
         chain: chain.name, 
-        bank: null 
+        bank: null,
       });      
   
   // Add wallet mapping
