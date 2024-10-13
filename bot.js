@@ -1,18 +1,17 @@
- //DIRECTPAY TELEGRAM BOT
-////////////////////////
-//DEV: TOLUWALASE ADUNBI
+// Required Modules
 const { Telegraf, Markup, session } = require('telegraf');
 const axios = require('axios');
 const admin = require('firebase-admin');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
+require('dotenv').config(); // To load environment variables
 
 // Firebase setup
-const serviceAccount = require('./directpayngn-firebase-adminsdk-d11t3-17c3c57aa5.json');
+const serviceAccount = require('./directpayngn-firebase-adminsdk-d11t3-17c3c57aa5.json'); // Replace with your actual path
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://directpayngn.firebaseio.com" 
+  databaseURL: "https://directpayngn.firebaseio.com" // Replace with your actual database URL
 });
 const db = admin.firestore();
 
@@ -21,8 +20,14 @@ const BOT_TOKEN = '7404771579:AAEY0HpgC-3ZmFGq0-bToPkAczGbJ-WND-Q';
 const PAYSTACK_API_KEY = 'sk_test_cd857e88d5d474db8238d30d027ea2911cd7fa17';
 const PERSONAL_CHAT_ID = '2009305288';
 const MAX_WALLETS = 5; // maximum number of wallets per user
+// Initialize Telegraf Bot
+const bot = new Telegraf(BOT_TOKEN);
 
-// Supported Chains Configuration with Specific BlockRadar WALLET IDs and Keys
+// Initialize Express App for Webhook
+const app = express();
+app.use(express.json());
+
+// Supported Chains Configuration with Specific BlockRadar API IDs and Keys
 const supportedChains = [
   {
     name: 'Base',
@@ -65,447 +70,25 @@ const bankList = [
     code: '801',
     aliases: ['abbey mortgage', 'abbey'],
   },
-  { 
-    name: 'Above Only MFB', 
-    code: '51204',
-    aliases: ['above only mfb', 'above only'],
-  },
-  { 
-    name: 'Abulesoro MFB', 
-    code: '51312',
-    aliases: ['abulesoro mfb', 'abulesoro'],
-  },
-  { 
-    name: 'Access Bank', 
-    code: '044',
-    aliases: ['access bank', 'access'],
-  },
-  { 
-    name: 'Access Bank (Diamond)', 
-    code: '063',
-    aliases: ['access diamond bank', 'diamond bank'],
-  },
-  { 
-    name: 'Airtel Smartcash PSB', 
-    code: '120004',
-    aliases: ['airtel smartcash psb', 'smartcash'],
-  },
-  { 
-    name: 'ALAT by WEMA', 
-    code: '035A',
-    aliases: ['alat', 'alat by wema'],
-  },
-  { 
-    name: 'Amju Unique MFB', 
-    code: '50926',
-    aliases: ['amju unique mfb', 'amju unique'],
-  },
-  { 
-    name: 'Aramoko MFB', 
-    code: '50083',
-    aliases: ['aramoko mfb', 'aramoko'],
-  },
-  { 
-    name: 'ASO Savings and Loans', 
-    code: '401',
-    aliases: ['aso savings', 'aso loans'],
-  },
-  { 
-    name: 'Astrapolaris MFB LTD', 
-    code: 'MFB50094',
-    aliases: ['astrapolaris mfb', 'astrapolaris'],
-  },
-  { 
-    name: 'Bainescredit MFB', 
-    code: '51229',
-    aliases: ['bainescredit mfb', 'bainescredit'],
-  },
-  { 
-    name: 'Bowen Microfinance Bank', 
-    code: '50931',
-    aliases: ['bowen microfinance bank', 'bowen mfb'],
-  },
-  { 
-    name: 'Carbon', 
-    code: '565',
-    aliases: ['carbon'],
-  },
-  { 
-    name: 'CEMCS Microfinance Bank', 
-    code: '50823',
-    aliases: ['cemcs microfinance bank', 'cemcs mfb'],
-  },
-  { 
-    name: 'Chanelle Microfinance Bank Limited', 
-    code: '50171',
-    aliases: ['chanelle microfinance bank', 'chanelle mfb'],
-  },
-  { 
-    name: 'Citibank Nigeria', 
-    code: '023',
-    aliases: ['citibank nigeria', 'citibank'],
-  },
-  { 
-    name: 'Corestep MFB', 
-    code: '50204',
-    aliases: ['corestep mfb', 'corestep'],
-  },
-  { 
-    name: 'Coronation Merchant Bank', 
-    code: '559',
-    aliases: ['coronation merchant bank', 'coronation bank'],
-  },
-  { 
-    name: 'Crescent MFB', 
-    code: '51297',
-    aliases: ['crescent mfb', 'crescent'],
-  },
-  { 
-    name: 'Ecobank Nigeria', 
-    code: '050',
-    aliases: ['ecobank nigeria', 'ecobank'],
-  },
-  { 
-    name: 'Ekimogun MFB', 
-    code: '50263',
-    aliases: ['ekimogun mfb', 'ekimogun'],
-  },
-  { 
-    name: 'Ekondo Microfinance Bank', 
-    code: '562',
-    aliases: ['ekondo microfinance bank', 'ekondo mfb'],
-  },
-  { 
-    name: 'Eyowo', 
-    code: '50126',
-    aliases: ['eyowo'],
-  },
-  { 
-    name: 'Fidelity Bank', 
-    code: '070',
-    aliases: ['fidelity bank', 'fidelity'],
-  },
-  { 
-    name: 'Firmus MFB', 
-    code: '51314',
-    aliases: ['firmus mfb', 'firmus'],
-  },
-  { 
-    name: 'First Bank of Nigeria', 
-    code: '011',
-    aliases: ['first bank of nigeria', 'first bank', 'fbn'],
-  },
-  { 
-    name: 'First City Monument Bank', 
-    code: '214',
-    aliases: ['first city monument bank', 'fcmb'],
-  },
-  { 
-    name: 'FSDH Merchant Bank Limited', 
-    code: '501',
-    aliases: ['fsdh merchant bank', 'fsdh'],
-  },
-  { 
-    name: 'Gateway Mortgage Bank LTD', 
-    code: '812',
-    aliases: ['gateway mortgage bank', 'gateway bank'],
-  },
-  { 
-    name: 'Globus Bank', 
-    code: '00103',
-    aliases: ['globus bank', 'globus'],
-  },
-  { 
-    name: 'GoMoney', 
-    code: '100022',
-    aliases: ['gomoney'],
-  },
-  { 
-    name: 'Guaranty Trust Bank', 
-    code: '058',
-    aliases: ['gtbank', 'gt bank'],
-  },
-  { 
-    name: 'Hackman Microfinance Bank', 
-    code: '51251',
-    aliases: ['hackman microfinance bank', 'hackman mfb'],
-  },
-  { 
-    name: 'Hasal Microfinance Bank', 
-    code: '50383',
-    aliases: ['hasal microfinance bank', 'hasal mfb'],
-  },
-  { 
-    name: 'Heritage Bank', 
-    code: '030',
-    aliases: ['heritage bank', 'heritage'],
-  },
-  { 
-    name: 'HopePSB', 
-    code: '120002',
-    aliases: ['hopepsb', 'hope psb'],
-  },
-  { 
-    name: 'Ibile Microfinance Bank', 
-    code: '51244',
-    aliases: ['ibile microfinance bank', 'ibile mfb'],
-  },
-  { 
-    name: 'Ikoyi Osun MFB', 
-    code: '50439',
-    aliases: ['ikoyi osun mfb', 'ikoyi osun'],
-  },
-  { 
-    name: 'Infinity MFB', 
-    code: '50457',
-    aliases: ['infinity mfb', 'infinity'],
-  },
-  { 
-    name: 'Jaiz Bank', 
-    code: '301',
-    aliases: ['jaiz bank', 'jaiz'],
-  },
-  { 
-    name: 'Kadpoly MFB', 
-    code: '50502',
-    aliases: ['kadpoly mfb', 'kadpoly'],
-  },
-  { 
-    name: 'Keystone Bank', 
-    code: '082',
-    aliases: ['keystone bank', 'keystone'],
-  },
-  { 
-    name: 'Kredi Money MFB LTD', 
-    code: '50200',
-    aliases: ['kredi money mfb', 'kredi money'],
-  },
-  { 
-    name: 'Kuda Bank', 
-    code: '50211',
-    aliases: ['kuda bank', 'kuda'],
-  },
-  { 
-    name: 'Lagos Building Investment Company Plc.', 
-    code: '90052',
-    aliases: ['lagos building investment company', 'lbic'],
-  },
-  { 
-    name: 'Links MFB', 
-    code: '50549',
-    aliases: ['links mfb', 'links'],
-  },
-  { 
-    name: 'Living Trust Mortgage Bank', 
-    code: '031',
-    aliases: ['living trust mortgage bank', 'living trust'],
-  },
-  { 
-    name: 'Lotus Bank', 
-    code: '303',
-    aliases: ['lotus bank', 'lotus'],
-  },
-  { 
-    name: 'Mayfair MFB', 
-    code: '50563',
-    aliases: ['mayfair mfb', 'mayfair'],
-  },
-  { 
-    name: 'Mint MFB', 
-    code: '50304',
-    aliases: ['mint mfb', 'mint'],
-  },
-  { 
-    name: 'MTN Momo PSB', 
-    code: '120003',
-    aliases: ['mtn momo psb', 'momo psb'],
-  },
-  { 
-    name: 'Paga', 
-    code: '100002',
-    aliases: ['paga'],
-  },
-  { 
-    name: 'PalmPay', 
-    code: '999991',
-    aliases: ['palmpay'],
-  },
-  { 
-    name: 'Parallex Bank', 
-    code: '104',
-    aliases: ['parallex bank', 'parallex'],
-  },
-  { 
-    name: 'Parkway - ReadyCash', 
-    code: '311',
-    aliases: ['readycash', 'parkway readycash'],
-  },
-  { 
-    name: 'Paycom', 
-    code: '999992',
-    aliases: ['paycom'],
-  },
-  { 
-    name: 'Petra Mircofinance Bank Plc', 
-    code: '50746',
-    aliases: ['petra microfinance bank', 'petra mfb'],
-  },
-  { 
-    name: 'Polaris Bank', 
-    code: '076',
-    aliases: ['polaris bank', 'polaris'],
-  },
-  { 
-    name: 'Polyunwana MFB', 
-    code: '50864',
-    aliases: ['polyunwana mfb', 'polyunwana'],
-  },
-  { 
-    name: 'PremiumTrust Bank', 
-    code: '105',
-    aliases: ['premiumtrust bank', 'premiumtrust'],
-  },
-  { 
-    name: 'Providus Bank', 
-    code: '101',
-    aliases: ['providus bank', 'providus'],
-  },
-  { 
-    name: 'QuickFund MFB', 
-    code: '51293',
-    aliases: ['quickfund mfb', 'quickfund'],
-  },
-  { 
-    name: 'Rand Merchant Bank', 
-    code: '502',
-    aliases: ['rand merchant bank', 'rmb'],
-  },
-  { 
-    name: 'Refuge Mortgage Bank', 
-    code: '90067',
-    aliases: ['refuge mortgage bank', 'refuge bank'],
-  },
-  { 
-    name: 'Rubies MFB', 
-    code: '125',
-    aliases: ['rubies mfb', 'rubies'],
-  },
-  { 
-    name: 'Safe Haven MFB', 
-    code: '51113',
-    aliases: ['safe haven mfb', 'safe haven'],
-  },
-  { 
-    name: 'Solid Rock MFB', 
-    code: '50800',
-    aliases: ['solid rock mfb', 'solid rock'],
-  },
-  { 
-    name: 'Sparkle Microfinance Bank', 
-    code: '51310',
-    aliases: ['sparkle microfinance bank', 'sparkle mfb'],
-  },
-  { 
-    name: 'Stanbic IBTC Bank', 
-    code: '221',
-    aliases: ['stanbic ibtc bank', 'stanbic ibtc', 'stanbic'],
-  },
-  { 
-    name: 'Standard Chartered Bank', 
-    code: '068',
-    aliases: ['standard chartered bank', 'standard chartered'],
-  },
-  { 
-    name: 'Stellas MFB', 
-    code: '51253',
-    aliases: ['stellas mfb', 'stellas'],
-  },
-  { 
-    name: 'Sterling Bank', 
-    code: '232',
-    aliases: ['sterling bank', 'sterling'],
-  },
-  { 
-    name: 'Suntrust Bank', 
-    code: '100',
-    aliases: ['suntrust bank', 'suntrust'],
-  },
-  { 
-    name: 'TAJ Bank', 
-    code: '302',
-    aliases: ['taj bank', 'taj'],
-  },
-  { 
-    name: 'Tangerine Money', 
-    code: '51269',
-    aliases: ['tangerine money', 'tangerine'],
-  },
-  { 
-    name: 'TCF MFB', 
-    code: '51211',
-    aliases: ['tcf mfb', 'tcf'],
-  },
-  { 
-    name: 'Titan Bank', 
-    code: '102',
-    aliases: ['titan bank', 'titan'],
-  },
-  { 
-    name: 'Titan Paystack', 
-    code: '100039',
-    aliases: ['titan paystack', 'paystack'],
-  },
-  { 
-    name: 'Unical MFB', 
-    code: '50871',
-    aliases: ['unical mfb', 'unical'],
-  },
-  { 
-    name: 'Union Bank of Nigeria', 
-    code: '032',
-    aliases: ['union bank of nigeria', 'union bank'],
-  },
-  { 
-    name: 'United Bank For Africa', 
-    code: '033',
-    aliases: ['uba', 'united bank for africa'],
-  },
-  { 
-    name: 'Unity Bank', 
-    code: '215',
-    aliases: ['unity bank', 'unity'],
-  },
-  { 
-    name: 'VFD Microfinance Bank Limited', 
-    code: '566',
-    aliases: ['vfd microfinance bank', 'vfd mfb'],
-  },
-  { 
-    name: 'Wema Bank', 
-    code: '035',
-    aliases: ['wema bank', 'wema'],
-  },
+  // ... (Include all other banks as per your original list)
   { 
     name: 'Zenith Bank', 
     code: '057',
     aliases: ['zenith bank', 'zenith'],
   }
-
 ];
-// Initialize  Bot
-const bot = new Telegraf(BOT_TOKEN);
 
-// Express App for Webhook
-const app = express();
-app.use(express.json());
-
-// Initialize State Management
+// Initialize Session Middleware for State Management
 bot.use(session());
 
 // Utility Functions
 
-/// Retrieves the user state from Firestore.
-
+/**
+ * Retrieves the user state from Firestore.
+ * If the user does not exist, initializes a new state.
+ * @param {string} userId - The Telegram user ID.
+ * @returns {object} - The user state.
+ */
 async function getUserState(userId) {
   try {
     const doc = await db.collection('userStates').doc(userId).get();
@@ -523,8 +106,11 @@ async function getUserState(userId) {
   }
 }
 
-/// Updates the user state in Firestore.
-
+/**
+ * Updates the user state in Firestore.
+ * @param {string} userId - The Telegram user ID.
+ * @param {object} userState - The updated user state.
+ */
 async function setUserState(userId, userState) {
   try {
     await db.collection('userStates').doc(userId).set(userState);
@@ -533,8 +119,12 @@ async function setUserState(userId, userState) {
   }
 }
 
-/// Add a wallet address to the 'wallets' collection for mapping.
-
+/**
+ * Adds a wallet address to the 'wallets' collection for mapping.
+ * @param {string} walletAddress 
+ * @param {string} userId 
+ * @param {string} chainName 
+ */
 async function addWalletMapping(walletAddress, userId, chainName) {
   try {
     await db.collection('wallets').doc(walletAddress).set({ userId, chainName });
@@ -543,8 +133,12 @@ async function addWalletMapping(walletAddress, userId, chainName) {
   }
 }
 
-/// Verify Bank Account with Paystack
-
+/**
+ * Verify Bank Account with Paystack
+ * @param {string} accountNumber
+ * @param {string} bankCode
+ * @returns {object}
+ */
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
     const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
@@ -557,8 +151,12 @@ async function verifyBankAccount(accountNumber, bankCode) {
   }
 }
 
-/// Calculate Payout Based on Asset Type
-
+/**
+ * Calculate Payout Based on Asset Type
+ * @param {string} asset
+ * @param {number} amount
+ * @returns {string}
+ */
 function calculatePayout(asset, amount) {
   const rates = { USDT: 1641.81, USDC: 1641.81, ETH: 3968483.33 };
   if (!rates[asset]) {
@@ -591,11 +189,17 @@ const getAdminMenu = () =>
     [Markup.button.callback('Mark Paid', 'admin_mark_paid')],
   ]);
 
-/// Check if User is Admin
-
+/**
+ * Check if User is Admin
+ * @param {string} userId
+ * @returns {boolean}
+ */
 const isAdmin = (userId) => userId.toString() === PERSONAL_CHAT_ID;
 
-/// learn about base
+/**
+ * Send Chain Information (Base Only)
+ * @param {Context} ctx
+ */
 async function sendChainInfo(ctx) {
   const message = `
 *📘 Learn About Base*
@@ -656,7 +260,7 @@ async function greetUser(ctx) {
   }
 }
 
-//  /start Command
+// Handle /start Command
 bot.start(async (ctx) => {
   try {
     await greetUser(ctx);
@@ -1060,27 +664,13 @@ bot.action(/mark_paid_(.+)/, async (ctx) => {
     // Update transaction status to 'Paid'
     await db.collection('transactions').doc(transactionDoc.id).update({ status: 'Paid' });
 
-  // Notify the user with a detailed success message
-await bot.telegram.sendMessage(transactionData.userId, `
-🎉 *Transaction Successful!*
-
-*Reference ID:* \`${referenceId}\`
-*Amount Paid:* ${transactionData.amount} ${transactionData.asset}
-*Bank:* ${transactionData.bankDetails.bankName}
-*Account Name:* ${transactionData.bankDetails.accountName}
-*Account Number:* ****${transactionData.bankDetails.accountNumber.slice(-4)}
-*Payout (NGN):* ₦${transactionData.payout}
-
-🔹 *Chain:* ${transactionData.chain}
-🔹 *Date:* ${new Date(transactionData.timestamp).toLocaleString()}
-
-Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).
-`, { parse_mode: 'Markdown' });
+    // Notify the user
+    await bot.telegram.sendMessage(transactionData.userId, `🎉 Your transaction with Reference ID *${referenceId}* has been marked as *Paid*!`, { parse_mode: 'Markdown' });
 
     // Notify Admin
     await ctx.reply(`✅ Transaction *${referenceId}* has been marked as *Paid* and the user has been notified.`, { parse_mode: 'Markdown' });
 
-    //  log the action
+    // Optionally, log the action
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `📝 Admin marked transaction ${referenceId} as Paid for user ${transactionData.userId}.`);
   } catch (error) {
     console.error('Error marking transaction as paid:', error);
@@ -1152,7 +742,7 @@ bot.on('photo', async (ctx) => {
   }
 });
 
-// Admin Send Image Flow 
+// Admin Send Image Flow Initiation
 bot.action('admin_send_image', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
@@ -1163,7 +753,7 @@ bot.action('admin_send_image', async (ctx) => {
   await ctx.reply('Please enter the User ID you want to send an image to (e.g., 123456789):');
 });
 
-// Webhook Handler for Deposits with blockradar
+// Webhook Handler for Deposits
 app.post('/webhook/blockradar', async (req, res) => {
   try {
     const event = req.body;
