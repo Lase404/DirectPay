@@ -5,8 +5,6 @@ const admin = require('firebase-admin');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config(); // To load environment variables
-
 // Firebase setup
 const serviceAccount = require('./directpayngn-firebase-adminsdk-d11t3-17c3c57aa5.json'); // Replace with your actual path
 admin.initializeApp({
