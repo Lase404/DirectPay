@@ -8,10 +8,10 @@ const admin = require('firebase-admin');
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
-require('dotenv').config(); // Load environment variables
+
 
 // Firebase Admin Setup
-const serviceAccount = require(process.env.FIREBASE_SERVICE_ACCOUNT_PATH); // Path from .env
+const serviceAccount = require('./directpayngn1-75dd09c81338.json'); // Path from .env
 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -20,12 +20,13 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
-// Config & API Keys
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY;
-const BLOCKRADAR_API_KEY = process.env.BLOCKRADAR_API_KEY;
-const BLOCKRADAR_WALLET_ID = process.env.BLOCKRADAR_WALLET_ID;
-const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID; // Admin Telegram User ID
+// API Keys (set environment variables)
+const BOT_TOKEN = '8177636867:AAFXgCtKhqc4pcs8VeRUdAZVcwCXjQLEABk'; // Your actual Bot Token
+const PAYSTACK_API_KEY = 'sk_test_cd857e88d5d474db8238d30d027ea2911cd7fa17';
+const BLOCKRADAR_API_KEY = '6HGRj2cdzULDUbrjGHZftwNyHswUZojxA40mQp77e5vDzWqJ6v13w2iE4DBHzu'; 
+const BLOCKRADAR_WALLET_ID = '2cab1ef2-8589-4ff9-9017-76cc4d067719'; // Blockradar Wallet ID for BSC
+const PERSONAL_CHAT_ID = '2009305288';
+
 
 // Web3 Setup for Base Testnet
 const web3 = new Web3('https://sepolia.base.org');
