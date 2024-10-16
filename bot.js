@@ -19,7 +19,7 @@ const FIRESTORE_DB_URL = 'https://directpayngn1.firebaseio.com'; // Replace with
 const PORT = 4000; // Port for Express server
 
 // ** Initialize Firebase Admin SDK **
-const serviceAccountPath = path.join(__dirname, 'directpayngn1-firebase-adminsdk-1vqzj-884f781b60.json'); // Ensure the path is correct
+const serviceAccountPath = path.join(__dirname, 'directpayngn1-75dd09c81338.json'); // Ensure the path is correct
 
 if (!fs.existsSync(serviceAccountPath)) {
   console.error('❌ Service account JSON file not found at:', serviceAccountPath);
