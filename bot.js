@@ -455,7 +455,6 @@ if (walletExists) {
 
   await ctx.reply(greeting, getMainMenu(walletExists));
 }
-});
 
 // Handle /start Command
 bot.start(async (ctx) => {
