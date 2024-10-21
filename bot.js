@@ -443,16 +443,17 @@ async function greetUser(ctx) {
   const walletExists = userState.wallets.length > 0;
   const adminUser = isAdmin(userId);
 
-  const greeting = walletExists
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!`
-    : `👋 Welcome, ${ctx.from.first_name}!\n\nWelcome to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`;
-    const sentMessage = await ctx.reply(greeting, Markup.inlineKeyboard([
-      [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
-    ]));
-    ctx.session.welcomeMessageId = sentMessage.message_id;
-  } else {
-    await ctx.reply(greeting, getMainMenu(walletExists));
-  }
+if (walletExists) {
+  const greeting = `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!`;
+
+  const sentMessage = await ctx.reply(greeting, Markup.inlineKeyboard([
+    [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
+  ]));
+  ctx.session.welcomeMessageId = sentMessage.message_id;
+} else {
+  const greeting = `👋 Welcome, ${ctx.from.first_name}!\n\nWelcome to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`;
+
+  await ctx.reply(greeting, getMainMenu(walletExists));
 }
 
 // Handle /start Command
