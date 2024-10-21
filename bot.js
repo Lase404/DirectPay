@@ -1,8 +1,4 @@
-// DIRECTPAY-TELEGRAM-BOT
-// DEV: TOLUWALASE ADUNBI
-// DURATION: 6 WEEKS
-
-// Required modules & environment variables
+// Required Modules
 const Web3 = require('web3');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const axios = require('axios');
@@ -11,9 +7,11 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
+
+// Load environment variables
 require('dotenv').config();
 
-//logger
+// Configure Winston Logger
 const logger = winston.createLogger({
   level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
@@ -28,7 +26,7 @@ const logger = winston.createLogger({
   ],
 });
 
-// Firebase setup for userstate storage
+// Firebase setup
 const serviceAccount = require('./directpay.json'); // Ensure this file is secure
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
@@ -36,13 +34,14 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-// Api Keys & Bot Tokens
+// Config & API Keys
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY;
 const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
 const MAX_WALLETS = 5;
-// BLOCKRADAR CREDENTIALS FOR WALLET GENERATION
+
+// Multi-Chain Wallet Configuration
 const chains = {
   Base: {
     id: '83eeb82c-bf7b-4e70-bdd0-ab87b4fbcc2d',
@@ -70,20 +69,20 @@ const chains = {
   }
 };
 
-// Web3 Setup
+// Web3 Setup for Base Testnet
 const web3 = new Web3('https://sepolia.base.org');
 
-// Express App initialization for webhooks
+// Initialize Express App
 const app = express();
 app.use(express.json());
 
-// Initialize the Bot with session and stage middleware
+// Initialize Telegraf Bot with session and stage middleware
 const bot = new Telegraf(BOT_TOKEN);
 
-// Create a new Stage for admin actions and bank linking using scenes (telegraf)
+// Create a new Stage for admin actions and bank linking using Telegraf Scenes
 const stage = new Scenes.Stage();
 
-// Scene for sending messages to users (both text and images)
+// Scene for sending messages to users (text and images)
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
 sendMessageScene.enter((ctx) => {
@@ -106,7 +105,7 @@ sendMessageScene.on('text', async (ctx) => {
     const messageContent = ctx.message.text;
 
     try {
-      await bot.telegram.sendMessage(userIdToMessage, `📩  Message from Admin: \n\n${messageContent}`, { parse_mode: 'Markdown' });
+      await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${messageContent}`, { parse_mode: 'Markdown' });
       await ctx.reply('✅ Text message sent successfully.');
       logger.info(`Admin sent message to user ${userIdToMessage}: ${messageContent}`);
     } catch (error) {
@@ -129,7 +128,7 @@ sendMessageScene.on('photo', async (ctx) => {
 
   try {
     await bot.telegram.sendPhoto(userIdToMessage, photo.file_id, {
-      caption: `📸  .: \n\n${caption}`,
+      caption: `📸 *Image from Admin:*\n\n${caption}`,
       parse_mode: 'Markdown',
     });
     await ctx.reply('✅ Image sent successfully.');
@@ -147,7 +146,6 @@ sendMessageScene.on('message', (ctx) => ctx.reply('❌ Please send text or photo
 sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
 });
-
 // Bank Linking Scene
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
@@ -200,10 +198,10 @@ bankLinkingScene.on('text', async (ctx) => {
 
       // Ask for Confirmation
       await ctx.reply(
-        `🏦  Bank Account Verification \n\nPlease confirm your bank details:\n` +
-        `-  Bank Name:  ${ctx.session.bankData.bankName}\n` +
-        `-  Account Number:  ${ctx.session.bankData.accountNumber}\n` +
-        `-  Account Holder:  ${accountName}\n\n` +
+        `🏦 **Bank Account Verification**\n\nPlease confirm your bank details:\n` +
+        `- **Bank Name:** ${ctx.session.bankData.bankName}\n` +
+        `- **Account Number:** ${ctx.session.bankData.accountNumber}\n` +
+        `- **Account Holder:** ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
           Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes'),
@@ -232,7 +230,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       return;
     }
 
-    // Link bank account to wallet
+    // Link Bank to Wallet
     userState.wallets[walletIndex].bank = {
       bankName: bankData.bankName,
       bankCode: bankData.bankCode,
@@ -240,29 +238,18 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       accountName: bankData.accountName,
     };
 
-    // Update user state in firestore
+    // Update user state in Firestore
     await updateUserState(userId, {
       wallets: userState.wallets,
     });
 
-    await ctx.reply(`
-✅  Bank Account Linked Successfully! 
+    await ctx.reply('✅ Your bank account has been linked successfully!', getMainMenu(true));
 
- Bank:  ${bankName}
- Account Name:  ${accountName}
- Account Number:      ${accountNumberInput.slice(-4)}
-
-You can now send and receive the equivalent of your stablecoins ( USDT/USDC ) directly into your bank account using your wallet address: \`${walletAddress}\`.
-
-If you have any questions or need further assistance, feel free to reach out to our support team.
-`, { parse_mode: 'Markdown' });
-
-
-    // Log action to Admin
+    // Log to Admin
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
-      ` Account Name:  ${userState.wallets[walletIndex].bank.accountName}\n` +
-      ` Bank Name:  ${userState.wallets[walletIndex].bank.bankName}\n` +
-      ` Account Number:  ${userState.wallets[walletIndex].bank.accountNumber}`, { parse_mode: 'Markdown' });
+      `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
+      `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
+      `*Account Number:* ${userState.wallets[walletIndex].bank.accountNumber}`, { parse_mode: 'Markdown' });
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
@@ -291,16 +278,17 @@ bankLinkingScene.leave((ctx) => {
 stage.register(sendMessageScene);
 stage.register(bankLinkingScene);
 
-//  session middleware
+// Use session middleware
 bot.use(session());
 
-// stage middleware
+// Use the stage middleware
 bot.use(stage.middleware());
+
 
 // Utility Functions
 
-// Exchange Rates (subject to change)
-const rates = { USDC: 1680.81, USDT: 1680.81, ETH: 3968483.33 };
+// Rates globally
+const rates = { USDC: 1641.81, USDT: 1641.81, ETH: 3968483.33 };
 
 // Bank List with Names, Codes, and Aliases
 const bankList = [
@@ -332,7 +320,7 @@ function calculatePayout(asset, amount) {
   if (!rates[asset]) {
     throw new Error(`Unsupported asset type: ${asset}`);
   }
-  return (amount   rates[asset]).toFixed(2);
+  return (amount * rates[asset]).toFixed(2);
 }
 
 // Generate a Unique Reference ID for Transactions
@@ -347,7 +335,7 @@ const getMainMenu = (walletExists) =>
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
   ]).resize();
 
-// Admin Panel Menu
+// Admin Menu
 const getAdminMenu = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('📋 View All Transactions', 'admin_view_transactions')],
@@ -362,7 +350,7 @@ const getAdminMenu = () =>
 // Check if User is Admin
 const isAdmin = (userId) => ADMIN_IDS.includes(userId.toString());
 
-// Firestore Functions
+// Firestore Helper Functions
 
 // Get User State from Firestore
 async function getUserState(userId) {
@@ -427,8 +415,8 @@ async function greetUser(ctx) {
   const adminUser = isAdmin(userId);
 
   const greeting = walletExists
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to  DirectPay , your gateway to seamless crypto transactions.\n\n💡  Quick Start Guide: \n1.  Add Your Bank Account \n2.  Access Your Dedicated Wallet Address \n3.  Send Stablecoins and Receive Cash Instantly \n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
-    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing  DirectPay . Let's embark on your crypto journey together. Use the menu below to get started.`;
+    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
+    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing *DirectPay*. Let's embark on your crypto journey together. Use the menu below to get started.`;
 
   if (adminUser) {
     const sentMessage = await ctx.reply(greeting, Markup.inlineKeyboard([
@@ -482,7 +470,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   await ctx.answerCbQuery();
 
   // Inform user that wallet generation has started
-  const generatingMessage = await ctx.reply('🔄 Generating Wallet for  ' + chain + ' ... Please wait a moment.', { parse_mode: 'Markdown' });
+  const generatingMessage = await ctx.reply('🔄 Generating Wallet for *' + chain + '*... Please wait a moment.', { parse_mode: 'Markdown' });
 
   try {
     const walletAddress = await generateWallet(chain);
@@ -509,7 +497,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.reply(`✅ Success! Your new wallet has been generated on  ${chain} :\n\n\`${walletAddress}\`\n\n Supported Assets:  ${chains[chain].supportedAssets.join(', ')}`, { parse_mode: 'Markdown', ...getMainMenu(true) });
+    await ctx.reply(`✅ Success! Your new wallet has been generated on *${chain}*:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, { parse_mode: 'Markdown', ...getMainMenu(true) });
 
     // Prompt to Link Bank Account
     await ctx.reply('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize());
@@ -552,7 +540,7 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
 });
 
 // View Wallet
-bot.hears(/💼\s View Wallet/i, async (ctx) => {
+bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -566,23 +554,15 @@ bot.hears(/💼\s View Wallet/i, async (ctx) => {
   if (!userState.wallets || userState.wallets.length === 0) {
     return ctx.reply('You have no wallets. Generate a new wallet below.', getMainMenu(false));
   }
-// view wallts 
-  let walletMessage = '💼 Your  Wallets:\n\n';
-userState.wallets.forEach((wallet, index) => {
-  walletMessage += `Wallet #${index + 1}:\n`;
-  walletMessage += `Address: \`${wallet.address || 'N/A'}\`\n`;
-  walletMessage += `Bank Linked: ${wallet.bank ? 'Yes' : 'No'}\n`;
-  walletMessage += `Network: ${wallet.chain || 'N/A'}\n`;
-  walletMessage += `Supported Assets: ${wallet.supportedAssets?.join(', ') || 'N/A'}\n`;
 
-  if (wallet.bank) {
-    walletMessage += `\n💳  Bank Details :\n`;
-    walletMessage += `Bank Name: ${wallet.bank.bankName || 'N/A'}\n`;
-    walletMessage += `Account Name: ${wallet.bank.accountName || 'N/A'}\n`;
-    walletMessage += `Account Number:     ${wallet.bank.accountNumber.slice(-4)}\n`; // Masking account number for security
-  }
-});
-
+  // Display Wallets
+  let walletMessage = '💼 **Your Wallets**:\n\n';
+  userState.wallets.forEach((wallet, index) => {
+    walletMessage += `#${index + 1} Wallet Address: \`${wallet.address || 'N/A'}\`\n`;
+    walletMessage += `🔗 Linked Bank: ${wallet.bank ? 'Yes' : 'No'}\n`;
+    walletMessage += `🌐 Chain: ${wallet.chain || 'N/A'}\n`;
+    walletMessage += `💱 Supported Assets: ${wallet.supportedAssets?.join(', ') || 'N/A'}\n\n`;
+  });
 
   // Determine if user can create a new wallet
   const canCreateNewWallet = userState.wallets.length > 0 && userState.wallets[0].bank;
@@ -651,7 +631,7 @@ bot.action('link_bank_to_create_wallet', async (ctx) => {
 });
 
 // Link Bank Account
-bot.hears(/🏦\s Link Bank Account/i, async (ctx) => {
+bot.hears(/🏦\s*Link Bank Account/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
     let userState = await getUserState(userId);
@@ -682,53 +662,24 @@ bot.hears(/🏦\s Link Bank Account/i, async (ctx) => {
 const baseContent = [
   {
     title: 'Welcome to Base',
-    text: `Base is an Ethereum Layer 2 network designed to provide secure, low-cost, and fast transactions. It allows you to use decentralized applications (dApps) with minimal fees, making it accessible for users who want to explore the world of crypto without the typical high costs.\n\nBuilt on Ethereum's strong security foundation, Base offers the same level of safety, but with significantly reduced transaction fees, allowing more people to onboard easily https://www.base.org/.`,
+    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
   },
   {
     title: 'Why Choose Base?',
-    text: `Ethereum, while being a leading blockchain, often suffers from high gas fees due to network congestion. These fees can reach up to $50 or more for a single transaction. This makes small transfers or interactions with dApps expensive and impractical for many users.\n\nBase solves this by offering:
-    
-    -  Lower Fees : Transaction costs on Base are just a fraction of what they are on Ethereum. Now, you can send tokens, use dApps, or bridge assets without worrying about hefty fees.
-    -  Faster Transactions : With Base, transactions are confirmed much faster than on Ethereum mainnet, making your experience smoother and more efficient.
-    -  Security : Since Base is built on top of Ethereum, it inherits the security of the Ethereum network. Your assets remain as safe as they would be on Ethereum.
-    -  Developer-Friendly : Base supports Ethereum Virtual Machine (EVM) tools, meaning developers can easily build and deploy dApps using familiar infrastructure.`,
+    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
   },
   {
-    title: 'Onboarding to Base',
-    text: `Are you ready to get started with Base? Here's how to onboard:
-
-    1.  Get an Ethereum Wallet : If you don't have one yet, download a wallet like MetaMask, Coinbase Wallet, or Trust Wallet.
-    2.  Acquire Ethereum (ETH) : Since Base is a Layer 2 built on Ethereum, you'll need ETH for bridging and small fees. Buy ETH through a crypto exchange.
-    3.  Bridge Your Assets : Go to the [Base Bridge](https://bridge.base.org) and transfer ETH or other supported assets from Ethereum to Base. Bridging is easy:
-        - Connect your Ethereum wallet to the bridge.
-        - Select the asset (e.g., ETH or USDC) you want to bridge.
-        - Confirm the transaction. Gas fees on Ethereum will apply, but this will be the last time you'll face high fees.
-    4.  Use Base : Once your assets are on Base, you can start using them across various dApps with minimal fees and faster transactions https://bridge.base.org.`,
+    title: 'Getting Started',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
   },
   {
-    title: 'Exploring Decentralized Applications',
-    text: `Base is not just a network—it's a gateway to the decentralized world. After onboarding, explore decentralized finance (DeFi) apps, NFT platforms, and more, all while enjoying the benefits of low fees and fast transactions. Some popular dApps on Base include:
-    
-    -  Uniswap : Trade tokens with minimal fees.
-    -  Aave : Lend and borrow crypto without the high costs of Ethereum.
-    -  OpenSea : Explore NFTs with faster minting and lower fees.
-
-    To explore more, check out the [Base dApp Directory](https://base.org/dapps).`,
-  },
-  {
-    title: 'Stay Updated & Learn More',
-    text: `Want to dive deeper into how Base works or stay updated on the latest developments?
-
-    - Visit the [Base Documentation](https://docs.base.org) for detailed guides and developer resources.
-    - Follow Base on [Twitter](https://twitter.com/Base) to get the latest news and announcements.
-    - Join the Base community to learn more, get support, or provide feedback.
-    
-    Whether you're an experienced Ethereum user or completely new to crypto, Base is here to make your journey smoother, cheaper, and more accessible.`,
+    title: 'Learn More',
+    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
   },
 ];
 
 // Start the "Learn About Base" section
-bot.hears(/📘\s Learn About Base/i, async (ctx) => {
+bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
   await sendBaseContent(ctx, 0, true);
 });
 
@@ -752,18 +703,18 @@ async function sendBaseContent(ctx, index, isNew = false) {
   const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
 
   if (isNew) {
-    const sentMessage = await ctx.replyWithMarkdown(` ${content.title} \n\n${content.text}`, inlineKeyboard);
+    const sentMessage = await ctx.replyWithMarkdown(`*${content.title}*\n\n${content.text}`, inlineKeyboard);
     // Store the message ID in session
     ctx.session.baseMessageId = sentMessage.message_id;
   } else {
     try {
-      await ctx.editMessageText(` ${content.title} \n\n${content.text}`, {
+      await ctx.editMessageText(`*${content.title}*\n\n${content.text}`, {
         parse_mode: 'Markdown',
         reply_markup: inlineKeyboard.reply_markup,
       });
     } catch (error) {
       // If editing message fails, send a new message and update session
-      const sentMessage = await ctx.replyWithMarkdown(` ${content.title} \n\n${content.text}`, inlineKeyboard);
+      const sentMessage = await ctx.replyWithMarkdown(`*${content.title}*\n\n${content.text}`, inlineKeyboard);
       ctx.session.baseMessageId = sentMessage.message_id;
     }
   }
@@ -799,7 +750,7 @@ bot.action('exit_base', async (ctx) => {
 });
 
 // Support Functionality
-bot.hears(/ℹ️\s Support/i, async (ctx) => {
+bot.hears(/ℹ️\s*Support/i, async (ctx) => {
   await ctx.reply('How can we assist you today?', Markup.inlineKeyboard([
     [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
     [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
@@ -817,11 +768,11 @@ bot.action('support_not_received', async (ctx) => {
 });
 
 bot.action('support_contact', async (ctx) => {
-  await ctx.reply('You can contact our support representative at @MAXCSWAP.');
+  await ctx.reply('You can contact our support team at @your_support_username.');
 });
 
 // View Transactions for Users
-bot.hears(/💰\s Transactions/i, async (ctx) => {
+bot.hears(/💰\s*Transactions/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
     const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
@@ -830,15 +781,15 @@ bot.hears(/💰\s Transactions/i, async (ctx) => {
       return ctx.reply('You have no transactions at the moment.');
     }
 
-    let message = '💰  Your Transactions :\n\n';
+    let message = '💰 **Your Transactions**:\n\n';
 
     transactionsSnapshot.forEach((doc) => {
       const tx = doc.data();
-      message += ` Reference ID:  \`${tx.referenceId || 'N/A'}\`\n`;
-      message += ` Amount:  ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-      message += ` Status:  ${tx.status || 'Pending'}\n`;
-      message += ` Date:  ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += ` Chain:  ${tx.chain || 'N/A'}\n\n`;
+      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+      message += `*Status:* ${tx.status || 'Pending'}\n`;
+      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
+      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
     });
 
     await ctx.replyWithMarkdown(message);
@@ -860,7 +811,7 @@ bot.action('open_admin_panel', async (ctx) => {
   // Reset session variables if necessary
   ctx.session.adminMessageId = null;
 
-  const sentMessage = await ctx.reply('👨‍💼  Admin Panel \n\nSelect an option below:', getAdminMenu());
+  const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
   ctx.session.adminMessageId = sentMessage.message_id;
   ctx.answerCbQuery(); // Acknowledge the callback
 
@@ -893,16 +844,16 @@ bot.action(/admin_(.+)/, async (ctx) => {
         return;
       }
 
-      let message = '📋  Recent Transactions :\n\n';
+      let message = '📋 **Recent Transactions**:\n\n';
 
       transactionsSnapshot.forEach((doc) => {
         const tx = doc.data();
-        message += ` User ID:  ${tx.userId || 'N/A'}\n`;
-        message += ` Reference ID:  \`${tx.referenceId || 'N/A'}\`\n`;
-        message += ` Amount:  ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-        message += ` Status:  ${tx.status || 'Pending'}\n`;
-        message += ` Chain:  ${tx.chain || 'N/A'}\n`;
-        message += ` Date:  ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
+        message += `*User ID:* ${tx.userId || 'N/A'}\n`;
+        message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+        message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+        message += `*Status:* ${tx.status || 'Pending'}\n`;
+        message += `*Chain:* ${tx.chain || 'N/A'}\n`;
+        message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
       });
 
       // Add a 'Back' button to return to the admin menu
@@ -926,6 +877,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
     }
     await ctx.scene.enter('send_message_scene');
   } else if (action === 'mark_paid') {
+    // Functionality to mark transactions as paid
     try {
       const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
       if (pendingTransactions.empty) {
@@ -969,13 +921,13 @@ bot.action(/admin_(.+)/, async (ctx) => {
         return;
       }
 
-      let message = '👥  All Users :\n\n';
+      let message = '👥 **All Users**:\n\n';
 
       usersSnapshot.forEach((doc) => {
         const user = doc.data();
-        message += ` User ID:  ${doc.id}\n`;
-        message += ` Number of Wallets:  ${user.wallets.length}\n`;
-        message += ` Bank Linked:  ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
+        message += `*User ID:* ${doc.id}\n`;
+        message += `*Number of Wallets:* ${user.wallets.length}\n`;
+        message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
       });
 
       // Add a 'Back' button to return to the admin menu
@@ -1003,7 +955,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
   } else if (action === 'manage_banks') {
     // Implement bank management functionalities here
     await ctx.answerCbQuery();
-    await ctx.editMessageText('🏦  Bank Management \n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
+    await ctx.editMessageText('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
   } else if (action === 'back_to_main') {
     // Return to the main menu
     await ctx.answerCbQuery();
@@ -1050,7 +1002,7 @@ bot.on('text', async (ctx, next) => {
       for (const doc of usersSnapshot.docs) {
         const targetUserId = doc.id;
         try {
-          await bot.telegram.sendMessage(targetUserId, `📢  Broadcast Message: \n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
+          await bot.telegram.sendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
           successCount++;
         } catch (error) {
           logger.error(`Error sending broadcast to user ${targetUserId}: ${error.message}`);
@@ -1125,31 +1077,31 @@ app.post('/webhook/blockradar', async (req, res) => {
       // Notify User of Successful Deposit
       await bot.telegram.sendMessage(userId,
         `Dear ${accountName},\n\n` +
-        `🎉  Deposit Received \n` +
-        `-  Amount:  ${amount} ${asset}\n` +
-        `-  Chain:  ${chain}\n` +
-        `-  Wallet Address:  \`${walletAddress}\`\n\n` +
-        `We are processing your transaction at a rate of  NGN ${rate}  per ${asset}.\n` +
-        `You will receive  NGN ${payout}  in your ${bankName} account ending with     ${bankAccount.slice(-4)} shortly.\n\n` +
-        `Thank you for using  DirectPay . We appreciate your trust in our services.\n\n` +
-        ` Note:  If you have any questions, feel free to reach out to our support team.`,
+        `🎉 *Deposit Received*\n` +
+        `- **Amount:** ${amount} ${asset}\n` +
+        `- **Chain:** ${chain}\n` +
+        `- **Wallet Address:** \`${walletAddress}\`\n\n` +
+        `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
+        `You will receive *NGN ${payout}* in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
+        `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
+        `*Note:* If you have any questions, feel free to reach out to our support team.`,
         { parse_mode: 'Markdown' }
       );
 
       // Notify Admin with Detailed Transaction Information
-      const adminDepositMessage = `⚡️  New Deposit Received \n\n` +
-        ` User ID:  ${userId}\n` +
-        ` Amount Deposited:  ${amount} ${asset}\n` +
-        ` Exchange Rate:  NGN ${rate} per ${asset}\n` +
-        ` Amount to be Paid:  NGN ${payout}\n` +
-        ` Time:  ${new Date().toLocaleString()}\n` +
-        ` Bank Details: \n` +
-        `  -  Account Name:  ${accountName}\n` +
-        `  -  Bank Name:  ${bankName}\n` +
-        `  -  Account Number:  ${bankAccount}\n` +
-        ` Chain:  ${chain}\n` +
-        ` Transaction Hash:  \`${transactionHash}\`\n` +
-        ` Reference ID:  ${referenceId}\n`;
+      const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
+        `*User ID:* ${userId}\n` +
+        `*Amount Deposited:* ${amount} ${asset}\n` +
+        `*Exchange Rate:* NGN ${rate} per ${asset}\n` +
+        `*Amount to be Paid:* NGN ${payout}\n` +
+        `*Time:* ${new Date().toLocaleString()}\n` +
+        `*Bank Details:*\n` +
+        `  - *Account Name:* ${accountName}\n` +
+        `  - *Bank Name:* ${bankName}\n` +
+        `  - *Account Number:* ${bankAccount}\n` +
+        `*Chain:* ${chain}\n` +
+        `*Transaction Hash:* \`${transactionHash}\`\n` +
+        `*Reference ID:* ${referenceId}\n`;
 
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
 
@@ -1193,6 +1145,6 @@ bot.launch()
   .then(() => logger.info('DirectPay bot is live!'))
   .catch((err) => logger.error(`Error launching bot: ${err.message}`));
 
-// Shutdown
+// Graceful Shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
