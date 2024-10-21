@@ -917,13 +917,6 @@ Thank you for using *DirectPay*! Your funds have been securely transferred to yo
     logger.error(`Error notifying user ${data.userId}: ${error.message}`);
   }
 });
-
-          logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
-        } catch (error) {
-          logger.error(`Error notifying user ${data.userId}: ${error.message}`);
-        }
-      });
-
       // Edit the admin panel message to confirm
       await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
       ctx.answerCbQuery();
