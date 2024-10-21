@@ -1,6 +1,3 @@
-//DirectPay Bot
-// DEV: TOLUWALASE ADUNBI
-// Required Modules
 const Web3 = require('web3');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const axios = require('axios');
@@ -250,13 +247,13 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     const firstSupportedAsset = userState.wallets[walletIndex].supportedAssets[0];
     const currentRate = rates[firstSupportedAsset] || 'N/A';
 
-    await ctx.reply(`✅ Your bank account has been linked successfully!\n\n*Current Exchange Rate:* 1 ${escapeMarkdownV2(firstSupportedAsset)} = ₦${currentRate}`, getMainMenu(true));
+    await ctx.reply(`✅ Your bank account has been linked successfully!\n\n*Current Exchange Rate:* 1 ${escapeMarkdownV2(firstSupportedAsset)} = ₦${escapeMarkdownV2(currentRate)}`, getMainMenu(true));
 
     // Log to Admin
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${escapeMarkdownV2(userId)} linked a bank account:\n\n` +
       `*Account Name:* ${escapeMarkdownV2(userState.wallets[walletIndex].bank.accountName)}\n` +
       `*Bank Name:* ${escapeMarkdownV2(userState.wallets[walletIndex].bank.bankName)}\n` +
-      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'MarkdownV2' });
+      `*Account Number:* ****${escapeMarkdownV2(userState.wallets[walletIndex].bank.accountNumber.slice(-4))}`, { parse_mode: 'MarkdownV2' });
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
@@ -582,7 +579,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.reply(`✅ Success! Your new wallet has been generated on *${escapeMarkdownV2(chain)}*:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, { parse_mode: 'MarkdownV2', ...getMainMenu(true) });
+    await ctx.reply(`✅ Success! Your new wallet has been generated on *${escapeMarkdownV2(chain)}*:\n\n\`${escapeMarkdownV2(walletAddress)}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, { parse_mode: 'MarkdownV2', ...getMainMenu(true) });
 
     // Prompt to Link Bank Account
     await ctx.reply('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize());
@@ -591,12 +588,12 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     await ctx.deleteMessage(generatingMessage.message_id);
 
     // Log Wallet Generation
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId} on ${escapeMarkdownV2(chain)}: ${walletAddress}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${escapeMarkdownV2(userId)} on ${escapeMarkdownV2(chain)}: ${escapeMarkdownV2(walletAddress)}`);
     logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
     await ctx.reply('⚠️ There was an issue generating your wallet. Please try again later.');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${escapeMarkdownV2(error.message)}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${escapeMarkdownV2(userId)}: ${escapeMarkdownV2(error.message)}`);
   }
 });
 
@@ -640,14 +637,20 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
     return ctx.reply('You have no wallets. Generate a new wallet below.', getMainMenu(false));
   }
 
-  // Display Wallets
+  // Display Wallets with Bank Details
   let walletMessage = '💼 *Your Wallets*:\n\n';
   userState.wallets.forEach((wallet, index) => {
     // Escape '#' by prefixing it with a backslash
-    walletMessage += `\\#${index + 1} Wallet Address: \`${wallet.address || 'N/A'}\`\n`;
-    walletMessage += `🔗 Linked Bank: ${wallet.bank ? 'Yes' : 'No'}\n`;
+    walletMessage += `\\#${index + 1} Wallet Address: \`${escapeMarkdownV2(wallet.address || 'N/A')}\`\n`;
+    walletMessage += `🔗 Linked Bank: ${wallet.bank ? `Yes - *${escapeMarkdownV2(wallet.bank.bankName)}*` : 'No'}\n`;
     walletMessage += `🌐 Chain: ${escapeMarkdownV2(wallet.chain || 'N/A')}\n`;
     walletMessage += `💱 Supported Assets: ${escapeMarkdownV2(wallet.supportedAssets?.join(', ') || 'N/A')}\n\n`;
+    
+    if (wallet.bank) {
+      walletMessage += `   • *Bank Name:* ${escapeMarkdownV2(wallet.bank.bankName)}\n`;
+      walletMessage += `   • *Account Name:* ${escapeMarkdownV2(wallet.bank.accountName)}\n`;
+      walletMessage += `   • *Account Number:* ****${escapeMarkdownV2(wallet.bank.accountNumber.slice(-4))}\n\n`;
+    }
   });
 
   await ctx.reply(walletMessage, { parse_mode: 'MarkdownV2' });
@@ -964,7 +967,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
             `*Amount Paid:* ${escapeMarkdownV2(data.amount)} ${escapeMarkdownV2(data.asset)}\n` +
             `*Bank:* ${escapeMarkdownV2(data.bankDetails.bankName)}\n` +
             `*Account Name:* ${escapeMarkdownV2(data.bankDetails.accountName)}\n` +
-            `*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}\n` +
+            `*Account Number:* ****${escapeMarkdownV2(data.bankDetails.accountNumber.slice(-4))}\n` +
             `*Payout (NGN):* ₦${escapeMarkdownV2(data.payout)}\n\n` +
             `🔹 *Chain:* ${escapeMarkdownV2(data.chain)}\n` +
             `🔹 *Date:* ${escapeMarkdownV2(new Date(data.timestamp).toLocaleString())}\n\n` +
@@ -1136,7 +1139,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       // Check if Wallet has Linked Bank
       if (!wallet || !wallet.bank) {
         await bot.telegram.sendMessage(userId, `💰 Deposit Received: ${escapeMarkdownV2(amount)} ${escapeMarkdownV2(asset)} on ${escapeMarkdownV2(chain)}.\n\nPlease link a bank account to receive your payout securely.`);
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} has received a deposit but hasn't linked a bank account.`);
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${escapeMarkdownV2(userId)} has received a deposit but hasn't linked a bank account.`);
         return res.status(200).send('OK');
       }
 
@@ -1155,7 +1158,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         `- **Chain:** ${escapeMarkdownV2(chain)}\n` +
         `- **Wallet Address:** \`${escapeMarkdownV2(walletAddress)}\`\n\n` +
         `We are processing your transaction at a rate of *NGN ${escapeMarkdownV2(rate)}* per ${escapeMarkdownV2(asset)}.\n` +
-        `You will receive *NGN ${escapeMarkdownV2(payout)}* in your ${escapeMarkdownV2(bankName)} account ending with ****${escapeMarkdownV2(bankAccount.slice(-4))}* shortly.\n\n` +
+        `You will receive *NGN ${escapeMarkdownV2(payout)}* in your ${escapeMarkdownV2(bankName)} account ending with ****${escapeMarkdownV2(bankAccount.slice(-4))} shortly.\n\n` +
         `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
         `*Note:* If you have any questions, feel free to reach out to our support team.`,
         { parse_mode: 'MarkdownV2' }
