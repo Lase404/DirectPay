@@ -896,7 +896,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
       pendingTransactions.forEach(async (transaction) => {
         const data = transaction.data();
         try {
-          await bot.telegram.sendMessage(data.userId, 🎉 *Transaction Successful!*
+          await bot.telegram.sendMessage(data.userId, '🎉 *Transaction Successful!*
 
 *Reference ID:* \${referenceId}\
 *Amount Paid:* ${transactionData.amount} ${transactionData.asset}
