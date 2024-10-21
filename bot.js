@@ -250,13 +250,17 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     const firstSupportedAsset = userState.wallets[walletIndex].supportedAssets[0];
     const currentRate = rates[firstSupportedAsset] || 'N/A';
 
-    await ctx.reply(`✅ Your bank account has been linked successfully!\n\n*Current Exchange Rate:* 1 ${escapeMarkdownV2(firstSupportedAsset)} = ₦${escapeMarkdownV2(currentRate)}`, getMainMenu(true));
+    // Format the confirmation message
+    const confirmationMessage = `✅ Your bank account has been linked successfully!\n\n*Current Exchange Rate:* 1 ${escapeMarkdownV2(firstSupportedAsset)} = ₦${escapeMarkdownV2(currentRate)}`;
+
+    await ctx.replyWithMarkdownV2(confirmationMessage, getMainMenu(true));
 
     // Log to Admin
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${escapeMarkdownV2(userId)} linked a bank account:\n\n` +
+    const adminMessage = `🔗 User ${escapeMarkdownV2(userId)} linked a bank account:\n\n` +
       `*Account Name:* ${escapeMarkdownV2(userState.wallets[walletIndex].bank.accountName)}\n` +
       `*Bank Name:* ${escapeMarkdownV2(userState.wallets[walletIndex].bank.bankName)}\n` +
-      `*Account Number:* ****${escapeMarkdownV2(userState.wallets[walletIndex].bank.accountNumber.slice(-4))}`, { parse_mode: 'MarkdownV2' });
+      `*Account Number:* ****${escapeMarkdownV2(userState.wallets[walletIndex].bank.accountNumber.slice(-4))}`;
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminMessage, { parse_mode: 'MarkdownV2' });
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
@@ -291,14 +295,36 @@ bot.use(session());
 // Use the stage middleware
 bot.use(stage.middleware());
 
-// Utility Functions
-
 // Function to escape MarkdownV2 special characters
 function escapeMarkdownV2(text) {
   if (!text) return '';
-  const escaped = text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
+  const escaped = text.replace(/([_*[\]()~`>#+\-=\|{}.!])/g, '\\$1');
   logger.debug(`Escaping text: "${text}" => "${escaped}"`);
   return escaped;
+}
+
+// Function to escape MarkdownV2 reserved characters except code blocks
+function escapeMarkdownV2ExceptCode(text) {
+  if (!text) return '';
+  // Escape all reserved characters except backticks
+  return text.replace(/([_*[\]()~`>#+\-=\|{}.!])/g, '\\$1');
+}
+
+// Function to format the wallet success message
+function formatWalletSuccessMessage(chain, walletAddress, supportedAssets) {
+  // Escape reserved characters in the chain name
+  const escapedChain = escapeMarkdownV2(chain);
+  
+  // Do NOT escape walletAddress as it's inside backticks
+  const walletAddressText = `\`${walletAddress}\``;
+  
+  // Escape reserved characters in supported assets and join them
+  const escapedAssets = supportedAssets.map(asset => escapeMarkdownV2(asset)).join(', ');
+  
+  // Construct the message
+  const message = `✅ Success\\! Your new wallet has been generated on *${escapedChain}*:\n\n${walletAddressText}\n\n**Supported Assets:** ${escapedAssets}`;
+  
+  return message;
 }
 
 // Rates dynamically fetched from CoinGecko
@@ -542,96 +568,6 @@ async function generateWallet(chain) {
   }
 }
 
-// Wallet Generation Handler
-bot.action(/generate_wallet_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const selectedChainKey = ctx.match[1]; // 'Base', 'Polygon', 'BNB Smart Chain'
-
-  // Validate selected chain
-  if (!chains[selectedChainKey]) {
-    await ctx.reply('⚠️ Invalid network selection. Please try again.');
-    return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
-  }
-
-  const chain = selectedChainKey;
-
-  // Acknowledge the callback to remove loading state
-  await ctx.answerCbQuery();
-
-  // Inform user that wallet generation has started
-  const generatingMessage = await ctx.reply('🔄 Generating Wallet for *' + escapeMarkdownV2(chain) + '*... Please wait a moment.', { parse_mode: 'MarkdownV2' });
-
-  try {
-    const walletAddress = await generateWallet(chain);
-
-    // Fetch updated user state
-    const userState = await getUserState(userId);
-
-    // Add the new wallet to user state
-    userState.wallets.push({
-      address: walletAddress || 'N/A',
-      chain: chain || 'N/A',
-      supportedAssets: chains[chain].supportedAssets ? [...chains[chain].supportedAssets] : [],
-      bank: null
-    });
-
-    // Also, add the wallet address to walletAddresses array
-    const updatedWalletAddresses = userState.walletAddresses || [];
-    updatedWalletAddresses.push(walletAddress);
-
-    // Update user state in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-      walletAddresses: updatedWalletAddresses,
-    });
-
-    // Update Menu
-    const mainMenu = getMainMenu(true);
-    const replyMessage = `✅ Success! Your new wallet has been generated on *${escapeMarkdownV2(chain)}*:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`;
-    await ctx.reply(replyMessage, { parse_mode: 'MarkdownV2', ...mainMenu });
-
-    // Prompt to Link Bank Account
-    await ctx.reply('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize());
-
-    // Delete the generating message
-    await ctx.deleteMessage(generatingMessage.message_id);
-
-    // Log Wallet Generation
-    const adminMessage = `💼 Wallet generated for user ${escapeMarkdownV2(userId)} on ${escapeMarkdownV2(chain)}: \`${walletAddress}\``;
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminMessage, { parse_mode: 'MarkdownV2' });
-    logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
-  } catch (error) {
-    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
-    await ctx.reply('⚠️ There was an issue generating your wallet. Please try again later.');
-    const adminErrorMessage = `❗️ Error generating wallet for user ${escapeMarkdownV2(userId)}: ${error.message}`;
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminErrorMessage, { parse_mode: 'MarkdownV2' });
-  }
-});
-
-// Generate Wallet Button Handler
-bot.hears('💼 Generate Wallet', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (userState.wallets.length >= MAX_WALLETS) {
-    return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
-  }
-
-  // Prompt user to select a network
-  await ctx.reply('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
-    [Markup.button.callback('Base', 'generate_wallet_Base')],
-    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
-});
-
 // View Wallet
 bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -668,7 +604,7 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   logger.debug(`Sending View Wallet message to user ${userId}: "${walletMessage}"`);
 
   try {
-    await ctx.reply(walletMessage, { parse_mode: 'MarkdownV2' });
+    await ctx.replyWithMarkdownV2(walletMessage);
   } catch (error) {
     logger.error(`Error sending View Wallet message to user ${userId}: ${error.message}`);
     await ctx.reply('⚠️ Failed to display your wallets. Please try again later.');
@@ -1054,7 +990,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
     // Implement bank management functionalities here
     await ctx.answerCbQuery();
     await ctx.editMessageText('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'MarkdownV2', reply_markup: getAdminMenu().reply_markup });
-  } else if (action === 'back_to_main') {
+  } else if (action === 'admin_back_to_main') {
     // Return to the main menu
     await ctx.answerCbQuery();
     await greetUser(ctx);
