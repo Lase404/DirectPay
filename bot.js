@@ -197,17 +197,24 @@ bankLinkingScene.on('text', async (ctx) => {
       ctx.session.bankData.accountName = accountName;
 
       // Ask for Confirmation
-await ctx.replyWithMarkdownV2(
-  `🏦 *Bank Account Verification*\n\nPlease confirm your bank details:\n` +
-  `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
-  `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
-  `- *Account Holder:* ${accountName}\n\n` +
-  `Is this information correct?`,
-  Markup.inlineKeyboard([
-    Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes'),
-    Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no'),
-  ])
-);
+      await ctx.reply(
+        `🏦 **Bank Account Verification**\n\nPlease confirm your bank details:\n` +
+        `- **Bank Name:** ${ctx.session.bankData.bankName}\n` +
+        `- **Account Number:** ${ctx.session.bankData.accountNumber}\n` +
+        `- **Account Holder:** ${accountName}\n\n` +
+        `Is this information correct?`,
+        Markup.inlineKeyboard([
+          Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes'),
+          Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no'),
+        ])
+      );
+    } catch (error) {
+      logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
+      await ctx.reply('❌ Failed to verify bank account. Please try again later.');
+      ctx.scene.leave();
+    }
+  }
+});
 
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -407,11 +414,9 @@ async function greetUser(ctx) {
   const walletExists = userState.wallets.length > 0;
   const adminUser = isAdmin(userId);
 
- const greeting = walletExists
-  ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
-  : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing *DirectPay*. Let's embark on your crypto journey together. Use the menu below to get started.`;
-
-await ctx.reply(greeting, { parse_mode: 'MarkdownV2' });
+  const greeting = walletExists
+    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
+    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing *DirectPay*. Let's embark on your crypto journey together. Use the menu below to get started.`;
 
   if (adminUser) {
     const sentMessage = await ctx.reply(greeting, Markup.inlineKeyboard([
@@ -550,18 +555,14 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
     return ctx.reply('You have no wallets. Generate a new wallet below.', getMainMenu(false));
   }
 
- // Display Wallets
-let walletMessage = '💼 *Your Wallets*:\n\n';
-userState.wallets.forEach((wallet, index) => {
-  walletMessage += `*#${index + 1} Wallet Address:* \`${wallet.address?.replace(/_/g, '\\_') || 'N/A'}\`\n`;
-  walletMessage += `🔗 *Linked Bank:* ${wallet.bank ? 'Yes' : 'No'}\n`;
-  walletMessage += `🌐 *Chain:* ${wallet.chain || 'N/A'}\n`;
-  walletMessage += `💱 *Supported Assets:* ${wallet.supportedAssets?.join(', ') || 'N/A'}\n\n`;
-});
-
-await ctx.reply(walletMessage, { parse_mode: 'MarkdownV2' });
-
-
+  // Display Wallets
+  let walletMessage = '💼 **Your Wallets**:\n\n';
+  userState.wallets.forEach((wallet, index) => {
+    walletMessage += `#${index + 1} Wallet Address: \`${wallet.address || 'N/A'}\`\n`;
+    walletMessage += `🔗 Linked Bank: ${wallet.bank ? 'Yes' : 'No'}\n`;
+    walletMessage += `🌐 Chain: ${wallet.chain || 'N/A'}\n`;
+    walletMessage += `💱 Supported Assets: ${wallet.supportedAssets?.join(', ') || 'N/A'}\n\n`;
+  });
 
   // Determine if user can create a new wallet
   const canCreateNewWallet = userState.wallets.length > 0 && userState.wallets[0].bank;
@@ -892,29 +893,16 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
       await batch.commit();
 
-     pendingTransactions.forEach(async (transaction) => {
-  const data = transaction.data();
-  try {
-    // Notify user about successful transaction
-    await bot.telegram.sendMessage(
-      data.userId,
-      `🎉 *Transaction Successful!*\n\n` +
-      `*Reference ID:* \`${data.referenceId || 'N/A'}\`\n` +
-      `*Amount Paid:* ${data.amount} ${data.asset}\n` +
-      `*Bank:* ${data.bankDetails.bankName}\n` +
-      `*Account Name:* ${data.bankDetails.accountName}\n` +
-      `*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}\n` +
-      `*Payout (NGN):* ₦${data.payout}\n\n` +
-      `🔹 *Chain:* ${data.chain}\n` +
-      `🔹 *Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
-      `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
-      { parse_mode: 'MarkdownV2' }
-    );
-    logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
-  } catch (error) {
-    logger.error(`Error notifying user ${data.userId}: ${error.message}`);
-  }
-});
+      // Notify users about their transactions being marked as paid
+      pendingTransactions.forEach(async (transaction) => {
+        const data = transaction.data();
+        try {
+          await bot.telegram.sendMessage(data.userId, `🎉 Your transaction with reference ID \`${data.referenceId || 'N/A'}\` has been marked as paid!`);
+          logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
+        } catch (error) {
+          logger.error(`Error notifying user ${data.userId}: ${error.message}`);
+        }
+      });
 
       // Edit the admin panel message to confirm
       await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
