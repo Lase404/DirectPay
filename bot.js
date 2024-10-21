@@ -129,7 +129,7 @@ sendMessageScene.on('photo', async (ctx) => {
 
   try {
     await bot.telegram.sendPhoto(userIdToMessage, photo.file_id, {
-      caption: `📸 *.:*\n\n${caption}`,
+      caption: `✔ *.:*\n\n${caption}`,
       parse_mode: 'Markdown',
     });
     await ctx.reply('✅ Image sent successfully.');
