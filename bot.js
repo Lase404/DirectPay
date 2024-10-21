@@ -892,24 +892,22 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
       await batch.commit();
 
-      pendingTransactions.forEach(async (transaction) => {
+     pendingTransactions.forEach(async (transaction) => {
   const data = transaction.data();
   try {
+    // Notify user about successful transaction
     await bot.telegram.sendMessage(
       data.userId,
-      `🎉 *Transaction Successful!*
-
-*Reference ID:* \`${data.referenceId || 'N/A'}\`
-*Amount Paid:* ${data.amount} ${data.asset}
-*Bank:* ${data.bankDetails.bankName}
-*Account Name:* ${data.bankDetails.accountName}
-*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}
-*Payout (NGN):* ₦${data.payout}
-
-🔹 *Chain:* ${data.chain}
-🔹 *Date:* ${new Date(data.timestamp).toLocaleString()}
-
-Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
+      `🎉 *Transaction Successful!*\n\n` +
+      `*Reference ID:* \`${data.referenceId || 'N/A'}\`\n` +
+      `*Amount Paid:* ${data.amount} ${data.asset}\n` +
+      `*Bank:* ${data.bankDetails.bankName}\n` +
+      `*Account Name:* ${data.bankDetails.accountName}\n` +
+      `*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}\n` +
+      `*Payout (NGN):* ₦${data.payout}\n\n` +
+      `🔹 *Chain:* ${data.chain}\n` +
+      `🔹 *Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
+      `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
       { parse_mode: 'MarkdownV2' }
     );
     logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
@@ -917,6 +915,7 @@ Thank you for using *DirectPay*! Your funds have been securely transferred to yo
     logger.error(`Error notifying user ${data.userId}: ${error.message}`);
   }
 });
+
       // Edit the admin panel message to confirm
       await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
       ctx.answerCbQuery();
