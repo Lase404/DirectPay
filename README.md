@@ -1,5 +1,5 @@
 # DirectPay Telegram Bot
-This Bot current operates on the testnets of BASE, BNB and Polygon
+This Bot currently operates on the testnets of BASE, BNB and Polygon
 ## Table of Contents
 
 - [Overview](#overview)
