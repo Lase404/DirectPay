@@ -1,22 +1,30 @@
 {
   "name": "directpay-bot",
   "version": "1.0.0",
-  "description": "Telegram bot for DirectPay using Firebase, BlockRadar APIs, and Paystack integration.",
-  "main": "index.js",
+  "description": "DirectPay TG BOT.",
+  "main": "bot.js",
   "scripts": {
     "start": "node bot.js",
-    "dev": "nodemon index.js"
+    "dev": "nodemon bot.js"
   },
-  "author": "TOLUWALASE",
+  "keywords": [
+    "telegram",
+    "bot",
+    "crypto",
+    "directpay",
+    "firebase",
+    "paystack"
+  ],
+  "author": "toluwalase",
   "license": "MIT",
   "dependencies": {
-    "axios": "^1.5.0",
-    "dotenv": "^16.3.1",
+    "axios": "^1.4.0",
+    "dotenv": "^16.0.3",
     "express": "^4.18.2",
     "firebase-admin": "^11.10.1",
-    "telegraf": "^4.12.3",
+    "telegraf": "^4.12.2",
     "web3": "^1.10.0",
-    "winston": "^3.9.0"
+    "winston": "^3.8.2"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
