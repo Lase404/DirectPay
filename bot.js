@@ -266,15 +266,7 @@ If you have any questions or need further assistance, feel free to reach out to 
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
-    await ctx.reply('✅ *Bank Account Linked Successfully!*
-
-*Bank:* ${bankName}
-*Account Name:* ${accountName}
-*Account Number:* ****${accountNumberInput.slice(-4)}
-
-You can now send and receive the equivalent of your stablecoins (*USDT/USDC*) directly into your bank account using your wallet address: \`${walletAddress}\`.
-
-If you have any questions or need further assistance, feel free to reach out to our support team.');
+    await ctx.reply('Your Bank Account has successfully been linked, You can now send supported stablecoins to your wallet address snd receive fiat instantly');
   }
 
   // Clean up session variables
