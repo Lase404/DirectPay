@@ -129,7 +129,7 @@ sendMessageScene.on('photo', async (ctx) => {
 
   try {
     await bot.telegram.sendPhoto(userIdToMessage, photo.file_id, {
-      caption: `✔ *.:*\n\n${caption}`,
+      caption: `📸 *.:*\n\n${caption}`,
       parse_mode: 'Markdown',
     });
     await ctx.reply('✅ Image sent successfully.');
@@ -266,7 +266,7 @@ If you have any questions or need further assistance, feel free to reach out to 
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
-    await ctx.reply('✅ Your bank account has been linked successfully!');
+    await ctx.reply('⚠️ An unexpected error occurred while processing your request. Please try again later or contact support if the issue persists.');
   }
 
   // Clean up session variables
@@ -304,30 +304,13 @@ const rates = { USDC: 1680.81, USDT: 1680.81, ETH: 3968483.33 };
 
 // Bank List with Names, Codes, and Aliases
 const bankList = [
-{ name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'] },
-{ name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'] },
-{ name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'] },
-{ name: 'First Bank', code: '011', aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'] },
-{ name: 'UBA', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'] },
-{ name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'] },
-{ name: 'Fidelity Bank', code: '070', aliases: ['fidelity', 'fidelity bank', 'fidelityb', 'fidelity bank nigeria'] },
-{ name: 'Ecobank', code: '050', aliases: ['ecobank', 'ecobank nigeria', 'eco bank'] },
-{ name: 'Union Bank', code: '032', aliases: ['union', 'union bank', 'unionb', 'union bank nigeria'] },
-{ name: 'Stanbic IBTC Bank', code: '221', aliases: ['stanbic', 'stanbic ibtc', 'stanbic bank', 'stanbic ibtc nigeria'] },
-{ name: 'Standard Chartered Bank', code: '068', aliases: ['standard chartered', 'standard bank', 'standard chartered nigeria'] },
-{ name: 'Sterling Bank', code: '232', aliases: ['sterling', 'sterling bank', 'sterlingb', 'sterling bank nigeria'] },
-{ name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'] },
-{ name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'] },
-{ name: 'Unity Bank', code: '215', aliases: ['unity', 'unity bank', 'unityb', 'unity bank nigeria'] },
-{ name: 'Heritage Bank', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'] },
-{ name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'] },
-{ name: 'Jaiz Bank', code: '301', aliases: ['jaiz', 'jaiz bank', 'jaizb', 'jaiz bank nigeria'] },
-{ name: 'Parallex Bank', code: '104', aliases: ['parallex', 'parallex bank', 'parallexb', 'parallex bank nigeria'] },
-{ name: 'Kuda Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'] },
-{ name: 'Providus Bank', code: '101', aliases: ['providus', 'providus bank', 'providusb', 'providus bank nigeria'] },
-{ name: 'ALAT by WEMA', code: '035A', aliases: ['alat', 'alat by wema', 'alat nigeria'] },
-{ name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'] },
-{ name: 'Paycom', code: '999992', aliases: ['paycom', 'paycom nigeria'] }
+  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'] },
+  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'] },
+  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'] },
+  { name: 'First Bank', code: '011', aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'] },
+  { name: 'UBA', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'] },
+  { name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'] },
+  // Add more banks as needed
 ];
 
 // Verify Bank Account with Paystack
@@ -444,9 +427,10 @@ async function greetUser(ctx) {
   const adminUser = isAdmin(userId);
 
   const greeting = walletExists
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!`
-    : `👋 Welcome, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`;
-
+    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to *DirectPay*, your gateway to seamless crypto transactions.\n\n💡 *Quick Start Guide:*\n1. *Add Your Bank Account*\n2. *Access Your Dedicated Wallet Address*\n3. *Send Stablecoins and Receive Cash Instantly*\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
+    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing *DirectPay*. Let's embark on your crypto journey together. Use the menu below to get started.`;
+ctx.reply(greeting, { parse_mode: "Markdown" });
+  
   if (adminUser) {
     const sentMessage = await ctx.reply(greeting, Markup.inlineKeyboard([
       [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
@@ -583,12 +567,12 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   if (!userState.wallets || userState.wallets.length === 0) {
     return ctx.reply('You have no wallets. Generate a new wallet below.', getMainMenu(false));
   }
-// view wallts 
-  let walletMessage = '💼 Your  Wallets:\n\n';
+let walletMessage = '💼 *Your Wallets*:\n\n';
+
 userState.wallets.forEach((wallet, index) => {
-  walletMessage += `Wallet #${index + 1}:\n`;
+  walletMessage += `*Wallet #${index + 1}:*\n`;
   walletMessage += `Address: \`${wallet.address || 'N/A'}\`\n`;
-  walletMessage += `Bank Linked: ${wallet.bank ? 'Yes' : 'No'}\n`;
+  walletMessage += `Bank Linked: ${wallet.bank ? '*Yes*' : '*No*'}\n`;
   walletMessage += `Network: ${wallet.chain || 'N/A'}\n`;
   walletMessage += `Supported Assets: ${wallet.supportedAssets?.join(', ') || 'N/A'}\n`;
 
@@ -600,6 +584,7 @@ userState.wallets.forEach((wallet, index) => {
   }
 });
 
+ctx.reply(walletMessage, { parse_mode: "Markdown" });
 
   // Determine if user can create a new wallet
   const canCreateNewWallet = userState.wallets.length > 0 && userState.wallets[0].bank;
@@ -958,16 +943,39 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
       await batch.commit();
 
-      // Notify users about their transactions being marked as paid
-      pendingTransactions.forEach(async (transaction) => {
-        const data = transaction.data();
-        try {
-          await bot.telegram.sendMessage(data.userId, `🎉 Your transaction with reference ID \`${data.referenceId || 'N/A'}\` has been marked as paid!`);
-          logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
-        } catch (error) {
-          logger.error(`Error notifying user ${data.userId}: ${error.message}`);
-        }
-      });
+     // Notify users when their transactions have been marked as paid
+pendingTransactions.forEach(async (transaction) => {
+  const data = transaction.data();
+
+  // Build a comprehensive message for the user
+  const notificationMessage = `
+🎉 **Transaction Paid Successfully**
+
+Dear User,
+
+Your transaction has been successfully processed! Here are the details of your transaction:
+
+- **Reference ID**: \`${data.referenceId || 'N/A'}\`
+- **Amount Paid**: ${data.amount || 'N/A'} ${data.asset || 'N/A'}
+- **Payout**: ₦${data.payout || 'N/A'}
+- **Bank Account**: ${data.bankDetails?.bankName || 'N/A'} (****${data.bankDetails?.accountNumber?.slice(-4) || 'N/A'})
+
+Thank you for using DirectPay. Your payout will be credited to your bank account shortly.
+
+For any further assistance, feel free to reach out to our support team.
+  `;
+
+  try {
+    // Send the notification to the user
+    await bot.telegram.sendMessage(data.userId, notificationMessage, { parse_mode: 'Markdown' });
+    
+    // Log the notification event
+    logger.info(`Successfully notified user ${data.userId} about the paid transaction (Reference ID: ${data.referenceId}).`);
+  } catch (error) {
+    // Log any errors encountered while notifying the user
+    logger.error(`Error notifying user ${data.userId} about transaction (Reference ID: ${data.referenceId}): ${error.message}`);
+  }
+});
 
       // Edit the admin panel message to confirm
       await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
