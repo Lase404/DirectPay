@@ -13,7 +13,7 @@ require('dotenv').config();
 
 // Configure Winston Logger
 const logger = winston.createLogger({
-  level: 'info', // Change to 'debug' for more detailed logs
+  level: 'debug', // Changed to 'debug' for detailed logs
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
@@ -105,7 +105,8 @@ sendMessageScene.on('text', async (ctx) => {
     const messageContent = ctx.message.text;
 
     try {
-      await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${escapeMarkdownV2(messageContent)}`, { parse_mode: 'MarkdownV2' });
+      const escapedMessage = escapeMarkdownV2(messageContent);
+      await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${escapedMessage}`, { parse_mode: 'MarkdownV2' });
       await ctx.reply('✅ Text message sent successfully.');
       logger.info(`Admin sent message to user ${userIdToMessage}: ${messageContent}`);
     } catch (error) {
@@ -127,8 +128,9 @@ sendMessageScene.on('photo', async (ctx) => {
   const caption = ctx.message.caption || '';
 
   try {
+    const escapedCaption = escapeMarkdownV2(caption);
     await bot.telegram.sendPhoto(userIdToMessage, photo.file_id, {
-      caption: `✔️ *Message from Admin:*\n\n${escapeMarkdownV2(caption)}`,
+      caption: `✔️ *Message from Admin:*\n\n${escapedCaption}`,
       parse_mode: 'MarkdownV2',
     });
     await ctx.reply('✅ Image sent successfully.');
@@ -294,7 +296,9 @@ bot.use(stage.middleware());
 // Function to escape MarkdownV2 special characters
 function escapeMarkdownV2(text) {
   if (!text) return '';
-  return text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
+  const escaped = text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
+  logger.debug(`Escaping text: "${text}" => "${escaped}"`);
+  return escaped;
 }
 
 // Rates dynamically fetched from CoinGecko
@@ -341,7 +345,9 @@ const updateRates = async () => {
     // Optionally, notify admin about the failure
     if (PERSONAL_CHAT_ID_ENV) {
       try {
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID_ENV, `❗️ Failed to update exchange rates: ${escapeMarkdownV2(error.message)}`);
+        const errorMessage = `❗️ Failed to update exchange rates: ${error.message}`;
+        const escapedErrorMessage = escapeMarkdownV2(errorMessage);
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID_ENV, escapedErrorMessage, { parse_mode: 'MarkdownV2' });
       } catch (sendError) {
         logger.error(`Failed to notify admin about rate update failure: ${sendError.message}`);
       }
@@ -580,7 +586,9 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.reply(`✅ Success! Your new wallet has been generated on *${escapeMarkdownV2(chain)}*:\n\n\`${escapeMarkdownV2(walletAddress)}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, { parse_mode: 'MarkdownV2', ...getMainMenu(true) });
+    const mainMenu = getMainMenu(true);
+    const replyMessage = `✅ Success! Your new wallet has been generated on *${escapeMarkdownV2(chain)}*:\n\n\`${escapeMarkdownV2(walletAddress)}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`;
+    await ctx.reply(replyMessage, { parse_mode: 'MarkdownV2', ...mainMenu });
 
     // Prompt to Link Bank Account
     await ctx.reply('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize());
@@ -589,12 +597,14 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     await ctx.deleteMessage(generatingMessage.message_id);
 
     // Log Wallet Generation
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${escapeMarkdownV2(userId)} on ${escapeMarkdownV2(chain)}: ${escapeMarkdownV2(walletAddress)}`);
+    const adminMessage = `💼 Wallet generated for user ${escapeMarkdownV2(userId)} on ${escapeMarkdownV2(chain)}: ${escapeMarkdownV2(walletAddress)}`;
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminMessage, { parse_mode: 'MarkdownV2' });
     logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
     await ctx.reply('⚠️ There was an issue generating your wallet. Please try again later.');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${escapeMarkdownV2(userId)}: ${error.message}`);
+    const adminErrorMessage = `❗️ Error generating wallet for user ${escapeMarkdownV2(userId)}: ${error.message}`;
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminErrorMessage, { parse_mode: 'MarkdownV2' });
   }
 });
 
@@ -654,7 +664,16 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
     }
   });
 
-  await ctx.reply(walletMessage, { parse_mode: 'MarkdownV2' });
+  // Log the message being sent
+  logger.debug(`Sending View Wallet message to user ${userId}: "${walletMessage}"`);
+
+  try {
+    await ctx.reply(walletMessage, { parse_mode: 'MarkdownV2' });
+  } catch (error) {
+    logger.error(`Error sending View Wallet message to user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ Failed to display your wallets. Please try again later.');
+    return;
+  }
 
   // Determine if user can create a new wallet
   const canCreateNewWallet = userState.wallets.length > 0 && userState.wallets[0].bank;
@@ -961,9 +980,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
       pendingTransactions.forEach(async (transaction) => {
         const data = transaction.data();
         try {
-          await bot.telegram.sendMessage(
-            data.userId,
-            `🎉 *Transaction Successful!*\n\n` +
+          const payoutMessage = `🎉 *Transaction Successful!*\n\n` +
             `*Reference ID:* \`${escapeMarkdownV2(data.referenceId || 'N/A')}\`\n` +
             `*Amount Paid:* ${escapeMarkdownV2(data.amount)} ${escapeMarkdownV2(data.asset)}\n` +
             `*Bank:* ${escapeMarkdownV2(data.bankDetails.bankName)}\n` +
@@ -972,7 +989,11 @@ bot.action(/admin_(.+)/, async (ctx) => {
             `*Payout (NGN):* ₦${escapeMarkdownV2(data.payout)}\n\n` +
             `🔹 *Chain:* ${escapeMarkdownV2(data.chain)}\n` +
             `🔹 *Date:* ${escapeMarkdownV2(new Date(data.timestamp).toLocaleString())}\n\n` +
-            `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
+            `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`;
+
+          await bot.telegram.sendMessage(
+            data.userId,
+            payoutMessage,
             { parse_mode: 'MarkdownV2' }
           );
           logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
@@ -1079,7 +1100,8 @@ bot.on('text', async (ctx, next) => {
       for (const doc of usersSnapshot.docs) {
         const targetUserId = doc.id;
         try {
-          await bot.telegram.sendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${escapeMarkdownV2(broadcastMessage)}`, { parse_mode: 'MarkdownV2' });
+          const escapedBroadcast = escapeMarkdownV2(broadcastMessage);
+          await bot.telegram.sendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${escapedBroadcast}`, { parse_mode: 'MarkdownV2' });
           successCount++;
         } catch (error) {
           logger.error(`Error sending broadcast to user ${targetUserId}: ${error.message}`);
@@ -1127,7 +1149,8 @@ app.post('/webhook/blockradar', async (req, res) => {
       if (usersSnapshot.empty) {
         logger.warn(`No user found for wallet ${walletAddress}`);
         // Notify admin about the unmatched wallet
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No user found for wallet address: \`${escapeMarkdownV2(walletAddress)}\``);
+        const adminMessage = `⚠️ No user found for wallet address: \`${escapeMarkdownV2(walletAddress)}\``;
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminMessage, { parse_mode: 'MarkdownV2' });
         return res.status(200).send('OK');
       }
 
@@ -1152,8 +1175,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       const accountName = wallet.bank.accountName || 'N/A';
 
       // Notify User of Successful Deposit
-      await bot.telegram.sendMessage(userId,
-        `Dear ${escapeMarkdownV2(accountName)},\n\n` +
+      const userDepositMessage = `Dear ${escapeMarkdownV2(accountName)},\n\n` +
         `🎉 *Deposit Received*\n` +
         `- **Amount:** ${escapeMarkdownV2(amount)} ${escapeMarkdownV2(asset)}\n` +
         `- **Chain:** ${escapeMarkdownV2(chain)}\n` +
@@ -1161,9 +1183,9 @@ app.post('/webhook/blockradar', async (req, res) => {
         `We are processing your transaction at a rate of *NGN ${escapeMarkdownV2(rate)}* per ${escapeMarkdownV2(asset)}.\n` +
         `You will receive *NGN ${escapeMarkdownV2(payout)}* in your ${escapeMarkdownV2(bankName)} account ending with ****${escapeMarkdownV2(bankAccount.slice(-4))} shortly.\n\n` +
         `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
-        `*Note:* If you have any questions, feel free to reach out to our support team.`,
-        { parse_mode: 'MarkdownV2' }
-      );
+        `*Note:* If you have any questions, feel free to reach out to our support team.`;
+
+      await bot.telegram.sendMessage(userId, userDepositMessage, { parse_mode: 'MarkdownV2' });
 
       // Notify Admin with Detailed Transaction Information
       const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
@@ -1202,13 +1224,16 @@ app.post('/webhook/blockradar', async (req, res) => {
       return res.status(200).send('OK');
     } else {
       // Handle other event types if necessary
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `ℹ️ Unhandled event type: ${escapeMarkdownV2(eventType)}`);
+      const unhandledEventMessage = `ℹ️ Unhandled event type: ${escapeMarkdownV2(eventType)}`;
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, unhandledEventMessage, { parse_mode: 'MarkdownV2' });
       return res.status(200).send('OK');
     }
   } catch (error) {
     logger.error(`Error processing webhook: ${error.message}`);
     res.status(500).send('Error');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing webhook: ${escapeMarkdownV2(error.message)}`);
+    const webhookErrorMessage = `❗️ Error processing webhook: ${error.message}`;
+    const escapedWebhookErrorMessage = escapeMarkdownV2(webhookErrorMessage);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, escapedWebhookErrorMessage, { parse_mode: 'MarkdownV2' });
   }
 });
 
@@ -1221,8 +1246,12 @@ app.listen(port, () => {
 // Global Error Handler for Telegraf
 bot.catch((err, ctx) => {
   logger.error(`Unhandled error for update ${ctx.update.update_id}: ${err.message}`);
-  // Optionally, notify admin about the error
-  bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Unhandled error for update ${ctx.update.update_id}: ${escapeMarkdownV2(err.message)}`);
+  // Notify admin about the error
+  const errorMessage = `❗️ Unhandled error for update ${ctx.update.update_id}: ${err.message}`;
+  const escapedErrorMessage = escapeMarkdownV2(errorMessage);
+  bot.telegram.sendMessage(PERSONAL_CHAT_ID, escapedErrorMessage, { parse_mode: 'MarkdownV2' }).catch((sendError) => {
+    logger.error(`Failed to notify admin about unhandled error: ${sendError.message}`);
+  });
 });
 
 // Launch Bot with Correct Error Handling
