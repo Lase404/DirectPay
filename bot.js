@@ -266,7 +266,8 @@ If you have any questions or need further assistance, feel free to reach out to 
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
-    await ctx.reply('Your Bank Account has successfully been linked, You can now send supported stablecoins to your wallet address snd receive fiat instantly');
+    await ctx.reply('✅ Your bank account has been linked successfully!
+  ');
   }
 
   // Clean up session variables
