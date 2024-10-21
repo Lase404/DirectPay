@@ -1,3 +1,4 @@
+// Required Modules
 const Web3 = require('web3');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const axios = require('axios');
@@ -593,7 +594,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
     await ctx.reply('⚠️ There was an issue generating your wallet. Please try again later.');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${escapeMarkdownV2(userId)}: ${escapeMarkdownV2(error.message)}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${escapeMarkdownV2(userId)}: ${error.message}`);
   }
 });
 
@@ -1217,10 +1218,17 @@ app.listen(port, () => {
   logger.info(`Webhook server running on port ${port}`);
 });
 
-// Launch Bot
+// Global Error Handler for Telegraf
+bot.catch((err, ctx) => {
+  logger.error(`Unhandled error for update ${ctx.update.update_id}: ${err.message}`);
+  // Optionally, notify admin about the error
+  bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Unhandled error for update ${ctx.update.update_id}: ${escapeMarkdownV2(err.message)}`);
+});
+
+// Launch Bot with Correct Error Handling
 bot.launch()
   .then(() => logger.info('DirectPay bot is live!'))
-  .catch((err) => logger.error(`Error launching bot: ${escapeMarkdownV2(err.message)}`));
+  .catch((err) => logger.error(`Error launching bot: ${err.message}`));
 
 // Graceful Shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
