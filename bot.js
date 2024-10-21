@@ -892,24 +892,31 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
       await batch.commit();
 
-      // Notify users about their transactions being marked as paid
       pendingTransactions.forEach(async (transaction) => {
-        const data = transaction.data();
-        try {
-          await bot.telegram.sendMessage(data.userId, '🎉 *Transaction Successful!*
+  const data = transaction.data();
+  try {
+    await bot.telegram.sendMessage(
+      data.userId,
+      `🎉 *Transaction Successful!*
 
-*Reference ID:* \${referenceId}\
-*Amount Paid:* ${transactionData.amount} ${transactionData.asset}
-*Bank:* ${transactionData.bankDetails.bankName}
-*Account Name:* ${transactionData.bankDetails.accountName}
-*Account Number:* ****${transactionData.bankDetails.accountNumber.slice(-4)}
-*Payout (NGN):* ₦${transactionData.payout}
+*Reference ID:* \`${data.referenceId || 'N/A'}\`
+*Amount Paid:* ${data.amount} ${data.asset}
+*Bank:* ${data.bankDetails.bankName}
+*Account Name:* ${data.bankDetails.accountName}
+*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}
+*Payout (NGN):* ₦${data.payout}
 
-🔹 *Chain:* ${transactionData.chain}
-🔹 *Date:* ${new Date(transactionData.timestamp).toLocaleString()}
+🔹 *Chain:* ${data.chain}
+🔹 *Date:* ${new Date(data.timestamp).toLocaleString()}
 
-Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).
-    , { parse_mode: 'Markdown' });
+Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
+      { parse_mode: 'MarkdownV2' }
+    );
+    logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
+  } catch (error) {
+    logger.error(`Error notifying user ${data.userId}: ${error.message}`);
+  }
+});
 
           logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
         } catch (error) {
