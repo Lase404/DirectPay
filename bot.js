@@ -6,7 +6,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'.); // Import the RatesManager
+const ratesManager = require('./rates.js'); // Import the RatesManager
 
 // Load environment variables
 require('dotenv').config();
