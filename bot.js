@@ -905,6 +905,7 @@ const baseContent = [
   - **Ecosystem Overview**: Discover the range of decentralized applications and services on Base.
   - **Bridging and Interoperability**: Learn how to efficiently bridge assets between Ethereum and Base, and explore the possibilities of cross-chain functionality.`,
 },
+];
 // Start the "Learn About Base" section
 bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
   await sendBaseContent(ctx, 0, true);
