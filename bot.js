@@ -1,4 +1,4 @@
-// Import Statements
+
 const Web3 = require('web3');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const axios = require('axios');
@@ -7,9 +7,9 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./utils/rates'); // Import the RatesManager
+const ratesManager = require('./rates.js');
 
-// Load environment variables
+// environment variables
 require('dotenv').config();
 
 // Configure Winston Logger
