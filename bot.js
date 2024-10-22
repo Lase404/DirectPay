@@ -454,8 +454,8 @@ async function greetUser(ctx) {
   const adminUser = isAdmin(userId);
 
   const greeting = walletExists
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n Let's embark on your crypto journey togethe.`;
-    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**.\n\n **Quick Start Guide:**\n\n. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
+    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n Let's embark on your crypto journey together.`
+    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**.\n\n **Quick Start Guide:**\n\n. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`;
   if (adminUser) {
     const sentMessage = await ctx.replyWithMarkdown(greeting, Markup.inlineKeyboard([
       [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
