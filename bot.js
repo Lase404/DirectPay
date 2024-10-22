@@ -153,8 +153,13 @@ sendMessageScene.leave((ctx) => {
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
 bankLinkingScene.enter(async (ctx) => {
+  if (typeof ctx.session.walletIndex !== 'number') {
+    await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.');
+    return ctx.scene.leave();
+  }
+
   ctx.session.bankData = {};
-  // ctx.session.walletIndex is already set before entering the scene
+  // Proceed with the existing prompts
   await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
 });
 
@@ -1183,6 +1188,92 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
     logger.error(`Error fetching current rates: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
   }
+});
+
+// Handler for "🏦 Link Bank Account" button with shortcut for single unlinked wallet
+bot.hears(/🏦\s*Link Bank Account/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  
+  try {
+    const userState = await getUserState(userId);
+    
+    if (!userState.wallets || userState.wallets.length === 0) {
+      // User has no wallets
+      await ctx.replyWithMarkdown('⚠️ You have no wallets. Please generate a wallet first.', getMainMenu(false));
+      return;
+    }
+    
+    // Find wallets without linked bank accounts
+    const unlinkedWallets = userState.wallets
+      .map((wallet, index) => ({ wallet, index }))
+      .filter(({ wallet }) => !wallet.bank);
+    
+    if (unlinkedWallets.length === 0) {
+      // All wallets are linked
+      await ctx.replyWithMarkdown('✅ All your wallets are already linked to bank accounts.');
+      return;
+    }
+    
+    if (unlinkedWallets.length === 1) {
+      // Only one wallet to link, proceed automatically
+      const { index } = unlinkedWallets[0];
+      ctx.session.walletIndex = index;
+      await ctx.replyWithMarkdown(`🏦 Linking bank account for Wallet #${index + 1} (${unlinkedWallets[0].wallet.chain}).`);
+      await ctx.scene.enter('bank_linking_scene');
+      return;
+    }
+    
+    // List unlinked wallets with inline buttons
+    const walletButtons = unlinkedWallets.map(({ wallet, index }) => [
+      Markup.button.callback(`Wallet #${index + 1} (${wallet.chain})`, `link_bank_wallet_${index}`)
+    ]);
+    
+    await ctx.replyWithMarkdown('🏦 **Link Bank Account**\n\nPlease select a wallet to link your bank account:', Markup.inlineKeyboard(walletButtons));
+    
+  } catch (error) {
+    logger.error(`Error handling "Link Bank Account" for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  }
+});
+
+// Callback handler for selecting a wallet to link
+bot.action(/link_bank_wallet_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = parseInt(ctx.match[1], 10);
+  
+  // Acknowledge the callback to remove the loading state
+  await ctx.answerCbQuery();
+  
+  try {
+    const userState = await getUserState(userId);
+    
+    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
+      await ctx.replyWithMarkdown('⚠️ Invalid wallet selection. Please try again.');
+      return;
+    }
+    
+    const selectedWallet = userState.wallets[walletIndex];
+    
+    if (selectedWallet.bank) {
+      await ctx.replyWithMarkdown('✅ This wallet is already linked to a bank account.');
+      return;
+    }
+    
+    // Store the wallet index in the session
+    ctx.session.walletIndex = walletIndex;
+    
+    // Enter the bank linking scene
+    await ctx.scene.enter('bank_linking_scene');
+    
+  } catch (error) {
+    logger.error(`Error processing wallet selection for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  }
+});
+
+// Handle Express Server
+app.get('/', (req, res) => {
+  res.send('DirectPay Bot is running.');
 });
 
 // Start Express Server
