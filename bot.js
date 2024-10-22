@@ -1,3 +1,4 @@
+// Import Statements
 const Web3 = require('web3');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const axios = require('axios');
@@ -6,9 +7,9 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js');
+const ratesManager = require('./rates.js'); // Import the RatesManager
 
-// Environment variables
+// Load environment variables
 require('dotenv').config();
 
 // Configure Winston Logger
@@ -85,8 +86,8 @@ const stage = new Scenes.Stage();
 // Scene for sending messages to users (text and images)
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
-sendMessageScene.enter(async (ctx) => {
-  await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
+sendMessageScene.enter((ctx) => {
+  ctx.reply('📩 Please enter the User ID you want to message:', { parse_mode: 'Markdown' });
 });
 
 sendMessageScene.on('text', async (ctx) => {
@@ -95,10 +96,10 @@ sendMessageScene.on('text', async (ctx) => {
   if (!ctx.session.userIdToMessage) {
     // Expecting User ID
     if (!/^\d+$/.test(input)) {
-      return await ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a numeric User ID.');
+      return ctx.reply('❌ Invalid User ID. Please enter a numeric User ID.', { parse_mode: 'Markdown' });
     }
     ctx.session.userIdToMessage = input;
-    return await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user.');
+    return ctx.reply('📝 Please enter the message you want to send to the user.', { parse_mode: 'Markdown' });
   } else {
     // Sending text message to user
     const userIdToMessage = ctx.session.userIdToMessage;
@@ -106,11 +107,11 @@ sendMessageScene.on('text', async (ctx) => {
 
     try {
       await bot.telegram.sendMessage(userIdToMessage, `**📩 Message from Admin:**\n\n${messageContent}`, { parse_mode: 'Markdown' });
-      await ctx.replyWithMarkdown('✅ Text message sent successfully.');
+      await ctx.reply('✅ Text message sent successfully.', { parse_mode: 'Markdown' });
       logger.info(`Admin sent message to user ${userIdToMessage}: ${messageContent}`);
     } catch (error) {
       logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
+      await ctx.reply('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.', { parse_mode: 'Markdown' });
     }
 
     ctx.scene.leave();
@@ -119,7 +120,7 @@ sendMessageScene.on('text', async (ctx) => {
 
 sendMessageScene.on('photo', async (ctx) => {
   if (!ctx.session.userIdToMessage) {
-    return await ctx.replyWithMarkdown('❌ Please enter the User ID first.');
+    return ctx.reply('❌ Please enter the User ID first.', { parse_mode: 'Markdown' });
   }
 
   const userIdToMessage = ctx.session.userIdToMessage;
@@ -131,19 +132,17 @@ sendMessageScene.on('photo', async (ctx) => {
       caption: `**✔️ Payment Receipt:**\n\n${caption}`,
       parse_mode: 'Markdown',
     });
-    await ctx.replyWithMarkdown('✅ Image sent successfully.');
+    await ctx.reply('✅ Image sent successfully.', { parse_mode: 'Markdown' });
     logger.info(`Admin sent image to user ${userIdToMessage}. Caption: ${caption}`);
   } catch (error) {
     logger.error(`Error sending image to user ${userIdToMessage}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Error sending image. Please ensure the User ID is correct and the user has not blocked the bot.');
+    await ctx.reply('⚠️ Error sending image. Please ensure the User ID is correct and the user has not blocked the bot.', { parse_mode: 'Markdown' });
   }
 
   ctx.scene.leave();
 });
 
-sendMessageScene.on('message', async (ctx) => {
-  await ctx.replyWithMarkdown('❌ Please send text or photo messages only.');
-});
+sendMessageScene.on('message', (ctx) => ctx.reply('❌ Please send text or photo messages only.', { parse_mode: 'Markdown' }));
 
 sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
@@ -152,15 +151,10 @@ sendMessageScene.leave((ctx) => {
 // Bank Linking Scene
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
-bankLinkingScene.enter(async (ctx) => {
-  if (typeof ctx.session.walletIndex !== 'number') {
-    await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.');
-    return ctx.scene.leave();
-  }
-
+bankLinkingScene.enter((ctx) => {
   ctx.session.bankData = {};
-  // Proceed with the existing prompts
-  await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
+  // ctx.session.walletIndex is already set before entering the scene
+  ctx.reply('🏦 Please enter your bank name (e.g., Access Bank):', { parse_mode: 'Markdown' });
 });
 
 bankLinkingScene.on('text', async (ctx) => {
@@ -173,22 +167,22 @@ bankLinkingScene.on('text', async (ctx) => {
     const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
 
     if (!bank) {
-      return await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list.');
+      return ctx.reply('❌ Invalid bank name. Please enter a valid bank name from our supported list.', { parse_mode: 'Markdown' });
     }
 
     ctx.session.bankData.bankName = bank.name;
     ctx.session.bankData.bankCode = bank.code;
-    return await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
+    return ctx.reply('🔢 Please enter your 10-digit bank account number:', { parse_mode: 'Markdown' });
   } else if (!ctx.session.bankData.accountNumber) {
     // Process account number
     if (!/^\d{10}$/.test(input)) {
-      return await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
+      return ctx.reply('❌ Invalid account number. Please enter a valid 10-digit account number:', { parse_mode: 'Markdown' });
     }
 
     ctx.session.bankData.accountNumber = input;
 
     // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 Verifying your bank details...');
+    await ctx.reply('🔄 Verifying your bank details...', { parse_mode: 'Markdown' });
     try {
       const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
 
@@ -205,7 +199,7 @@ bankLinkingScene.on('text', async (ctx) => {
       ctx.session.bankData.accountName = accountName;
 
       // Ask for Confirmation
-      await ctx.replyWithMarkdown(
+      await ctx.reply(
         `🏦 **Bank Account Verification**\n\n` +
         `Please confirm your bank details:\n` +
         `- **Bank Name:** ${ctx.session.bankData.bankName}\n` +
@@ -216,10 +210,11 @@ bankLinkingScene.on('text', async (ctx) => {
           Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes'),
           Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no'),
         ]),
+        { parse_mode: 'Markdown' }
       );
     } catch (error) {
       logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Failed to verify bank account. Please ensure your details are correct or try again later.');
+      await ctx.reply('❌ Failed to verify bank account. Please ensure your details are correct or try again later.', { parse_mode: 'Markdown' });
       ctx.scene.leave();
     }
   }
@@ -234,7 +229,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     let userState = await getUserState(userId);
 
     if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.');
+      await ctx.reply('⚠️ No wallet selected for linking. Please try again.', { parse_mode: 'Markdown' });
       ctx.scene.leave();
       return;
     }
@@ -248,7 +243,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     userState.wallets[walletIndex].bank = {
       bankName: bankData.bankName,
       bankCode: bankData.bankCode,
-      accountNumber: bankData.accountNumber, // Corrected key
+      accountNumber: bankData.accountNumber,
       accountName: bankData.accountName,
     };
 
@@ -268,17 +263,17 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     ratesMessage += `- **ETH:** ₦${currentRates.ETH} per ETH\n\n`;
     ratesMessage += `You can use these rates to calculate your payouts based on the amount received.`;
 
-    await ctx.replyWithMarkdown(ratesMessage);
+    await ctx.reply(ratesMessage, { parse_mode: 'Markdown' });
 
     // Log to Admin
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
       `**Account Name:** ${userState.wallets[walletIndex].bank.accountName}\n` +
       `**Bank Name:** ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `**Account Number:** ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+      `**Account Number:** ${userState.wallets[walletIndex].bank.accountNumber}`, { parse_mode: 'Markdown' });
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
+    await ctx.reply('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.', { parse_mode: 'Markdown' });
   }
 
   // Clean up session variables
@@ -289,7 +284,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 });
 
 bankLinkingScene.action('confirm_bank_no', async (ctx) => {
-  await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
+  await ctx.reply('⚠️ Let\'s try again.', { parse_mode: 'Markdown' });
   // Reset bank data and restart the scene
   ctx.session.bankData = {};
   ctx.scene.reenter(); // Restart the scene
@@ -300,7 +295,6 @@ bankLinkingScene.leave((ctx) => {
   delete ctx.session.bankData;
 });
 
-// Register Scenes
 stage.register(sendMessageScene);
 stage.register(bankLinkingScene);
 
@@ -451,7 +445,7 @@ async function greetUser(ctx) {
     userState = await getUserState(userId);
   } catch (error) {
     logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.reply('⚠️ An error occurred. Please try again later.', { parse_mode: 'Markdown' });
     return;
   }
 
@@ -459,15 +453,16 @@ async function greetUser(ctx) {
   const adminUser = isAdmin(userId);
 
   const greeting = walletExists
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n Let's embark on your crypto journey together.`
-    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**.\n\n **Quick Start Guide:**\n\n. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`;
+    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
+    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
+
   if (adminUser) {
-    const sentMessage = await ctx.replyWithMarkdown(greeting, Markup.inlineKeyboard([
+    const sentMessage = await ctx.reply(greeting, Markup.inlineKeyboard([
       [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
-    ]));
+    ]), { parse_mode: 'Markdown' });
     ctx.session.welcomeMessageId = sentMessage.message_id;
   } else {
-    await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists));
+    await ctx.reply(greeting, getMainMenu(walletExists), { parse_mode: 'Markdown' });
   }
 }
 
@@ -477,7 +472,7 @@ bot.start(async (ctx) => {
     await greetUser(ctx);
   } catch (error) {
     logger.error(`Error in /start command: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.reply('⚠️ An error occurred. Please try again later.', { parse_mode: 'Markdown' });
   }
 });
 
@@ -503,7 +498,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
 
   // Validate selected chain
   if (!chains[selectedChainKey]) {
-    await ctx.replyWithMarkdown('⚠️ Invalid network selection. Please try again.');
+    await ctx.reply('⚠️ Invalid network selection. Please try again.', { parse_mode: 'Markdown' });
     return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
   }
 
@@ -513,7 +508,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   await ctx.answerCbQuery();
 
   // Inform user that wallet generation has started
-  const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet for *${chain}*... Please wait a moment.`);
+  const generatingMessage = await ctx.reply('🔄 Generating Wallet for *' + chain + '*... Please wait a moment.', { parse_mode: 'Markdown' });
 
   try {
     const walletAddress = await generateWallet(chain);
@@ -540,10 +535,10 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true));
+    await ctx.reply(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, { parse_mode: 'Markdown', ...getMainMenu(true) });
 
     // Prompt to Link Bank Account
-    await ctx.replyWithMarkdown('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize());
+    await ctx.reply('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize(), { parse_mode: 'Markdown' });
 
     // Delete the generating message
     await ctx.deleteMessage(generatingMessage.message_id);
@@ -553,7 +548,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
+    await ctx.reply('⚠️ There was an issue generating your wallet. Please try again later.', { parse_mode: 'Markdown' });
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
   }
 });
@@ -566,20 +561,20 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     userState = await getUserState(userId);
   } catch (error) {
     logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.reply('⚠️ An error occurred. Please try again later.', { parse_mode: 'Markdown' });
     return;
   }
 
   if (userState.wallets.length >= MAX_WALLETS) {
-    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+    return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`, { parse_mode: 'Markdown' });
   }
 
   // Prompt user to select a network
-  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
+  await ctx.reply('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
     [Markup.button.callback('Base', 'generate_wallet_Base')],
     [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
     [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
+  ]), { parse_mode: 'Markdown' });
 });
 
 // View Wallet
@@ -590,12 +585,12 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
     userState = await getUserState(userId);
   } catch (error) {
     logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.reply('⚠️ An error occurred. Please try again later.', { parse_mode: 'Markdown' });
     return;
   }
 
   if (!userState.wallets || userState.wallets.length === 0) {
-    return await ctx.replyWithMarkdown('You have no wallets. Generate a new wallet below.', getMainMenu(false));
+    return ctx.reply('You have no wallets. Generate a new wallet below.', getMainMenu(false), { parse_mode: 'Markdown' });
   }
 
   // Display Wallets
@@ -607,16 +602,16 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
     walletMessage += `💱 **Supported Assets:** ${wallet.supportedAssets?.join(', ') || 'N/A'}\n\n`;
   });
 
-  await ctx.replyWithMarkdown(walletMessage);
+  await ctx.reply(walletMessage, { parse_mode: 'Markdown' });
 
   // Determine if user can create a new wallet
   const canCreateNewWallet = userState.wallets.length > 0 && userState.wallets[0].bank;
 
-  await ctx.replyWithMarkdown('What would you like to do next?', Markup.inlineKeyboard([
+  await ctx.reply('What would you like to do next?', Markup.inlineKeyboard([
     canCreateNewWallet
       ? [Markup.button.callback('➕ Create New Wallet', 'create_new_wallet')]
       : [Markup.button.callback('🔗 Link Bank to Create New Wallet', 'link_bank_to_create_wallet')]
-  ]));
+  ]), { parse_mode: 'Markdown' });
 });
 
 // Create New Wallet (From View Wallets)
@@ -627,20 +622,20 @@ bot.action('create_new_wallet', async (ctx) => {
     userState = await getUserState(userId);
   } catch (error) {
     logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.reply('⚠️ An error occurred. Please try again later.', { parse_mode: 'Markdown' });
     return;
   }
 
   if (userState.wallets.length >= MAX_WALLETS) {
-    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+    return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`, { parse_mode: 'Markdown' });
   }
 
   // Prompt user to select a network for the new wallet
-  await ctx.replyWithMarkdown('Please choose the network you want to generate a new wallet for:', Markup.inlineKeyboard([
+  await ctx.reply('Please choose the network you want to generate a new wallet for:', Markup.inlineKeyboard([
     [Markup.button.callback('Base', 'generate_wallet_Base')],
     [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
     [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
+  ]), { parse_mode: 'Markdown' });
 });
 
 // Link Bank to Create New Wallet (From View Wallets)
@@ -651,14 +646,14 @@ bot.action('link_bank_to_create_wallet', async (ctx) => {
 
     // Check if user can create a new wallet after linking
     if (userState.wallets.length >= MAX_WALLETS) {
-      return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+      return ctx.reply(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`, { parse_mode: 'Markdown' });
     }
 
     // Find the first wallet without a linked bank
     const walletIndex = userState.wallets.findIndex((wallet) => !wallet.bank);
 
     if (walletIndex === -1) {
-      return await ctx.replyWithMarkdown('All your wallets already have a linked bank account.');
+      return ctx.reply('All your wallets already have a linked bank account.', { parse_mode: 'Markdown' });
     }
 
     // Store the wallet index in session
@@ -667,7 +662,7 @@ bot.action('link_bank_to_create_wallet', async (ctx) => {
     ctx.scene.enter('bank_linking_scene');
   } catch (error) {
     logger.error(`Error initiating bank linking for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.reply('⚠️ An error occurred. Please try again later.', { parse_mode: 'Markdown' });
   }
 });
 
@@ -758,30 +753,30 @@ bot.action('exit_base', async (ctx) => {
     await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
     ctx.session.baseMessageId = null;
   }
-  await ctx.replyWithMarkdown('Thank you for learning about Base!');
+  await ctx.reply('Thank you for learning about Base!', { parse_mode: 'Markdown' });
   ctx.answerCbQuery();
 });
 
 // Support Functionality
 bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  await ctx.replyWithMarkdown('How can we assist you today?', Markup.inlineKeyboard([
+  await ctx.reply('How can we assist you today?', Markup.inlineKeyboard([
     [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
     [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
     [Markup.button.callback('💬 Contact Support', 'support_contact')],
-  ]));
+  ]), { parse_mode: 'Markdown' });
 });
 
 // Support Actions
 bot.action('support_how_it_works', async (ctx) => {
-  await ctx.replyWithMarkdown('DirectPay allows you to receive crypto payments directly into your bank account seamlessly. Generate a wallet, link your bank, and start receiving payments.');
+  await ctx.reply('DirectPay allows you to receive crypto payments directly into your bank account seamlessly. Generate a wallet, link your bank, and start receiving payments.', { parse_mode: 'Markdown' });
 });
 
 bot.action('support_not_received', async (ctx) => {
-  await ctx.replyWithMarkdown('If you haven’t received your transaction, please ensure that you have linked your bank account. If the issue persists, contact support.');
+  await ctx.reply('If you haven’t received your transaction, please ensure that you have linked your bank account. If the issue persists, contact support.', { parse_mode: 'Markdown' });
 });
 
 bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
+  await ctx.reply('You can contact our support team at [@your_support_username](https://t.me/your_support_username).', { parse_mode: 'Markdown' });
 });
 
 // View Transactions for Users
@@ -791,7 +786,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
     const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
 
     if (transactionsSnapshot.empty) {
-      return await ctx.replyWithMarkdown('You have no transactions at the moment.');
+      return ctx.reply('You have no transactions at the moment.', { parse_mode: 'Markdown' });
     }
 
     let message = '💰 **Your Transactions**:\n\n';
@@ -808,7 +803,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
     await ctx.replyWithMarkdown(message);
   } catch (error) {
     logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
+    await ctx.reply('⚠️ Unable to fetch transactions. Please try again later.', { parse_mode: 'Markdown' });
   }
 });
 
@@ -818,13 +813,13 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
 bot.action('open_admin_panel', async (ctx) => {
   const userId = ctx.from.id.toString();
   if (!isAdmin(userId)) {
-    return await ctx.replyWithMarkdown('⚠️ Unauthorized access.');
+    return ctx.reply('⚠️ Unauthorized access.', { parse_mode: 'Markdown' });
   }
 
   // Reset session variables if necessary
   ctx.session.adminMessageId = null;
 
-  const sentMessage = await ctx.replyWithMarkdown('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
+  const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu(), { parse_mode: 'Markdown' });
   ctx.session.adminMessageId = sentMessage.message_id;
 
   // Set a timeout to delete the admin panel message after 5 minutes
@@ -841,7 +836,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
 
   if (!isAdmin(userId)) {
-    return await ctx.replyWithMarkdown('⚠️ Unauthorized access.');
+    return ctx.reply('⚠️ Unauthorized access.', { parse_mode: 'Markdown' });
   }
 
   const action = ctx.match[1];
@@ -911,7 +906,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
         try {
           // Fetch current rates at the time of payout
           const currentRates = await ratesManager.getRates();
-          const payout = await calculatePayout(data.asset, data.amount);
+          const payout = calculatePayout(data.asset, data.amount);
 
           // Safely access accountName
           const accountName = data.bankDetails && data.bankDetails.accountName ? data.bankDetails.accountName : 'Valued User';
@@ -976,7 +971,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
     }
   } else if (action === 'broadcast_message') {
     await ctx.answerCbQuery();
-    await ctx.replyWithMarkdown('📢 Please enter the message you want to broadcast to all users:');
+    await ctx.reply('📢 Please enter the message you want to broadcast to all users:', { parse_mode: 'Markdown' });
     // Set state to indicate awaiting broadcast message
     await updateUserState(userId, { awaitingBroadcastMessage: true });
     // Delete the admin panel message to keep chat clean
@@ -1010,20 +1005,20 @@ bot.on('text', async (ctx, next) => {
     userState = await getUserState(userId);
   } catch (error) {
     logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.reply('⚠️ An error occurred. Please try again later.', { parse_mode: 'Markdown' });
     return;
   }
 
   if (userState.awaitingBroadcastMessage) {
     const broadcastMessage = ctx.message.text.trim();
     if (!broadcastMessage) {
-      return await ctx.replyWithMarkdown('❌ Message content cannot be empty. Please enter a valid message:');
+      return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:', { parse_mode: 'Markdown' });
     }
 
     try {
       const usersSnapshot = await db.collection('users').get();
       if (usersSnapshot.empty) {
-        await ctx.replyWithMarkdown('No users to broadcast to.', getAdminMenu());
+        await ctx.reply('No users to broadcast to.', getAdminMenu(), { parse_mode: 'Markdown' });
         await updateUserState(userId, { awaitingBroadcastMessage: false });
         return;
       }
@@ -1042,11 +1037,11 @@ bot.on('text', async (ctx, next) => {
         }
       }
 
-      await ctx.replyWithMarkdown(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
+      await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu(), { parse_mode: 'Markdown' });
       logger.info(`Admin ${userId} broadcasted message. Success: ${successCount}, Failed: ${failureCount}`);
     } catch (error) {
       logger.error(`Error broadcasting message from admin ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ Error broadcasting message. Please try again later.', getAdminMenu());
+      await ctx.reply('⚠️ Error broadcasting message. Please try again later.', getAdminMenu(), { parse_mode: 'Markdown' });
     }
 
     // Reset broadcast message state
@@ -1102,7 +1097,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       // Fetch current rates
       const currentRates = await ratesManager.getRates();
 
-      const payout = await calculatePayout(asset, amount);
+      const payout = calculatePayout(asset, amount);
       const referenceId = generateReferenceId();
       const rate = currentRates[asset] || 'N/A';
       const bankName = wallet.bank.bankName || 'N/A';
@@ -1186,94 +1181,8 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
     await ctx.replyWithMarkdown(ratesMessage);
   } catch (error) {
     logger.error(`Error fetching current rates: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
+    await ctx.reply('⚠️ Unable to fetch current rates. Please try again later.', { parse_mode: 'Markdown' });
   }
-});
-
-// Handler for "🏦 Link Bank Account" button with shortcut for single unlinked wallet
-bot.hears(/🏦\s*Link Bank Account/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  
-  try {
-    const userState = await getUserState(userId);
-    
-    if (!userState.wallets || userState.wallets.length === 0) {
-      // User has no wallets
-      await ctx.replyWithMarkdown('⚠️ You have no wallets. Please generate a wallet first.', getMainMenu(false));
-      return;
-    }
-    
-    // Find wallets without linked bank accounts
-    const unlinkedWallets = userState.wallets
-      .map((wallet, index) => ({ wallet, index }))
-      .filter(({ wallet }) => !wallet.bank);
-    
-    if (unlinkedWallets.length === 0) {
-      // All wallets are linked
-      await ctx.replyWithMarkdown('✅ All your wallets are already linked to bank accounts.');
-      return;
-    }
-    
-    if (unlinkedWallets.length === 1) {
-      // Only one wallet to link, proceed automatically
-      const { index } = unlinkedWallets[0];
-      ctx.session.walletIndex = index;
-      await ctx.replyWithMarkdown(`🏦 Linking bank account for Wallet #${index + 1} (${unlinkedWallets[0].wallet.chain}).`);
-      await ctx.scene.enter('bank_linking_scene');
-      return;
-    }
-    
-    // List unlinked wallets with inline buttons
-    const walletButtons = unlinkedWallets.map(({ wallet, index }) => [
-      Markup.button.callback(`Wallet #${index + 1} (${wallet.chain})`, `link_bank_wallet_${index}`)
-    ]);
-    
-    await ctx.replyWithMarkdown('🏦 **Link Bank Account**\n\nPlease select a wallet to link your bank account:', Markup.inlineKeyboard(walletButtons));
-    
-  } catch (error) {
-    logger.error(`Error handling "Link Bank Account" for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-  }
-});
-
-// Callback handler for selecting a wallet to link
-bot.action(/link_bank_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-  
-  // Acknowledge the callback to remove the loading state
-  await ctx.answerCbQuery();
-  
-  try {
-    const userState = await getUserState(userId);
-    
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      await ctx.replyWithMarkdown('⚠️ Invalid wallet selection. Please try again.');
-      return;
-    }
-    
-    const selectedWallet = userState.wallets[walletIndex];
-    
-    if (selectedWallet.bank) {
-      await ctx.replyWithMarkdown('✅ This wallet is already linked to a bank account.');
-      return;
-    }
-    
-    // Store the wallet index in the session
-    ctx.session.walletIndex = walletIndex;
-    
-    // Enter the bank linking scene
-    await ctx.scene.enter('bank_linking_scene');
-    
-  } catch (error) {
-    logger.error(`Error processing wallet selection for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-  }
-});
-
-// Handle Express Server
-app.get('/', (req, res) => {
-  res.send('DirectPay Bot is running.');
 });
 
 // Start Express Server
