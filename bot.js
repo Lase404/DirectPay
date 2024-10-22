@@ -1,3 +1,4 @@
+// Import Statements
 const Web3 = require('web3');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const axios = require('axios');
@@ -6,7 +7,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js');
+const ratesManager = require('./utils/rates'); // Import the RatesManager
 
 // Load environment variables
 require('dotenv').config();
@@ -213,7 +214,7 @@ bankLinkingScene.on('text', async (ctx) => {
       );
     } catch (error) {
       logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
-      await ctx.reply('❌ Failed to verify bank account. Please try again later.', { parse_mode: 'Markdown' });
+      await ctx.reply('❌ Failed to verify bank account. Please ensure your details are correct or try again later.', { parse_mode: 'Markdown' });
       ctx.scene.leave();
     }
   }
@@ -231,6 +232,11 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       await ctx.reply('⚠️ No wallet selected for linking. Please try again.', { parse_mode: 'Markdown' });
       ctx.scene.leave();
       return;
+    }
+
+    // Check if accountName exists
+    if (!bankData.accountName) {
+      throw new Error('Account name is undefined. Bank verification may have failed.');
     }
 
     // Link Bank to Wallet
@@ -267,7 +273,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An unexpected error occurred while processing your request. Please try again later or contact support if the issue persists.', { parse_mode: 'Markdown' });
+    await ctx.reply('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.', { parse_mode: 'Markdown' });
   }
 
   // Clean up session variables
@@ -902,13 +908,16 @@ bot.action(/admin_(.+)/, async (ctx) => {
           const currentRates = await ratesManager.getRates();
           const payout = calculatePayout(data.asset, data.amount);
 
+          // Safely access accountName
+          const accountName = data.bankDetails && data.bankDetails.accountName ? data.bankDetails.accountName : 'Valued User';
+
           await bot.telegram.sendMessage(
             data.userId,
             `🎉 **Transaction Successful!**\n\n` +
             `**Reference ID:** \`${data.referenceId || 'N/A'}\`\n` +
             `**Amount Paid:** ${data.amount} ${data.asset}\n` +
-            `**Bank:** ${data.bankDetails.bankName}\n` +
-            `**Account Name:** ${data.bankDetails.accountName}\n` +
+            `**Bank:** ${data.bankDetails.bankName || 'N/A'}\n` +
+            `**Account Name:** ${accountName}\n` +
             `**Account Number:** ****${data.bankDetails.accountNumber.slice(-4)}\n` +
             `**Payout (NGN):** ₦${payout}\n\n` +
             `🔹 **Chain:** ${data.chain}\n` +
@@ -1095,9 +1104,12 @@ app.post('/webhook/blockradar', async (req, res) => {
       const bankAccount = wallet.bank.accountNumber || 'N/A';
       const accountName = wallet.bank.accountName || 'N/A';
 
+      // Safely access accountName
+      const safeAccountName = accountName ? accountName : 'Valued User';
+
       // Notify User of Successful Deposit
       await bot.telegram.sendMessage(userId,
-        `Dear ${accountName},\n\n` +
+        `Dear ${safeAccountName},\n\n` +
         `🎉 **Deposit Received**\n` +
         `- **Amount:** ${amount} ${asset}\n` +
         `- **Chain:** ${chain}\n` +
@@ -1117,7 +1129,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         `**Amount to be Paid:** NGN ${payout}\n` +
         `**Time:** ${new Date().toLocaleString()}\n` +
         `**Bank Details:**\n` +
-        `  - **Account Name:** ${accountName}\n` +
+        `  - **Account Name:** ${safeAccountName}\n` +
         `  - **Bank Name:** ${bankName}\n` +
         `  - **Account Number:** ****${bankAccount.slice(-4)}\n` +
         `**Chain:** ${chain}\n` +
