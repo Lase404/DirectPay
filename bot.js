@@ -894,7 +894,7 @@ bot.action('support_not_received', async (ctx) => {
 });
 
 bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
+  await ctx.replyWithMarkdown('You can contact our support representative at [@maxcswap](https://t.me/maxcswap).');
 });
 
 // View Transactions for Users
