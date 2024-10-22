@@ -6,9 +6,9 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js');
+const ratesManager = require('./rates.js'); // Import the RatesManager
 
-// Environment variables
+// Load environment variables
 require('dotenv').config();
 
 // Configure Winston Logger
@@ -48,7 +48,7 @@ const chains = {
     key: 'grD8lJpMPjvjChMo5SnOl0eZmaabikn2z2S2rXKkAxCM1oWsZDMwFQL9LWgrc',
     address: '0x9A52605A21e3bacD791579D980A975b258968041',
     apiUrl: 'https://api.blockradar.co/v1/wallets/83eeb82c-bf7b-4e70-bdd0-ab87b4fbcc2d/addresses',
-    supportedAssets: ['USDT', 'USDC'],
+    supportedAssets: ['USDC', 'USDT'],
     network: 'Base'
   },
   Polygon: {
@@ -56,7 +56,7 @@ const chains = {
     key: 'iXV8e72v9QLKcKfI4Nw8SkqKtEoyzAQFCFinIZKwj7pKUtFxaRMjlLCt5p3DZND',
     address: '0x9A52605A21e3bacD791579D980A975b258968041',
     apiUrl: 'https://api.blockradar.co/v1/wallets/f7d5b102-e94a-493a-8e0c-8da96fe70655/addresses',
-    supportedAssets: ['USDT', 'USDC'],
+    supportedAssets: ['USDC', 'USDT'],
     network: 'Polygon'
   },
   'BNB Smart Chain': {
@@ -149,12 +149,11 @@ sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
 });
 
-// Bank Linking Scene
+// Bank Linking Scene (for initial linking)
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
 bankLinkingScene.enter(async (ctx) => {
   ctx.session.bankData = {};
-  // ctx.session.walletIndex is already set before entering the scene
   await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
 });
 
@@ -201,20 +200,20 @@ bankLinkingScene.on('text', async (ctx) => {
 
       // Ask for Confirmation
       await ctx.replyWithMarkdown(
-        `🏦 **Bank Account Verification**\n\n` +
+        `🏦 *Bank Account Verification*\n\n` +
         `Please confirm your bank details:\n` +
-        `- **Bank Name:** ${ctx.session.bankData.bankName}\n` +
-        `- **Account Number:** ${ctx.session.bankData.accountNumber}\n` +
-        `- **Account Holder:** ${accountName}\n\n` +
+        `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
+        `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
+        `- *Account Holder:* ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
           Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes'),
           Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no'),
-        ]),
+        ])
       );
     } catch (error) {
       logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Failed to verify bank account. Please ensure your details are correct or try again later.');
+      await ctx.replyWithMarkdown('❌ Failed to verify your bank account. Please ensure your details are correct or try again later.');
       ctx.scene.leave();
     }
   }
@@ -234,16 +233,11 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       return;
     }
 
-    // Check if accountName exists
-    if (!bankData.accountName) {
-      throw new Error('Account name is undefined. Bank verification may have failed.');
-    }
-
-    // Link Bank to Wallet
+    // Update Bank Details for the selected wallet
     userState.wallets[walletIndex].bank = {
       bankName: bankData.bankName,
       bankCode: bankData.bankCode,
-      accountNumber: bankData.accountNumber, // Corrected key
+      accountNumber: bankData.accountNumber,
       accountName: bankData.accountName,
     };
 
@@ -256,23 +250,23 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     const currentRates = await ratesManager.getRates();
 
     // Prepare rates message
-    let ratesMessage = `**✅ Your bank account has been linked successfully!**\n\n`;
-    ratesMessage += `**Current Exchange Rates:**\n`;
-    ratesMessage += `- **USDC:** ₦${currentRates.USDC} per USDC\n`;
-    ratesMessage += `- **USDT:** ₦${currentRates.USDT} per USDT\n`;
-    ratesMessage += `- **ETH:** ₦${currentRates.ETH} per ETH\n\n`;
-    ratesMessage += `You can use these rates to calculate your payouts based on the amount received.`;
+    let ratesMessage = `✅ *Your bank account has been updated successfully!*\n\n`;
+    ratesMessage += `*Current Exchange Rates:*\n`;
+    ratesMessage += `- *USDC:* ₦${currentRates.USDC} per USDC\n`;
+    ratesMessage += `- *USDT:* ₦${currentRates.USDT} per USDT\n`;
+    ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
+    ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
 
     await ctx.replyWithMarkdown(ratesMessage);
 
     // Log to Admin
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
-      `**Account Name:** ${userState.wallets[walletIndex].bank.accountName}\n` +
-      `**Bank Name:** ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `**Account Number:** ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
-    logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
+      `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
+      `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
+      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+    logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
-    logger.error(`Error confirming bank account for user ${userId}: ${error.message}`);
+    logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
   }
 
@@ -295,9 +289,138 @@ bankLinkingScene.leave((ctx) => {
   delete ctx.session.bankData;
 });
 
+// Bank Editing Scene (for editing existing bank accounts)
+const bankEditingScene = new Scenes.BaseScene('bank_editing_scene');
+
+bankEditingScene.enter(async (ctx) => {
+  ctx.session.bankData = {};
+  await ctx.replyWithMarkdown('🔢 Please enter your new bank account number:');
+});
+
+bankEditingScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const input = ctx.message.text.trim();
+
+  if (!ctx.session.bankData.accountNumber) {
+    // Process new account number
+    if (!/^\d{10}$/.test(input)) {
+      return await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
+    }
+
+    ctx.session.bankData.accountNumber = input;
+
+    // Verify Bank Account
+    await ctx.replyWithMarkdown('🔄 Verifying your new bank details...');
+    try {
+      const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
+
+      if (!verificationResult || !verificationResult.data) {
+        throw new Error('Invalid verification response.');
+      }
+
+      const accountName = verificationResult.data.account_name;
+
+      if (!accountName) {
+        throw new Error('Unable to retrieve account name.');
+      }
+
+      ctx.session.bankData.accountName = accountName;
+
+      // Ask for Confirmation
+      await ctx.replyWithMarkdown(
+        `🏦 *Bank Account Verification*\n\n` +
+        `Please confirm your new bank details:\n` +
+        `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
+        `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
+        `- *Account Holder:* ${accountName}\n\n` +
+        `Is this information correct?`,
+        Markup.inlineKeyboard([
+          Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_edit_yes'),
+          Markup.button.callback('❌ No, Edit Details', 'confirm_bank_edit_no'),
+        ])
+      );
+    } catch (error) {
+      logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown('❌ Failed to verify your new bank account. Please ensure your details are correct or try again later.');
+      ctx.scene.leave();
+    }
+  }
+});
+
+bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const bankData = ctx.session.bankData;
+  const walletIndex = ctx.session.walletIndex;
+
+  try {
+    let userState = await getUserState(userId);
+
+    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
+      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.');
+      ctx.scene.leave();
+      return;
+    }
+
+    // Update Bank Details for the selected wallet
+    userState.wallets[walletIndex].bank = {
+      bankName: bankData.bankName,
+      bankCode: bankData.bankCode,
+      accountNumber: bankData.accountNumber,
+      accountName: bankData.accountName,
+    };
+
+    // Update user state in Firestore
+    await updateUserState(userId, {
+      wallets: userState.wallets,
+    });
+
+    // Fetch current rates
+    const currentRates = await ratesManager.getRates();
+
+    // Prepare rates message
+    let ratesMessage = `✅ *Your bank account has been updated successfully!*\n\n`;
+    ratesMessage += `*Current Exchange Rates:*\n`;
+    ratesMessage += `- *USDC:* ₦${currentRates.USDC} per USDC\n`;
+    ratesMessage += `- *USDT:* ₦${currentRates.USDT} per USDT\n`;
+    ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
+    ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
+
+    await ctx.replyWithMarkdown(ratesMessage);
+
+    // Log to Admin
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
+      `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
+      `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
+      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+    logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
+  } catch (error) {
+    logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
+  }
+
+  // Clean up session variables
+  delete ctx.session.walletIndex;
+  delete ctx.session.bankData;
+
+  ctx.scene.leave();
+});
+
+bankEditingScene.action('confirm_bank_edit_no', async (ctx) => {
+  await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
+  // Reset bank data and restart the scene
+  ctx.session.bankData = {};
+  ctx.scene.reenter(); // Restart the scene
+});
+
+bankEditingScene.leave((ctx) => {
+  delete ctx.session.walletIndex;
+  delete ctx.session.bankData;
+});
+
 // Register Scenes
 stage.register(sendMessageScene);
 stage.register(bankLinkingScene);
+stage.register(bankEditingScene); // Register the new scene
 
 // Use session middleware
 bot.use(session());
@@ -366,10 +489,10 @@ function generateReferenceId() {
   return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 }
 
-// Main Menu Dynamically Updated Based on Wallet Status
-const getMainMenu = (walletExists) =>
+// Main Menu Dynamically Updated Based on Wallet and Bank Status
+const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
-    [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', '🏦 Link Bank Account'],
+    [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', hasBankLinked ? '🏦 Edit Bank Account' : '🏦 Link Bank Account'],
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
     ['📈 View Current Rates'], // New button added
   ]).resize();
@@ -400,14 +523,12 @@ async function getUserState(userId) {
       await db.collection('users').doc(userId).set({
         wallets: [],
         walletAddresses: [],
-        bankDetails: null,
         hasReceivedDeposit: false,
         awaitingBroadcastMessage: false, // For admin broadcast
       });
       return {
         wallets: [],
         walletAddresses: [],
-        bankDetails: null,
         hasReceivedDeposit: false,
         awaitingBroadcastMessage: false,
       };
@@ -417,7 +538,6 @@ async function getUserState(userId) {
       return {
         wallets: data.wallets || [],
         walletAddresses: data.walletAddresses || [],
-        bankDetails: data.bankDetails || null,
         hasReceivedDeposit: data.hasReceivedDeposit || false,
         awaitingBroadcastMessage: data.awaitingBroadcastMessage || false,
       };
@@ -451,19 +571,20 @@ async function greetUser(ctx) {
   }
 
   const walletExists = userState.wallets.length > 0;
+  const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
   const adminUser = isAdmin(userId);
 
   const greeting = walletExists
     ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
     : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
-
+  
   if (adminUser) {
     const sentMessage = await ctx.replyWithMarkdown(greeting, Markup.inlineKeyboard([
       [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
     ]));
     ctx.session.welcomeMessageId = sentMessage.message_id;
   } else {
-    await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists));
+    await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists, hasBankLinked));
   }
 }
 
@@ -536,7 +657,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true));
+    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
 
     // Prompt to Link Bank Account
     await ctx.replyWithMarkdown('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize());
@@ -590,33 +711,27 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
     return;
   }
 
-  if (!userState.wallets || userState.wallets.length === 0) {
-    return await ctx.replyWithMarkdown('You have no wallets. Generate a new wallet below.', getMainMenu(false));
+  if (userState.wallets.length === 0) {
+    return await ctx.replyWithMarkdown('You have no wallets linked. Generate a wallet below.', getMainMenu(false, false));
   }
 
-  // Display Wallets
-  let walletMessage = '💼 **Your Wallets**:\n\n';
+  // Display wallet and bank details
+  let walletMessage = '💼 *Your Wallets and Linked Bank Accounts*:\n\n';
   userState.wallets.forEach((wallet, index) => {
-    walletMessage += `**#${index + 1} Wallet Address:** \`${wallet.address || 'N/A'}\`\n`;
-    walletMessage += `🔗 **Linked Bank:** ${wallet.bank ? 'Yes' : 'No'}\n`;
-    walletMessage += `🌐 **Chain:** ${wallet.chain || 'N/A'}\n`;
-    walletMessage += `💱 **Supported Assets:** ${wallet.supportedAssets?.join(', ') || 'N/A'}\n\n`;
+    const bank = wallet.bank ? `
+🔗 *Linked Bank:* ${wallet.bank.bankName}
+🔢 *Account Number:* ****${wallet.bank.accountNumber.slice(-4)}
+👤 *Account Name:* ${wallet.bank.accountName}
+` : '❌ No bank linked\n';
+
+    walletMessage += `*#${index + 1} Wallet Address:* \`${wallet.address}\`\n${bank}\n`;
   });
 
   await ctx.replyWithMarkdown(walletMessage);
-
-  // Determine if user can create a new wallet
-  const canCreateNewWallet = userState.wallets.length > 0 && userState.wallets[0].bank;
-
-  await ctx.replyWithMarkdown('What would you like to do next?', Markup.inlineKeyboard([
-    canCreateNewWallet
-      ? [Markup.button.callback('➕ Create New Wallet', 'create_new_wallet')]
-      : [Markup.button.callback('🔗 Link Bank to Create New Wallet', 'link_bank_to_create_wallet')]
-  ]));
 });
 
-// Create New Wallet (From View Wallets)
-bot.action('create_new_wallet', async (ctx) => {
+// Edit Bank Account Option Handler
+bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -627,42 +742,44 @@ bot.action('create_new_wallet', async (ctx) => {
     return;
   }
 
-  if (userState.wallets.length >= MAX_WALLETS) {
-    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+  if (userState.wallets.length === 0 || !userState.wallets.some(wallet => wallet.bank)) {
+    return await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
   }
 
-  // Prompt user to select a network for the new wallet
-  await ctx.replyWithMarkdown('Please choose the network you want to generate a new wallet for:', Markup.inlineKeyboard([
-    [Markup.button.callback('Base', 'generate_wallet_Base')],
-    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
+  // List wallets with part of the address hidden
+  let walletSelection = '💼 *Select a Wallet to Edit Bank Account*:\n\n';
+  userState.wallets.forEach((wallet, index) => {
+    if (wallet.bank) { // Only list wallets that have a bank linked
+      walletSelection += `*#${index + 1} Wallet:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
+    }
+  });
+
+  await ctx.replyWithMarkdown(walletSelection, Markup.inlineKeyboard(
+    userState.wallets.map((wallet, index) => {
+      if (wallet.bank) {
+        return [Markup.button.callback(`Wallet ${index + 1}`, `edit_bank_${index}`)];
+      }
+      return null;
+    }).filter(button => button !== null)
+  ));
 });
 
-// Link Bank to Create New Wallet (From View Wallets)
-bot.action('link_bank_to_create_wallet', async (ctx) => {
+// Handler for selecting a wallet to edit bank account
+bot.action(/edit_bank_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
   const userId = ctx.from.id.toString();
   try {
     let userState = await getUserState(userId);
 
-    // Check if user can create a new wallet after linking
-    if (userState.wallets.length >= MAX_WALLETS) {
-      return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+    if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
+      return await ctx.replyWithMarkdown('⚠️ Invalid wallet selected. Please try again.');
     }
 
-    // Find the first wallet without a linked bank
-    const walletIndex = userState.wallets.findIndex((wallet) => !wallet.bank);
-
-    if (walletIndex === -1) {
-      return await ctx.replyWithMarkdown('All your wallets already have a linked bank account.');
-    }
-
-    // Store the wallet index in session
     ctx.session.walletIndex = walletIndex;
-
-    ctx.scene.enter('bank_linking_scene');
+    await ctx.replyWithMarkdown('🔢 Please enter your new bank name (e.g., Access Bank):');
+    ctx.scene.enter('bank_editing_scene'); // Reuse the bank editing scene for updating
   } catch (error) {
-    logger.error(`Error initiating bank linking for user ${userId}: ${error.message}`);
+    logger.error(`Error selecting wallet for editing bank: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
   }
 });
@@ -790,15 +907,15 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       return await ctx.replyWithMarkdown('You have no transactions at the moment.');
     }
 
-    let message = '💰 **Your Transactions**:\n\n';
+    let message = '💰 *Your Transactions*:\n\n';
 
     transactionsSnapshot.forEach((doc) => {
       const tx = doc.data();
-      message += `**Reference ID:** \`${tx.referenceId || 'N/A'}\`\n`;
-      message += `**Amount:** ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-      message += `**Status:** ${tx.status || 'Pending'}\n`;
-      message += `**Date:** ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `**Chain:** ${tx.chain || 'N/A'}\n\n`;
+      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+      message += `*Status:* ${tx.status || 'Pending'}\n`;
+      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
+      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
     });
 
     await ctx.replyWithMarkdown(message);
@@ -820,7 +937,7 @@ bot.action('open_admin_panel', async (ctx) => {
   // Reset session variables if necessary
   ctx.session.adminMessageId = null;
 
-  const sentMessage = await ctx.replyWithMarkdown('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
+  const sentMessage = await ctx.replyWithMarkdown('👨‍💼 *Admin Panel*\n\nSelect an option below:', getAdminMenu());
   ctx.session.adminMessageId = sentMessage.message_id;
 
   // Set a timeout to delete the admin panel message after 5 minutes
@@ -852,16 +969,16 @@ bot.action(/admin_(.+)/, async (ctx) => {
         return;
       }
 
-      let message = '📋 **Recent Transactions**:\n\n';
+      let message = '📋 *Recent Transactions*:\n\n';
 
       transactionsSnapshot.forEach((doc) => {
         const tx = doc.data();
-        message += `**User ID:** ${tx.userId || 'N/A'}\n`;
-        message += `**Reference ID:** \`${tx.referenceId || 'N/A'}\`\n`;
-        message += `**Amount:** ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-        message += `**Status:** ${tx.status || 'Pending'}\n`;
-        message += `**Chain:** ${tx.chain || 'N/A'}\n`;
-        message += `**Date:** ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
+        message += `*User ID:* ${tx.userId || 'N/A'}\n`;
+        message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+        message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+        message += `*Status:* ${tx.status || 'Pending'}\n`;
+        message += `*Chain:* ${tx.chain || 'N/A'}\n`;
+        message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
       });
 
       // Add a 'Back' button to return to the admin menu
@@ -914,16 +1031,16 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
           await bot.telegram.sendMessage(
             data.userId,
-            `🎉 **Transaction Successful!**\n\n` +
-            `**Reference ID:** \`${data.referenceId || 'N/A'}\`\n` +
-            `**Amount Paid:** ${data.amount} ${data.asset}\n` +
-            `**Bank:** ${data.bankDetails.bankName || 'N/A'}\n` +
-            `**Account Name:** ${accountName}\n` +
-            `**Account Number:** ****${data.bankDetails.accountNumber.slice(-4)}\n` +
-            `**Payout (NGN):** ₦${payout}\n\n` +
-            `🔹 **Chain:** ${data.chain}\n` +
-            `**Date:** ${new Date(data.timestamp).toLocaleString()}\n\n` +
-            `Thank you for using **DirectPay**! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
+            `🎉 *Transaction Successful!*\n\n` +
+            `*Reference ID:* \`${data.referenceId || 'N/A'}\`\n` +
+            `*Amount Paid:* ${data.amount} ${data.asset}\n` +
+            `*Bank:* ${data.bankDetails.bankName || 'N/A'}\n` +
+            `*Account Name:* ${accountName}\n` +
+            `*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}\n` +
+            `*Payout (NGN):* ₦${payout}\n\n` +
+            `🔹 *Chain:* ${data.chain}\n` +
+            `*Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
+            `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
             { parse_mode: 'Markdown' }
           );
           logger.info(`Notified user ${data.userId} about paid transaction ${data.referenceId}`);
@@ -949,13 +1066,13 @@ bot.action(/admin_(.+)/, async (ctx) => {
         return;
       }
 
-      let message = '👥 **All Users**:\n\n';
+      let message = '👥 *All Users*:\n\n';
 
       usersSnapshot.forEach((doc) => {
         const user = doc.data();
-        message += `**User ID:** ${doc.id}\n`;
-        message += `**Number of Wallets:** ${user.wallets.length}\n`;
-        message += `**Bank Linked:** ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
+        message += `*User ID:* ${doc.id}\n`;
+        message += `*Number of Wallets:* ${user.wallets.length}\n`;
+        message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
       });
 
       // Add a 'Back' button to return to the admin menu
@@ -983,7 +1100,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
   } else if (action === 'manage_banks') {
     // Implement bank management functionalities here
     await ctx.answerCbQuery();
-    await ctx.editMessageText('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
+    await ctx.editMessageText('🏦 *Bank Management*\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
   } else if (action === 'admin_back_to_main') {
     // Return to the main menu
     await ctx.answerCbQuery();
@@ -1030,7 +1147,7 @@ bot.on('text', async (ctx, next) => {
       for (const doc of usersSnapshot.docs) {
         const targetUserId = doc.id;
         try {
-          await bot.telegram.sendMessage(targetUserId, `📢 **Broadcast Message:**\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
+          await bot.telegram.sendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
           successCount++;
         } catch (error) {
           logger.error(`Error sending broadcast to user ${targetUserId}: ${error.message}`);
@@ -1111,31 +1228,31 @@ app.post('/webhook/blockradar', async (req, res) => {
       // Notify User of Successful Deposit
       await bot.telegram.sendMessage(userId,
         `Dear ${safeAccountName},\n\n` +
-        `🎉 **Deposit Received**\n` +
-        `- **Amount:** ${amount} ${asset}\n` +
-        `- **Chain:** ${chain}\n` +
-        `- **Wallet Address:** \`${walletAddress}\`\n\n` +
-        `We are processing your transaction at a rate of **NGN ${rate}** per ${asset}.\n` +
-        `You will receive **NGN ${payout}** in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
-        `Thank you for using **DirectPay**. We appreciate your trust in our services.\n\n` +
-        `**Note:** If you have any questions, feel free to reach out to our support team.`,
+        `🎉 *Deposit Received*\n` +
+        `- *Amount:* ${amount} ${asset}\n` +
+        `- *Chain:* ${chain}\n` +
+        `- *Wallet Address:* \`${walletAddress}\`\n\n` +
+        `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
+        `You will receive *NGN ${payout}* in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
+        `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
+        `*Note:* If you have any questions, feel free to reach out to our support team.`,
         { parse_mode: 'Markdown' }
       );
 
       // Notify Admin with Detailed Transaction Information
-      const adminDepositMessage = `⚡️ **New Deposit Received**:\n\n` +
-        `**User ID:** ${userId}\n` +
-        `**Amount Deposited:** ${amount} ${asset}\n` +
-        `**Exchange Rate:** NGN ${rate} per ${asset}\n` +
-        `**Amount to be Paid:** NGN ${payout}\n` +
-        `**Time:** ${new Date().toLocaleString()}\n` +
-        `**Bank Details:**\n` +
-        `  - **Account Name:** ${safeAccountName}\n` +
-        `  - **Bank Name:** ${bankName}\n` +
-        `  - **Account Number:** ****${bankAccount.slice(-4)}\n` +
-        `**Chain:** ${chain}\n` +
-        `**Transaction Hash:** \`${transactionHash}\`\n` +
-        `**Reference ID:** ${referenceId}\n`;
+      const adminDepositMessage = `⚡️ *New Deposit Received*:\n\n` +
+        `*User ID:* ${userId}\n` +
+        `*Amount Deposited:* ${amount} ${asset}\n` +
+        `*Exchange Rate:* NGN ${rate} per ${asset}\n` +
+        `*Amount to be Paid:* NGN ${payout}\n` +
+        `*Time:* ${new Date().toLocaleString()}\n` +
+        `*Bank Details:*\n` +
+        `  - *Account Name:* ${safeAccountName}\n` +
+        `  - *Bank Name:* ${bankName}\n` +
+        `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
+        `*Chain:* ${chain}\n` +
+        `*Transaction Hash:* \`${transactionHash}\`\n` +
+        `*Reference ID:* ${referenceId}\n`;
 
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
 
@@ -1158,7 +1275,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       return res.status(200).send('OK');
     } else {
       // Handle other event types if necessary
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `ℹ️ Unhandled event type: ${eventType}`, { parse_mode: 'Markdown' });
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `ℹ️ *Unhandled event type:* ${eventType}`, { parse_mode: 'Markdown' });
       return res.status(200).send('OK');
     }
   } catch (error) {
@@ -1173,10 +1290,10 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   try {
     const currentRates = await ratesManager.getRates();
 
-    let ratesMessage = `**📈 Current Exchange Rates:**\n\n`;
-    ratesMessage += `- **USDC:** ₦${currentRates.USDC} per USDC\n`;
-    ratesMessage += `- **USDT:** ₦${currentRates.USDT} per USDT\n`;
-    ratesMessage += `- **ETH:** ₦${currentRates.ETH} per ETH\n\n`;
+    let ratesMessage = `📈 *Current Exchange Rates:*\n\n`;
+    ratesMessage += `- *USDC:* ₦${currentRates.USDC} per USDC\n`;
+    ratesMessage += `- *USDT:* ₦${currentRates.USDT} per USDT\n`;
+    ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
     ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
 
     await ctx.replyWithMarkdown(ratesMessage);
@@ -1185,6 +1302,9 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
     await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
   }
 });
+
+// Initialize RatesManager
+ratesManager.init();
 
 // Start Express Server
 const port = process.env.PORT || 4000;
