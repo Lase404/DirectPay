@@ -6,7 +6,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); // Import the RatesManager
+const ratesManager = require('./utils/rates'); // Import the RatesManager
 
 // Load environment variables
 require('dotenv').config();
@@ -82,23 +82,36 @@ const bot = new Telegraf(BOT_TOKEN);
 // Create a new Stage for admin actions and bank linking using Telegraf Scenes
 const stage = new Scenes.Stage();
 
-// Scene for sending messages to users (text and images)
+// ===========================
+// Scene for Sending Messages to Users
+// ===========================
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
 sendMessageScene.enter(async (ctx) => {
-  await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
+  await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:', Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'cancel_process')]
+  ]));
 });
 
 sendMessageScene.on('text', async (ctx) => {
   const input = ctx.message.text.trim();
 
+  if (ctx.callbackQuery && ctx.callbackQuery.data === 'cancel_process') {
+    await ctx.replyWithMarkdown('❌ Message sending process has been cancelled.');
+    return ctx.scene.leave();
+  }
+
   if (!ctx.session.userIdToMessage) {
     // Expecting User ID
     if (!/^\d+$/.test(input)) {
-      return await ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a numeric User ID.');
+      return await ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a numeric User ID:', Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'cancel_process')]
+      ]));
     }
     ctx.session.userIdToMessage = input;
-    return await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user.');
+    return await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user:', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
   } else {
     // Sending text message to user
     const userIdToMessage = ctx.session.userIdToMessage;
@@ -119,7 +132,9 @@ sendMessageScene.on('text', async (ctx) => {
 
 sendMessageScene.on('photo', async (ctx) => {
   if (!ctx.session.userIdToMessage) {
-    return await ctx.replyWithMarkdown('❌ Please enter the User ID first.');
+    return await ctx.replyWithMarkdown('❌ Please enter the User ID first:', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
   }
 
   const userIdToMessage = ctx.session.userIdToMessage;
@@ -142,19 +157,31 @@ sendMessageScene.on('photo', async (ctx) => {
 });
 
 sendMessageScene.on('message', async (ctx) => {
-  await ctx.replyWithMarkdown('❌ Please send text or photo messages only.');
+  await ctx.replyWithMarkdown('❌ Please send text or photo messages only:', Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'cancel_process')]
+  ]));
 });
 
 sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
 });
 
-// Bank Linking Scene (for initial linking)
+// Handle Cancel Action Globally Within Scenes
+bot.action('cancel_process', async (ctx) => {
+  await ctx.replyWithMarkdown('❌ The current process has been cancelled.');
+  ctx.scene.leave();
+});
+
+// ===========================
+// Scene for Bank Linking (Initial Linking)
+// ===========================
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
 bankLinkingScene.enter(async (ctx) => {
   ctx.session.bankData = {};
-  await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
+  await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):', Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'cancel_process')]
+  ]));
 });
 
 bankLinkingScene.on('text', async (ctx) => {
@@ -167,22 +194,30 @@ bankLinkingScene.on('text', async (ctx) => {
     const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
 
     if (!bank) {
-      return await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list.');
+      return await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list:', Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'cancel_process')]
+      ]));
     }
 
     ctx.session.bankData.bankName = bank.name;
     ctx.session.bankData.bankCode = bank.code;
-    return await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
+    return await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
   } else if (!ctx.session.bankData.accountNumber) {
     // Process account number
     if (!/^\d{10}$/.test(input)) {
-      return await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
+      return await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:', Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'cancel_process')]
+      ]));
     }
 
     ctx.session.bankData.accountNumber = input;
 
     // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 Verifying your bank details...');
+    await ctx.replyWithMarkdown('🔄 Verifying your bank details...', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
     try {
       const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
 
@@ -207,13 +242,16 @@ bankLinkingScene.on('text', async (ctx) => {
         `- *Account Holder:* ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
-          Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes'),
-          Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no'),
+          [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
+          [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
+          [Markup.button.callback('❌ Cancel', 'cancel_process')]
         ])
       );
     } catch (error) {
       logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Failed to verify your bank account. Please ensure your details are correct or try again later.');
+      await ctx.replyWithMarkdown('❌ Failed to verify your bank account. Please ensure your details are correct or try again later.', Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'cancel_process')]
+      ]));
       ctx.scene.leave();
     }
   }
@@ -257,7 +295,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
     ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
 
-    await ctx.replyWithMarkdown(ratesMessage);
+    await ctx.replyWithMarkdown(ratesMessage, getMainMenu(true, true));
 
     // Log to Admin
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
@@ -267,7 +305,9 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
+    await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
   }
 
   // Clean up session variables
@@ -278,7 +318,9 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 });
 
 bankLinkingScene.action('confirm_bank_no', async (ctx) => {
-  await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
+  await ctx.replyWithMarkdown('⚠️ Let\'s try again.', Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'cancel_process')]
+  ]));
   // Reset bank data and restart the scene
   ctx.session.bankData = {};
   ctx.scene.reenter(); // Restart the scene
@@ -289,12 +331,16 @@ bankLinkingScene.leave((ctx) => {
   delete ctx.session.bankData;
 });
 
-// Bank Editing Scene (for editing existing bank accounts)
+// ===========================
+// Scene for Editing Bank Accounts
+// ===========================
 const bankEditingScene = new Scenes.BaseScene('bank_editing_scene');
 
 bankEditingScene.enter(async (ctx) => {
   ctx.session.bankData = {};
-  await ctx.replyWithMarkdown('🔢 Please enter your new bank account number:');
+  await ctx.replyWithMarkdown('🔢 Please enter your new bank account number:', Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'cancel_process')]
+  ]));
 });
 
 bankEditingScene.on('text', async (ctx) => {
@@ -304,13 +350,17 @@ bankEditingScene.on('text', async (ctx) => {
   if (!ctx.session.bankData.accountNumber) {
     // Process new account number
     if (!/^\d{10}$/.test(input)) {
-      return await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
+      return await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:', Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'cancel_process')]
+      ]));
     }
 
     ctx.session.bankData.accountNumber = input;
 
     // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 Verifying your new bank details...');
+    await ctx.replyWithMarkdown('🔄 Verifying your new bank details...', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
     try {
       const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
 
@@ -330,18 +380,20 @@ bankEditingScene.on('text', async (ctx) => {
       await ctx.replyWithMarkdown(
         `🏦 *Bank Account Verification*\n\n` +
         `Please confirm your new bank details:\n` +
-        `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
         `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
         `- *Account Holder:* ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
-          Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_edit_yes'),
-          Markup.button.callback('❌ No, Edit Details', 'confirm_bank_edit_no'),
+          [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_edit_yes')],
+          [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_edit_no')],
+          [Markup.button.callback('❌ Cancel', 'cancel_process')]
         ])
       );
     } catch (error) {
       logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Failed to verify your new bank account. Please ensure your details are correct or try again later.');
+      await ctx.replyWithMarkdown('❌ Failed to verify your new bank account. Please ensure your details are correct or try again later.', Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'cancel_process')]
+      ]));
       ctx.scene.leave();
     }
   }
@@ -363,8 +415,8 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
 
     // Update Bank Details for the selected wallet
     userState.wallets[walletIndex].bank = {
-      bankName: bankData.bankName,
-      bankCode: bankData.bankCode,
+      bankName: userState.wallets[walletIndex].bank.bankName, // Bank name remains unchanged
+      bankCode: userState.wallets[walletIndex].bank.bankCode, // Bank code remains unchanged
       accountNumber: bankData.accountNumber,
       accountName: bankData.accountName,
     };
@@ -385,7 +437,7 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
     ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
     ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
 
-    await ctx.replyWithMarkdown(ratesMessage);
+    await ctx.replyWithMarkdown(ratesMessage, getMainMenu(true, true));
 
     // Log to Admin
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
@@ -395,7 +447,9 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
     logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
+    await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
   }
 
   // Clean up session variables
@@ -406,7 +460,9 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
 });
 
 bankEditingScene.action('confirm_bank_edit_no', async (ctx) => {
-  await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
+  await ctx.replyWithMarkdown('⚠️ Let\'s try again.', Markup.inlineKeyboard([
+    [Markup.button.callback('❌ Cancel', 'cancel_process')]
+  ]));
   // Reset bank data and restart the scene
   ctx.session.bankData = {};
   ctx.scene.reenter(); // Restart the scene
@@ -417,7 +473,9 @@ bankEditingScene.leave((ctx) => {
   delete ctx.session.bankData;
 });
 
+// ===========================
 // Register Scenes
+// ===========================
 stage.register(sendMessageScene);
 stage.register(bankLinkingScene);
 stage.register(bankEditingScene); // Register the new scene
@@ -428,7 +486,9 @@ bot.use(session());
 // Use the stage middleware
 bot.use(stage.middleware());
 
+// ===========================
 // Bank List with Names, Codes, and Aliases
+// ===========================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'] },
   { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'] },
@@ -456,7 +516,9 @@ const bankList = [
   { name: 'Paycom', code: '999992', aliases: ['paycom', 'paycom nigeria'] }
 ];
 
+// ===========================
 // Verify Bank Account with Paystack
+// ===========================
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
     const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
@@ -470,7 +532,9 @@ async function verifyBankAccount(accountNumber, bankCode) {
   }
 }
 
+// ===========================
 // Calculate Payout Based on Asset Type using dynamic rates
+// ===========================
 async function calculatePayout(asset, amount) {
   try {
     const currentRates = await ratesManager.getRates();
@@ -484,12 +548,16 @@ async function calculatePayout(asset, amount) {
   }
 }
 
+// ===========================
 // Generate a Unique Reference ID for Transactions
+// ===========================
 function generateReferenceId() {
   return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 }
 
+// ===========================
 // Main Menu Dynamically Updated Based on Wallet and Bank Status
+// ===========================
 const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
     [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', hasBankLinked ? '🏦 Edit Bank Account' : '🏦 Link Bank Account'],
@@ -497,7 +565,9 @@ const getMainMenu = (walletExists, hasBankLinked) =>
     ['📈 View Current Rates'], // New button added
   ]).resize();
 
+// ===========================
 // Admin Menu
+// ===========================
 const getAdminMenu = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('📋 View All Transactions', 'admin_view_transactions')],
@@ -509,10 +579,14 @@ const getAdminMenu = () =>
     [Markup.button.callback('🔙 Back to Main Menu', 'admin_back_to_main')],
   ]);
 
+// ===========================
 // Check if User is Admin
+// ===========================
 const isAdmin = (userId) => ADMIN_IDS.includes(userId.toString());
 
+// ===========================
 // Firestore Helper Functions
+// ===========================
 
 // Get User State from Firestore
 async function getUserState(userId) {
@@ -558,7 +632,9 @@ async function updateUserState(userId, newState) {
   }
 }
 
-// Greet User
+// ===========================
+// Greet User Function
+// ===========================
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
   let userState;
@@ -577,7 +653,7 @@ async function greetUser(ctx) {
   const greeting = walletExists
     ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
     : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
-  
+
   if (adminUser) {
     const sentMessage = await ctx.replyWithMarkdown(greeting, Markup.inlineKeyboard([
       [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
@@ -588,7 +664,9 @@ async function greetUser(ctx) {
   }
 }
 
+// ===========================
 // Handle /start Command
+// ===========================
 bot.start(async (ctx) => {
   try {
     await greetUser(ctx);
@@ -598,7 +676,9 @@ bot.start(async (ctx) => {
   }
 });
 
+// ===========================
 // Generate Wallet Function
+// ===========================
 async function generateWallet(chain) {
   try {
     const response = await axios.post(
@@ -613,7 +693,9 @@ async function generateWallet(chain) {
   }
 }
 
+// ===========================
 // Wallet Generation Handler
+// ===========================
 bot.action(/generate_wallet_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
   const selectedChainKey = ctx.match[1]; // 'Base', 'Polygon', 'BNB Smart Chain'
@@ -660,7 +742,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
 
     // Prompt to Link Bank Account
-    await ctx.replyWithMarkdown('Please link a bank account to receive your payouts.', Markup.keyboard(['🏦 Link Bank Account']).resize());
+    await ctx.replyWithMarkdown('Please link a bank account to receive your payouts securely.', Markup.keyboard(['🏦 Link Bank Account']).resize());
 
     // Delete the generating message
     await ctx.deleteMessage(generatingMessage.message_id);
@@ -675,7 +757,9 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   }
 });
 
-// Generate Wallet Button Handler
+// ===========================
+// Handle 'Generate Wallet' Button
+// ===========================
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
@@ -699,7 +783,9 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
   ]));
 });
 
-// View Wallet
+// ===========================
+// View Wallet Handler
+// ===========================
 bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
@@ -730,7 +816,9 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   await ctx.replyWithMarkdown(walletMessage);
 });
 
+// ===========================
 // Edit Bank Account Option Handler
+// ===========================
 bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
@@ -764,7 +852,9 @@ bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
   ));
 });
 
-// Handler for selecting a wallet to edit bank account
+// ===========================
+// Handler for Selecting a Wallet to Edit Bank Account
+// ===========================
 bot.action(/edit_bank_(\d+)/, async (ctx) => {
   const walletIndex = parseInt(ctx.match[1], 10);
   const userId = ctx.from.id.toString();
@@ -776,34 +866,45 @@ bot.action(/edit_bank_(\d+)/, async (ctx) => {
     }
 
     ctx.session.walletIndex = walletIndex;
-    await ctx.replyWithMarkdown('🔢 Please enter your new bank name (e.g., Access Bank):');
-    ctx.scene.enter('bank_editing_scene'); // Reuse the bank editing scene for updating
+    await ctx.replyWithMarkdown('🔢 Please enter your new bank account number:', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
+    ctx.scene.enter('bank_editing_scene'); // Enter the bank editing scene
   } catch (error) {
     logger.error(`Error selecting wallet for editing bank: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
   }
 });
 
+// ===========================
 // Learn About Base with Pagination and Inline Updates
+// ===========================
 const baseContent = [
-  {
-    title: 'Welcome to Base',
-    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
-  },
-  {
-    title: 'Why Choose Base?',
-    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
-  },
-  {
-    title: 'Getting Started',
-    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
-  },
-  {
-    title: 'Learn More',
-    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
-  },
-];
-
+{
+  title: 'Welcome to Base',
+  text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network designed to revolutionize decentralized applications (dApps). By leveraging Ethereum’s security and providing seamless onboarding, Base enables faster, cheaper, and more scalable interactions. Whether you’re a developer building the next big dApp or a user seeking lower fees and quicker transactions, Base is the gateway to a future of decentralized finance and applications.',
+},
+{
+  title: 'Why Choose Base?',
+  text: `- **Lower Fees**: With Base, transaction costs are significantly reduced compared to Ethereum Layer 1, making it affordable for users and developers alike to interact with decentralized applications.
+  - **Faster Transactions**: Transactions on Base are confirmed much faster than those on Ethereum mainnet, ensuring smoother user experiences and more efficient dApp functionality.
+  - **Secure**: Built on the robust security of Ethereum, Base ensures the highest level of protection for users and their assets, leveraging Ethereum’s well-tested infrastructure.
+  - **Developer-Friendly**: Base is fully compatible with EVM (Ethereum Virtual Machine), meaning developers can use existing tools, smart contracts, and frameworks they already know and trust.`,
+},
+{
+  title: 'Getting Started',
+  text: `To begin using Base, follow these simple steps:
+  1. **Bridge Your Assets**: Use the official [Bridge Assets to Base](https://base.org/bridge) to securely transfer tokens like ETH and ERC-20 from Ethereum Layer 1 to Base Layer 2. The bridge provides a seamless connection between the two layers.
+  2. **Explore dApps**: Once your assets are bridged, you can start interacting with dApps on Base, benefiting from its low fees and fast transactions.
+  3. **For Developers**: Developers can quickly deploy smart contracts or migrate existing Ethereum-based projects to Base without any major changes, thanks to its full EVM compatibility.`,
+},
+{
+  title: 'Learn More',
+  text: `To dive deeper into the Base ecosystem, check out the official [Base Documentation](https://docs.base.org). It includes comprehensive resources on:
+  - **Smart Contract Development**: Guidance on building and deploying contracts on Base.
+  - **Ecosystem Overview**: Discover the range of decentralized applications and services on Base.
+  - **Bridging and Interoperability**: Learn how to efficiently bridge assets between Ethereum and Base, and explore the possibilities of cross-chain functionality.`,
+},
 // Start the "Learn About Base" section
 bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
   await sendBaseContent(ctx, 0, true);
@@ -875,7 +976,9 @@ bot.action('exit_base', async (ctx) => {
   ctx.answerCbQuery();
 });
 
+// ===========================
 // Support Functionality
+// ===========================
 bot.hears(/ℹ️\s*Support/i, async (ctx) => {
   await ctx.replyWithMarkdown('How can we assist you today?', Markup.inlineKeyboard([
     [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
@@ -897,7 +1000,9 @@ bot.action('support_contact', async (ctx) => {
   await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
 });
 
-// View Transactions for Users
+// ===========================
+// View Transactions for User
+// ===========================
 bot.hears(/💰\s*Transactions/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
@@ -925,7 +1030,9 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
   }
 });
 
-// Admin Functions
+// ===========================
+// Admin Panel Functions
+// ===========================
 
 // Entry point for Admin Panel
 bot.action('open_admin_panel', async (ctx) => {
@@ -995,7 +1102,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
     }
   } else if (action === 'send_message') {
     await ctx.answerCbQuery();
-    // Since we cannot handle sending messages within edited messages, we need to delete the admin panel message and start a new conversation
+    
     if (ctx.session.adminMessageId) {
       await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
       ctx.session.adminMessageId = null;
@@ -1022,6 +1129,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
       for (const transaction of pendingTransactions.docs) {
         const data = transaction.data();
         try {
+          
           // Fetch current rates at the time of payout
           const currentRates = await ratesManager.getRates();
           const payout = await calculatePayout(data.asset, data.amount);
@@ -1057,6 +1165,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
       await ctx.answerCbQuery('⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
     }
   } else if (action === 'view_users') {
+    
     // Fetch and display all users
     try {
       const usersSnapshot = await db.collection('users').get();
@@ -1089,7 +1198,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
     }
   } else if (action === 'broadcast_message') {
     await ctx.answerCbQuery();
-    await ctx.replyWithMarkdown('📢 Please enter the message you want to broadcast to all users:');
+    await ctx.replyWithMarkdown('📢 Please enter the message you want to broadcast to all users:', Markup.inlineKeyboard([
+      [Markup.button.callback('❌ Cancel', 'cancel_process')]
+    ]));
     // Set state to indicate awaiting broadcast message
     await updateUserState(userId, { awaitingBroadcastMessage: true });
     // Delete the admin panel message to keep chat clean
@@ -1130,7 +1241,9 @@ bot.on('text', async (ctx, next) => {
   if (userState.awaitingBroadcastMessage) {
     const broadcastMessage = ctx.message.text.trim();
     if (!broadcastMessage) {
-      return await ctx.replyWithMarkdown('❌ Message content cannot be empty. Please enter a valid message:');
+      return await ctx.replyWithMarkdown('❌ Message content cannot be empty. Please enter a valid message:', Markup.inlineKeyboard([
+        [Markup.button.callback('❌ Cancel', 'cancel_process')]
+      ]));
     }
 
     try {
@@ -1169,7 +1282,9 @@ bot.on('text', async (ctx, next) => {
   await next(); // Pass control to the next handler
 });
 
-// Webhook Handler for Deposits
+// ===========================
+// Webhook Handler for Deposits Using 
+// ===========================
 app.post('/webhook/blockradar', async (req, res) => {
   try {
     const event = req.body;
@@ -1285,7 +1400,9 @@ app.post('/webhook/blockradar', async (req, res) => {
   }
 });
 
-// Add the new "View Current Rates" command
+// ===========================
+// "View Current Rates" command
+// ===========================
 bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   try {
     const currentRates = await ratesManager.getRates();
@@ -1303,20 +1420,26 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   }
 });
 
-// Initialize RatesManager
+
 ratesManager.init();
 
+// ===========================
 // Start Express Server
+// ===========================
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
   logger.info(`Webhook server running on port ${port}`);
 });
 
+// ===========================
 // Launch Bot
+// ===========================
 bot.launch()
   .then(() => logger.info('DirectPay bot is live!'))
   .catch((err) => logger.error(`Error launching bot: ${err.message}`));
 
-// Graceful Shutdown
+// ===========================
+// Shutdown
+// ===========================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
