@@ -44,7 +44,7 @@ const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
 const MAX_WALLETS = 5;
 
-// Multi-Chain Wallet Configuration with Blockradar
+// Multi-Chain Wallet Configuration with Blockradar's API
 const chains = {
   Base: {
     id: '83eeb82c-bf7b-4e70-bdd0-ab87b4fbcc2d',
