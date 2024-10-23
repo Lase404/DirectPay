@@ -8,10 +8,10 @@ const path = require('path');
 const winston = require('winston');
 const ratesManager = require('./rates.js');
 
-//  environment variables
+// Load environment variables
 require('dotenv').config();
 
-//  Winston Logger
+// Configure Winston Logger
 const logger = winston.createLogger({
   level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
@@ -27,7 +27,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase setup
-const serviceAccount = require('./directpay.json'); // this file is secure
+const serviceAccount = require('./directpay.json'); // Ensure this file is secure
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
@@ -72,12 +72,11 @@ const chains = {
 // Web3 Setup for Base Testnet
 const web3 = new Web3('https://sepolia.base.org');
 
-// Define blockchain explorers
 const blockchainExplorers = {
-  Base: 'https://sepolia.etherscan.io', // Replace with actual Base explorer if available
+  Base: 'https://sepolia.basescan.io', 
   Polygon: 'https://polygonscan.com',
-  'BNB Smart Chain': 'https://bscscan.com',
-  // Add more chains and their explorers here if needed
+  'BNB Smart Chain': 'https://testnet.bscscan.com/',
+
 };
 
 
@@ -486,11 +485,14 @@ walletNamingScene.action('name_wallet_no', async (ctx) => {
   ctx.session.walletName = null;
   await ctx.replyWithMarkdown('✅ Wallet created without a name.');
 
-  // Generate explorer link
-  const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
-  await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-    [Markup.button.url('📋 Copy Address', explorerLink)]
-  ]));
+  // Generate explorer link (Removed link, display in monospace)
+  // const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
+  // await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
+  //   [Markup.button.url('📋 Copy Address', explorerLink)]
+  // ]));
+
+  // Display wallet address in monospace
+  await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
 
   // Add an inline menu for creating a new wallet
   await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
@@ -515,6 +517,7 @@ walletNamingScene.on('text', async (ctx) => {
     const userId = ctx.from.id.toString();
     try {
       const walletAddress = ctx.session.generatedWalletAddress.address;
+      let userState = await getUserState(userId); // Ensure userState is fetched
       const walletIndex = userState.wallets.findIndex(w => w.address === walletAddress);
       if (walletIndex !== -1) {
         userState.wallets[walletIndex].name = walletName;
@@ -525,11 +528,8 @@ walletNamingScene.on('text', async (ctx) => {
       await ctx.replyWithMarkdown('⚠️ Failed to assign a name to your wallet. Please try again later.');
     }
 
-    // Generate explorer link
-    const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
-    await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-      [Markup.button.url('📋 Copy Address', explorerLink)]
-    ]));
+    // Display wallet address in monospace
+    await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
 
     // Add an inline menu for creating a new wallet
     await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
@@ -829,7 +829,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   }
 });
 
-// View Wallet Button Handler
+// View Wallet Button Handler (Updated to display addresses in monospace without links)
 bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
@@ -855,13 +855,13 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
 👤 *Account Name:* ${wallet.bank.accountName}
 ` : '❌ No bank linked\n';
 
-    const explorerLink = generateExplorerLink(wallet.chain, 'wallet', wallet.address);
-    walletMessage += `*#${index + 1} Wallet Address:* [\`${wallet.address}\`](${explorerLink})\n${walletName}${bank}\n\n`;
+    // Display wallet address in monospace without being clickable
+    walletMessage += `*#${index + 1} Wallet Address:* \`${wallet.address}\`\n${walletName}${bank}\n\n`;
   });
 
   // Add inline menu for creating a new wallet
   walletMessage += `*Actions:*\n`;
-  walletMessage += `• [💼 Create New Wallet](https://t.me/${ctx.botInfo.username}?start=new_wallet)\n`;
+  walletMessage += `• 💼 Create New Wallet\n`;
 
   await ctx.replyWithMarkdown(walletMessage, Markup.inlineKeyboard([
     [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
@@ -1380,7 +1380,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         { parse_mode: 'Markdown' }
       );
 
-      // Notify Admin with Detailed Transaction Information
+      // Notify Admin with Detailed Transaction Information (Full bank details)
       const adminDepositMessage = `⚡️ *New Deposit Received*:\n\n` +
         `*User ID:* ${userId}\n` +
         `*Amount Deposited:* ${amount} ${asset}\n` +
@@ -1390,7 +1390,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         `*Bank Details:*\n` +
         `  - *Account Name:* ${safeAccountName}\n` +
         `  - *Bank Name:* ${bankName}\n` +
-        `  - *Account Number:* ${bankAccount}\n` +
+        `  - *Account Number:* ${bankAccount}\n` + // Removed masking
         `  - *Bank Code:* ${wallet.bank.bankCode}\n` +
         `*Chain:* ${chain}\n` +
         `*Transaction Hash:* \`${transactionHash}\`\n` +
