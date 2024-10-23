@@ -6,14 +6,14 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); 
+const ratesManager = require('./utils/rates'); // Import the RatesManager
 
 // environment variables
 require('dotenv').config();
 
 // Winston Logger
 const logger = winston.createLogger({
-  level: 'info', 
+  level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
@@ -27,7 +27,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase setup
-const serviceAccount = require('./directpay.json'); 
+const serviceAccount = require('./directpay.json'); // Ensure this file is secure
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
@@ -71,29 +71,6 @@ const chains = {
 
 // Web3 Setup for Base Testnet
 const web3 = new Web3('https://sepolia.base.org');
-
-// blockchain explorers
-const blockchainExplorers = {
-  Base: 'https://sepolia.basescan.io', 
-  Polygon: 'https://amoy.polygonscan.com',
-  'BNB Smart Chain': 'https://testnet.bscscan.com/',
-};
-
-
-function generateExplorerLink(chain, type, identifier) {
-  const baseURL = blockchainExplorers[chain];
-  if (!baseURL) {
-    return '#'; // Fallback URL if chain is not recognized
-  }
-
-  if (type === 'transaction') {
-    return `${baseURL}/tx/${identifier}`;
-  } else if (type === 'wallet') {
-    return `${baseURL}/address/${identifier}`;
-  } else {
-    return '#';
-  }
-}
 
 // Initialize Express App
 const app = express();
@@ -482,9 +459,8 @@ walletNamingScene.action('name_wallet_no', async (ctx) => {
   // Proceed without naming
   ctx.session.walletName = null;
   await ctx.replyWithMarkdown('✅ Wallet created without a name.');
-  const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
   await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-    [Markup.button.url('📋 Copy Address', `https://etherscan.io/address/${ctx.session.generatedWalletAddress.address}`)]
+    [Markup.button.url('📋 Copy Address', `https://etherscan.io/address/${ctx.session.generatedWalletAddress}`)]
   ]));
   // Update the main menu
   await greetUser(ctx);
@@ -499,27 +475,9 @@ walletNamingScene.on('text', async (ctx) => {
     }
     ctx.session.walletName = walletName;
     await ctx.replyWithMarkdown(`✅ Wallet named as "${walletName}".`);
-    
-    // Update the wallet with the name in Firestore
-    const userId = ctx.from.id.toString();
-    try {
-      const walletAddress = ctx.session.generatedWalletAddress.address;
-      const walletIndex = userState.wallets.findIndex(w => w.address === walletAddress);
-      if (walletIndex !== -1) {
-        userState.wallets[walletIndex].name = walletName;
-        await updateUserState(userId, { wallets: userState.wallets });
-      }
-    } catch (error) {
-      logger.error(`Error naming wallet for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ Failed to assign a name to your wallet. Please try again later.');
-    }
-
-    // Provide the explorer link
-    const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
     await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-      [Markup.button.url('📋 Copy Address', `https://etherscan.io/address/${ctx.session.generatedWalletAddress.address}`)]
+      [Markup.button.url('📋 Copy Address', `https://etherscan.io/address/${ctx.session.generatedWalletAddress}`)]
     ]));
-
     // Update the main menu
     await greetUser(ctx);
     ctx.scene.leave();
@@ -604,9 +562,6 @@ async function calculatePayout(asset, amount) {
 function generateReferenceId() {
   return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 }
-
-// MAIN MENUS
-// ADMIN PANEL & USER MENUS
 
 // Main Menu Dynamically Updated Based on Wallet and Bank Status
 const getMainMenu = (walletExists, hasBankLinked) =>
@@ -707,31 +662,32 @@ async function greetUser(ctx) {
   }
 }
 
-// Generate Wallet Button Handler
-bot.hears('💼 Generate Wallet', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
+// Handle /start Command
+bot.start(async (ctx) => {
   try {
-    userState = await getUserState(userId);
+    await greetUser(ctx);
   } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    logger.error(`Error in /start command: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
   }
-
-  if (userState.wallets.length >= MAX_WALLETS) {
-    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
-  }
-
-  // Prompt user to select a network
-  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
-    [Markup.button.callback('Base', 'generate_wallet_Base')],
-    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
 });
 
-// Handler for generating wallet based on selected chain
+// Generate Wallet Function
+async function generateWallet(chain) {
+  try {
+    const response = await axios.post(
+      chains[chain].apiUrl,
+      { name: `DirectPay_User_Wallet_${chain}` },
+      { headers: { 'x-api-key': chains[chain].key } }
+    );
+    return response.data.data.address;
+  } catch (error) {
+    logger.error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
+    throw new Error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
+  }
+}
+
+// Wallet Generation Handler
 bot.action(/generate_wallet_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
   const selectedChainKey = ctx.match[1]; // 'Base', 'Polygon', 'BNB Smart Chain'
@@ -776,10 +732,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Store the generated wallet address temporarily in session for naming
-    ctx.session.generatedWalletAddress = {
-      address: walletAddress,
-      chain: chain
-    };
+    ctx.session.generatedWalletAddress = walletAddress;
 
     // Enter the wallet naming scene
     await ctx.scene.enter('wallet_naming_scene');
@@ -798,7 +751,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
 });
 
 // View Wallet Button Handler
-bot.hears(/💼\s*View Wallet/i, async (ctx) => {
+bot.hears('💼 View Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -823,8 +776,7 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
 👤 *Account Name:* ${wallet.bank.accountName}
 ` : '❌ No bank linked\n';
 
-    const explorerLink = generateExplorerLink(wallet.chain, 'wallet', wallet.address);
-    walletMessage += `*#${index + 1} Wallet Address:* [\`${wallet.address}\`](${explorerLink})\n${walletName}${bank}\n\n`;
+    walletMessage += `*#${index + 1} Wallet Address:* \`${wallet.address}\`\n${walletName}${bank}\n`;
   });
 
   await ctx.replyWithMarkdown(walletMessage);
@@ -1015,12 +967,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
       message += `*Status:* ${tx.status || 'Pending'}\n`;
       message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-      if (tx.transactionHash) {
-        const explorerLink = generateExplorerLink(tx.chain, 'transaction', tx.transactionHash);
-        message += `*Explorer:* [View Transaction](${explorerLink})\n`;
-      }
-      message += `\n`;
+      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
     });
 
     await ctx.replyWithMarkdown(message);
@@ -1028,39 +975,6 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
     logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
   }
-});
-
-// View Wallet
-bot.hears(/💼\s*View Wallet/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (userState.wallets.length === 0) {
-    return await ctx.replyWithMarkdown('You have no wallets linked. Generate a wallet below.', getMainMenu(false, false));
-  }
-
-  // Display wallet and bank details
-  let walletMessage = '💼 *Your Wallets and Linked Bank Accounts*:\n\n';
-  userState.wallets.forEach((wallet, index) => {
-    const walletName = wallet.name ? `*Name:* ${wallet.name}\n` : '';
-    const bank = wallet.bank ? `
-🔗 *Linked Bank:* ${wallet.bank.bankName}
-🔢 *Account Number:* ****${wallet.bank.accountNumber.slice(-4)}
-👤 *Account Name:* ${wallet.bank.accountName}
-` : '❌ No bank linked\n';
-
-    const explorerLink = generateExplorerLink(wallet.chain, 'wallet', wallet.address);
-    walletMessage += `*#${index + 1} Wallet Address:* [\`${wallet.address}\`](${explorerLink})\n${walletName}${bank}\n\n`;
-  });
-
-  await ctx.replyWithMarkdown(walletMessage);
 });
 
 // Admin Functions
@@ -1111,15 +1025,11 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
       transactionsSnapshot.forEach((doc) => {
         const tx = doc.data();
-        const explorerLink = generateExplorerLink(tx.chain, 'transaction', tx.transactionHash);
         message += `*User ID:* ${tx.userId || 'N/A'}\n`;
         message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
         message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
         message += `*Status:* ${tx.status || 'Pending'}\n`;
         message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-        if (tx.transactionHash) {
-          message += `*Explorer:* [View Transaction](${explorerLink})\n`;
-        }
         message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
       });
 
@@ -1171,8 +1081,6 @@ bot.action(/admin_(.+)/, async (ctx) => {
           // Safely access accountName
           const accountName = data.bankDetails && data.bankDetails.accountName ? data.bankDetails.accountName : 'Valued User';
 
-          const explorerLink = generateExplorerLink(data.chain, 'transaction', data.transactionHash);
-
           await bot.telegram.sendMessage(
             data.userId,
             `🎉 *Transaction Successful!*\n\n` +
@@ -1182,7 +1090,6 @@ bot.action(/admin_(.+)/, async (ctx) => {
             `*Account Name:* ${accountName}\n` +
             `*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}\n` +
             `*Payout (NGN):* ₦${payout}\n\n` +
-            `*Transaction Explorer:* [View Transaction](${explorerLink})\n` +
             `🔹 *Chain:* ${data.chain}\n` +
             `*Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
             `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
@@ -1371,7 +1278,6 @@ app.post('/webhook/blockradar', async (req, res) => {
       const safeAccountName = accountName ? accountName : 'Valued User';
 
       // Notify User of Successful Deposit
-      const explorerLink = generateExplorerLink(chain, 'transaction', transactionHash);
       await bot.telegram.sendMessage(userId,
         `Dear ${safeAccountName},\n\n` +
         `🎉 *Deposit Received*\n` +
@@ -1380,7 +1286,6 @@ app.post('/webhook/blockradar', async (req, res) => {
         `- *Wallet Address:* \`${walletAddress}\`\n\n` +
         `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
         `You will receive *NGN ${payout}* in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
-        `*Transaction Explorer:* [View Transaction](${explorerLink})\n\n` +
         `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
         `*Note:* If you have any questions, feel free to reach out to our support team.`,
         { parse_mode: 'Markdown' }
@@ -1399,7 +1304,6 @@ app.post('/webhook/blockradar', async (req, res) => {
         `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
         `*Chain:* ${chain}\n` +
         `*Transaction Hash:* \`${transactionHash}\`\n` +
-        `*Transaction Explorer:* [View Transaction](${explorerLink})\n` +
         `*Reference ID:* ${referenceId}\n`;
 
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
@@ -1465,6 +1369,6 @@ bot.launch()
   .then(() => logger.info('DirectPay bot is live!'))
   .catch((err) => logger.error(`Error launching bot: ${err.message}`));
 
-// Shutdown
+// Graceful Shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
