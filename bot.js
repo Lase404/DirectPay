@@ -91,19 +91,112 @@ const stage = new Scenes.Stage();
 // Bank Linking Scene (Handles Both Linking and Editing)
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
+// Define a Timeout Duration (e.g., 5 minutes)
+const BANK_LINKING_TIMEOUT = 5 * 60 * 1000; // 5 minutes in milliseconds
+
 bankLinkingScene.enter(async (ctx) => {
+  // Check if a bank linking process is already in progress
+  if (ctx.session.isBankLinking) {
+    await ctx.replyWithMarkdown('⚠️ You are already in the process of linking a bank account. Please complete the ongoing process before initiating a new one.');
+    return ctx.scene.leave();
+  }
+
+  // Set the bank linking flag to true
+  ctx.session.isBankLinking = true;
+
   ctx.session.bankData = {};
   ctx.session.processType = ctx.session.processType || 'linking'; // 'linking' or 'editing'
-  ctx.session.walletIndex = ctx.session.walletIndex || null;
+  // ctx.session.walletIndex should already be set for auto-initiated linking
+  logger.info(`Entering bankLinkingScene for user ${ctx.from.id}. Process Type: ${ctx.session.processType}. Wallet Index: ${ctx.session.walletIndex}`);
 
-  logger.info(`Entering bankLinkingScene for user ${ctx.from.id}. Wallet Index: ${ctx.session.walletIndex}`);
+  if (ctx.session.processType === 'linking' && ctx.session.walletIndex !== null && ctx.session.walletIndex !== undefined) {
+    // **Auto-initiated linking for a specific wallet**
+    await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
 
-  await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
+    // Start the timeout for inactivity
+    ctx.session.bankLinkingTimeout = setTimeout(() => {
+      if (ctx.session.isBankLinking) {
+        ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+        ctx.scene.leave();
+      }
+    }, BANK_LINKING_TIMEOUT);
+  } else {
+    // **User-initiated linking; prompt to select which wallet to link**
+    let userState;
+    try {
+      userState = await getUserState(ctx.from.id.toString());
+    } catch (error) {
+      logger.error(`Error fetching user state for ${ctx.from.id}: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+      ctx.scene.leave();
+      return;
+    }
+
+    const walletsPendingLink = userState.wallets
+      .map((wallet, index) => ({ wallet, index }))
+      .filter(item => !item.wallet.bank);
+
+    if (walletsPendingLink.length === 0) {
+      await ctx.replyWithMarkdown('✅ All your wallets have linked bank accounts.');
+      ctx.scene.leave();
+      return;
+    }
+
+    if (walletsPendingLink.length === 1) {
+      // **Only one wallet pending linking; set walletIndex automatically**
+      ctx.session.walletIndex = walletsPendingLink[0].index;
+      await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
+
+      // Start the timeout for inactivity
+      ctx.session.bankLinkingTimeout = setTimeout(() => {
+        if (ctx.session.isBankLinking) {
+          ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+          ctx.scene.leave();
+        }
+      }, BANK_LINKING_TIMEOUT);
+    } else {
+      // **Multiple wallets pending linking; prompt user to select**
+      let selectionMessage = '💼 *Select a Wallet to Link a Bank Account*:\n\n';
+      walletsPendingLink.forEach((item) => {
+        const { wallet, index } = item;
+        selectionMessage += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
+      });
+
+      await ctx.replyWithMarkdown(selectionMessage, Markup.inlineKeyboard(
+        walletsPendingLink.map(item => [Markup.button.callback(`Wallet ${item.index + 1}`, `select_wallet_${item.index}`)])
+      ));
+    }
+  }
 });
 
+// Handler for Selecting a Wallet to Link Bank Account
+bankLinkingScene.action(/select_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
+  ctx.answerCbQuery(); // Acknowledge the callback
+
+  // Clear any existing timeout and start a new one
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, BANK_LINKING_TIMEOUT);
+});
+
+// Handle Text Inputs in Bank Linking Scene
 bankLinkingScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const input = ctx.message.text.trim();
+
+  // Clear the inactivity timeout upon receiving input
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
 
   if (!ctx.session.bankData.bankName) {
     // Process Bank Name
@@ -154,8 +247,17 @@ bankLinkingScene.on('text', async (ctx) => {
         Markup.inlineKeyboard([
           [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
           [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
+          [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')], // New cancellation option
         ])
       );
+
+      // Restart the inactivity timeout
+      ctx.session.bankLinkingTimeout = setTimeout(() => {
+        if (ctx.session.isBankLinking) {
+          ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+          ctx.scene.leave();
+        }
+      }, BANK_LINKING_TIMEOUT);
     } catch (error) {
       logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
       await ctx.replyWithMarkdown('❌ Failed to verify your bank account. Please ensure your details are correct or try again later.');
@@ -231,6 +333,13 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   delete ctx.session.walletIndex;
   delete ctx.session.bankData;
   delete ctx.session.processType;
+  delete ctx.session.isBankLinking; // Reset the bank linking flag
+
+  // Clear the inactivity timeout
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+    delete ctx.session.bankLinkingTimeout;
+  }
 
   ctx.scene.leave();
 });
@@ -241,7 +350,38 @@ bankLinkingScene.action('confirm_bank_no', async (ctx) => {
 
   // Reset Bank Data and Restart the Scene
   ctx.session.bankData = {};
+
+  // Restart the inactivity timeout
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, BANK_LINKING_TIMEOUT);
+
   ctx.scene.reenter(); // Restart the scene
+});
+
+// Handle Cancellation of Bank Linking
+bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
+  await ctx.replyWithMarkdown('❌ Bank linking process has been canceled.');
+
+  // Clean Up Session Variables
+  delete ctx.session.walletIndex;
+  delete ctx.session.bankData;
+  delete ctx.session.processType;
+  delete ctx.session.isBankLinking; // Reset the bank linking flag
+
+  // Clear the inactivity timeout
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+    delete ctx.session.bankLinkingTimeout;
+  }
+
+  ctx.scene.leave();
 });
 
 // Handle Scene Exit
@@ -249,6 +389,11 @@ bankLinkingScene.leave((ctx) => {
   delete ctx.session.bankData;
   delete ctx.session.walletIndex;
   delete ctx.session.processType;
+  delete ctx.session.isBankLinking; // Ensure flag is reset
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+    delete ctx.session.bankLinkingTimeout;
+  }
 });
 
 // Send Message Scene (Text and Images)
@@ -543,8 +688,13 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     // Update Menu
     await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
 
-    // Prompt to Link Bank Account
-    await ctx.replyWithMarkdown('Please link a bank account to receive your payouts securely.', Markup.keyboard(['🏦 Link Bank Account']).resize());
+    // **Automatically initiate bank linking for the newly created wallet**
+    const newWalletIndex = userState.wallets.length - 1; // Index of the newly added wallet
+    ctx.session.walletIndex = newWalletIndex;
+    ctx.session.processType = 'linking'; // Indicate that this is a linking process
+
+    // **Enter the bank linking scene automatically**
+    await ctx.scene.enter('bank_linking_scene');
 
     // Delete the Generating Message
     await ctx.deleteMessage(generatingMessage.message_id);
@@ -611,7 +761,29 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
     walletMessage += `*#${index + 1} Wallet Address:* \`${wallet.address}\`\n${bank}\n`;
   });
 
-  await ctx.replyWithMarkdown(walletMessage);
+  // **Add inline buttons: Create New Wallet**
+  const inlineButtons = Markup.inlineKeyboard([
+    [Markup.button.callback('➕ Create New Wallet', 'create_new_wallet')],
+  ]);
+
+  await ctx.replyWithMarkdown(walletMessage, inlineButtons);
+});
+
+// Handler for "Create New Wallet" Button
+bot.action('create_new_wallet', async (ctx) => {
+  // Check if a bank linking process is already in progress
+  if (ctx.session.isBankLinking) {
+    await ctx.replyWithMarkdown('⚠️ You are currently linking a bank account. Please complete that process before creating a new wallet.');
+    return ctx.answerCbQuery(); // Acknowledge the callback
+  }
+
+  // Prompt the user to select a network
+  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
+    [Markup.button.callback('Base', 'generate_wallet_Base')],
+    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+  ]));
+  ctx.answerCbQuery(); // Acknowledge the callback
 });
 
 // Link Bank Account Handler
@@ -630,45 +802,14 @@ bot.hears(/🏦\s*Link Bank Account/i, async (ctx) => {
     return await ctx.replyWithMarkdown('⚠️ You have no wallets linked. Please generate a wallet first.', getMainMenu(false, false));
   }
 
-  // List Wallets to Choose From
-  let walletSelection = '💼 *Select a Wallet to Link a Bank Account*:\n\n';
-  userState.wallets.forEach((wallet, index) => {
-    walletSelection += `*#${index + 1} Wallet:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
-  });
-
-  await ctx.replyWithMarkdown(walletSelection, Markup.inlineKeyboard(
-    userState.wallets.map((wallet, index) => [Markup.button.callback(`Wallet ${index + 1}`, `link_bank_${index}`)])
-  ));
-});
-
-// Handler for Selecting a Wallet to Link Bank Account
-bot.action(/link_bank_(\d+)/, async (ctx) => {
-  const walletIndex = parseInt(ctx.match[1], 10);
-  const userId = ctx.from.id.toString();
-  try {
-    let userState = await getUserState(userId);
-
-    if (!userState.wallets[walletIndex]) {
-      return await ctx.replyWithMarkdown('⚠️ Invalid wallet selected. Please try again.');
-    }
-
-    // Set walletIndex in session to update after linking
-    ctx.session.walletIndex = walletIndex;
-    ctx.session.processType = 'linking';
-
-    // Log the walletIndex
-    logger.info(`User ${userId} is linking bank account for wallet index ${walletIndex}`);
-
-    // Enter the Bank Linking Scene
-    await ctx.replyWithMarkdown('🔗 Starting the bank linking process...');
-    await ctx.scene.enter('bank_linking_scene');
-  } catch (error) {
-    logger.error(`Error selecting wallet for linking bank: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  // Check if a bank linking process is already in progress
+  if (ctx.session.isBankLinking) {
+    return await ctx.replyWithMarkdown('⚠️ You are already in the process of linking a bank account. Please complete the ongoing process before initiating a new one.');
   }
 
-  // Acknowledge the Callback to Remove Loading State
-  await ctx.answerCbQuery();
+  // **Initiate the bank linking scene**
+  ctx.session.processType = 'linking';
+  await ctx.scene.enter('bank_linking_scene');
 });
 
 // Edit Bank Account Option Handler
@@ -691,7 +832,7 @@ bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
   let walletSelection = '💼 *Select a Wallet to Edit Bank Account*:\n\n';
   userState.wallets.forEach((wallet, index) => {
     if (wallet.bank) { // Only lists wallets that have a bank linked
-      walletSelection += `*#${index + 1} Wallet:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
+      walletSelection += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
     }
   });
 
@@ -714,6 +855,11 @@ bot.action(/edit_bank_(\d+)/, async (ctx) => {
 
     if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
       return await ctx.replyWithMarkdown('⚠️ Invalid wallet selected. Please try again.');
+    }
+
+    // Check if a bank linking process is already in progress
+    if (ctx.session.isBankLinking) {
+      return await ctx.replyWithMarkdown('⚠️ You are already in the process of linking a bank account. Please complete the ongoing process before initiating a new one.');
     }
 
     // Set walletIndex and processType in session to update after editing
@@ -1077,6 +1223,7 @@ async function handleAdminViewUsers(ctx) {
 // Admin: Broadcast Message
 async function handleAdminBroadcastMessage(ctx) {
   try {
+    // Enter the Broadcast Message Scene
     await ctx.replyWithMarkdown('📢 Please enter the message you want to broadcast to all users:');
     // Set state to indicate awaiting broadcast message
     await updateUserState(ctx.from.id.toString(), { awaitingBroadcastMessage: true });
