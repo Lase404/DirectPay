@@ -6,7 +6,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); // Import the RatesManager
+const ratesManager = require('./rates.js');
 
 // Load environment variables
 require('dotenv').config();
@@ -253,16 +253,19 @@ bankLinkingScene.on('text', async (ctx) => {
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const bankData = ctx.session.bankData;
-  const walletIndex = ctx.session.walletIndex;
 
   try {
     let userState = await getUserState(userId);
 
-    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.');
+    // Make sure the user has at least one wallet to link the bank account
+    if (userState.wallets.length === 0) {
+      await ctx.replyWithMarkdown('⚠️ You need to generate a wallet before linking a bank account. Please generate a wallet first.');
       ctx.scene.leave();
       return;
     }
+
+    // For simplicity, link the bank to the first wallet
+    const walletIndex = 0; // You can enhance this to allow multiple wallets
 
     // Update Bank Details for the selected wallet
     userState.wallets[walletIndex].bank = {
@@ -281,7 +284,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     const currentRates = await ratesManager.getRates();
 
     // Prepare rates message
-    let ratesMessage = `✅ *Your bank account has been updated successfully!*\n\n`;
+    let ratesMessage = `✅ *Your bank account has been linked successfully!*\n\n`;
     ratesMessage += `*Current Exchange Rates:*\n`;
     ratesMessage += `- *USDC:* ₦${currentRates.USDC} per USDC\n`;
     ratesMessage += `- *USDT:* ₦${currentRates.USDT} per USDT\n`;
@@ -291,22 +294,21 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     await ctx.replyWithMarkdown(ratesMessage);
 
     // Log to Admin with full bank details (Unmasked)
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
       `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
       `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
       `*Account Number:* ${userState.wallets[walletIndex].bank.accountNumber}\n` +
       `*Bank Code:* ${userState.wallets[walletIndex].bank.bankCode}`, { parse_mode: 'Markdown' });
-    logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
+    logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
 
     // Refresh the main menu without sending the welcome message again
     await sendMainMenu(ctx); // Use the new function instead of greetUser(ctx)
   } catch (error) {
-    logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
+    logger.error(`Error confirming bank account linkage for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
   }
 
   // Clean up session variables
-  delete ctx.session.walletIndex;
   delete ctx.session.bankData;
 
   ctx.scene.leave();
@@ -321,7 +323,6 @@ bankLinkingScene.action('confirm_bank_no', async (ctx) => {
 });
 
 bankLinkingScene.leave((ctx) => {
-  delete ctx.session.walletIndex;
   delete ctx.session.bankData;
 });
 
@@ -399,16 +400,18 @@ bankEditingScene.on('text', async (ctx) => {
 bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const bankData = ctx.session.bankData;
-  const walletIndex = ctx.session.walletIndex;
 
   try {
     let userState = await getUserState(userId);
 
-    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.');
+    if (userState.wallets.length === 0) {
+      await ctx.replyWithMarkdown('⚠️ You need to generate a wallet before editing a bank account. Please generate a wallet first.');
       ctx.scene.leave();
       return;
     }
+
+    // For simplicity, edit the first wallet's bank details
+    const walletIndex = 0; // You can enhance this to allow multiple wallets
 
     // Update Bank Details for the selected wallet
     userState.wallets[walletIndex].bank = {
@@ -452,7 +455,6 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
   }
 
   // Clean up session variables
-  delete ctx.session.walletIndex;
   delete ctx.session.bankData;
 
   ctx.scene.leave();
@@ -467,7 +469,6 @@ bankEditingScene.action('confirm_bank_edit_no', async (ctx) => {
 });
 
 bankEditingScene.leave((ctx) => {
-  delete ctx.session.walletIndex;
   delete ctx.session.bankData;
 });
 
@@ -475,6 +476,12 @@ bankEditingScene.leave((ctx) => {
 const walletNamingScene = new Scenes.BaseScene('wallet_naming_scene');
 
 walletNamingScene.enter(async (ctx) => {
+  // Show the wallet address first
+  const walletAddress = ctx.session.generatedWalletAddress.address;
+  const chain = ctx.session.generatedWalletAddress.chain;
+
+  await ctx.replyWithMarkdown(`🔗 *Your new wallet address on ${chain}:*\n\`${walletAddress}\``);
+
   await ctx.replyWithMarkdown('📝 You can assign a name to your wallet for easier identification.\n\n*Would you like to name this wallet?*', Markup.inlineKeyboard([
     [Markup.button.callback('✅ Yes', 'name_wallet_yes')],
     [Markup.button.callback('❌ No, Skip', 'name_wallet_no')],
@@ -492,16 +499,12 @@ walletNamingScene.action('name_wallet_no', async (ctx) => {
   ctx.session.walletName = null;
   await ctx.replyWithMarkdown('✅ Wallet created without a name.');
 
-  // Generate explorer link (now only in monospace, no hyperlink)
-  const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
-  await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
+  // Display the wallet address again for easy copying
+  const walletAddress = ctx.session.generatedWalletAddress.address;
+  const chain = ctx.session.generatedWalletAddress.chain;
+  await ctx.replyWithMarkdown(`🔗 *Your wallet address on ${chain}:*\n\`${walletAddress}\``);
 
-  // Add an inline menu for creating a new wallet
-  await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
-    [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
-  ]));
-
-  // Update the main menu without sending the welcome message again
+  // Refresh the main menu without sending the welcome message again
   await sendMainMenu(ctx);
   ctx.scene.leave();
 });
@@ -529,16 +532,12 @@ walletNamingScene.on('text', async (ctx) => {
       await ctx.replyWithMarkdown('⚠️ Failed to assign a name to your wallet. Please try again later.');
     }
 
-    // Generate explorer link (now only in monospace, no hyperlink)
-    const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
-    await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
+    // Display the wallet address again for easy copying
+    const walletAddress = ctx.session.generatedWalletAddress.address;
+    const chain = ctx.session.generatedWalletAddress.chain;
+    await ctx.replyWithMarkdown(`🔗 *Your wallet address on ${chain}:*\n\`${walletAddress}\``);
 
-    // Add an inline menu for creating a new wallet
-    await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
-      [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
-    ]));
-
-    // Update the main menu without sending the welcome message again
+    // Refresh the main menu without sending the welcome message again
     await sendMainMenu(ctx);
     ctx.scene.leave();
   } else {
@@ -844,7 +843,7 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   }
 
   if (userState.wallets.length === 0) {
-    return await ctx.replyWithMarkdown('You have no wallets linked. Generate a wallet below.', getMainMenu(false, false));
+    return await ctx.replyWithMarkdown('⚠️ You have no wallets linked. Please generate a wallet first.', getMainMenu(false, false));
   }
 
   // Display wallet and bank details
@@ -884,6 +883,14 @@ bot.action('generate_new_wallet', async (ctx) => {
 
   if (userState.wallets.length >= MAX_WALLETS) {
     return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+  }
+
+  // Check if the user has linked a bank account
+  const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
+  if (!hasBankLinked) {
+    return await ctx.replyWithMarkdown('⚠️ You need to link a bank account before generating a wallet. Please link your bank account first.', Markup.inlineKeyboard([
+      [Markup.button.callback('🏦 Link Bank Account', 'link_bank_account')]
+    ]));
   }
 
   // Prompt user to select a network
@@ -1046,7 +1053,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
       message += `*Chain:* ${tx.chain || 'N/A'}\n`;
       if (tx.transactionHash) {
-        // Removed explorer link, display transaction hash in monospace
+        // Removed explorer link; display transaction hash in monospace
         message += `*Transaction Hash:* \`${tx.transactionHash}\`\n`;
       }
       message += `\n`;
