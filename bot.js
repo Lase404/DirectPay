@@ -6,7 +6,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js');
+const ratesManager = require('./rates.js'); // Imports the RatesManager
 
 // Load environment variables
 require('dotenv').config();
@@ -237,8 +237,8 @@ bankLinkingScene.on('text', async (ctx) => {
         `- *Account Holder:* ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
-          Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes'),
-          Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no'),
+          [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
+          [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
         ])
       );
     } catch (error) {
@@ -259,7 +259,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     // Make sure the user has at least one wallet to link the bank account
     if (userState.wallets.length === 0) {
-      await ctx.replyWithMarkdown('⚠️ You need to generate a wallet before linking a bank account. Please generate a wallet first.');
+      await ctx.replyWithMarkdown('⚠️ You have no wallets to link a bank account to. Please generate a wallet first.');
       ctx.scene.leave();
       return;
     }
@@ -384,8 +384,8 @@ bankEditingScene.on('text', async (ctx) => {
         `- *Account Holder:* ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
-          Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_edit_yes'),
-          Markup.button.callback('❌ No, Edit Details', 'confirm_bank_edit_no'),
+          [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_edit_yes')],
+          [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_edit_no')],
         ])
       );
     } catch (error) {
@@ -405,7 +405,7 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
     let userState = await getUserState(userId);
 
     if (userState.wallets.length === 0) {
-      await ctx.replyWithMarkdown('⚠️ You need to generate a wallet before editing a bank account. Please generate a wallet first.');
+      await ctx.replyWithMarkdown('⚠️ You have no wallets to link a bank account to. Please generate a wallet first.');
       ctx.scene.leave();
       return;
     }
@@ -522,6 +522,7 @@ walletNamingScene.on('text', async (ctx) => {
     const userId = ctx.from.id.toString();
     try {
       const walletAddress = ctx.session.generatedWalletAddress.address;
+      const userState = await getUserState(userId);
       const walletIndex = userState.wallets.findIndex(w => w.address === walletAddress);
       if (walletIndex !== -1) {
         userState.wallets[walletIndex].name = walletName;
@@ -830,6 +831,40 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   }
 });
 
+// Handle 'generate_new_wallet' action
+bot.action('generate_new_wallet', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  if (userState.wallets.length >= MAX_WALLETS) {
+    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+  }
+
+  // Check if the user has linked a bank account
+  const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
+  if (!hasBankLinked) {
+    return await ctx.replyWithMarkdown('⚠️ You need to link a bank account before generating a wallet. Please link your bank account first.', Markup.inlineKeyboard([
+      [Markup.button.callback('🏦 Link Bank Account', 'link_bank_account')]
+    ]));
+  }
+
+  // Prompt user to select a network
+  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
+    [Markup.button.callback('Base', 'generate_wallet_Base')],
+    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+  ]));
+
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
 // View Wallet Button Handler
 bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -869,8 +904,8 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   ]));
 });
 
-// Handle 'generate_new_wallet' action from the View Wallet inline menu
-bot.action('generate_new_wallet', async (ctx) => {
+// Handle 'link_bank_account' action
+bot.action('link_bank_account', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -881,25 +916,17 @@ bot.action('generate_new_wallet', async (ctx) => {
     return;
   }
 
-  if (userState.wallets.length >= MAX_WALLETS) {
-    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
-  }
-
-  // Check if the user has linked a bank account
-  const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
-  if (!hasBankLinked) {
-    return await ctx.replyWithMarkdown('⚠️ You need to link a bank account before generating a wallet. Please link your bank account first.', Markup.inlineKeyboard([
-      [Markup.button.callback('🏦 Link Bank Account', 'link_bank_account')]
+  if (userState.wallets.length === 0) {
+    await ctx.replyWithMarkdown('⚠️ You have no wallets to link a bank account to. Please generate a wallet first.', Markup.inlineKeyboard([
+      [Markup.button.callback('💼 Generate Wallet', 'generate_new_wallet')]
     ]));
+    return ctx.answerCbQuery(); // Acknowledge the callback
   }
 
-  // Prompt user to select a network
-  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
-    [Markup.button.callback('Base', 'generate_wallet_Base')],
-    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
+  // For simplicity, link the first wallet's bank details
+  ctx.session.walletIndex = 0; // You can enhance this to allow multiple wallets
 
+  await ctx.scene.enter('bank_linking_scene');
   ctx.answerCbQuery(); // Acknowledge the callback
 });
 
@@ -1373,7 +1400,6 @@ app.post('/webhook/blockradar', async (req, res) => {
       const safeAccountName = accountName ? accountName : 'Valued User';
 
       // Notify User of Successful Deposit
-      const explorerLink = generateExplorerLink(chain, 'transaction', transactionHash);
       await bot.telegram.sendMessage(userId,
         `Dear ${safeAccountName},\n\n` +
         `🎉 *Deposit Received*\n` +
