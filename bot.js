@@ -12,7 +12,7 @@ require('dotenv').config();
 
 // Configure Winston Logger
 const logger = winston.createLogger({
-  level: 'info', // Change to 'debug' for more detailed logs
+  level: 'info', 
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
@@ -26,7 +26,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase setup
-const serviceAccount = require('./directpay.json'); // Ensure this file is secure
+const serviceAccount = require('./directpay.json'); // this file is secure
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
@@ -108,11 +108,7 @@ const bot = new Telegraf(BOT_TOKEN);
 // Create a new Stage for admin actions and bank linking using Telegraf Scenes
 const stage = new Scenes.Stage();
 
-// **Remove Duplicate Declaration of sendMessageScene Below**
-// Original Duplicate Declaration Removed
-// ----------------------------------------
-
-// **First Declaration of sendMessageScene**
+// Scene for sending messages to users (text and images)
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
 sendMessageScene.enter(async (ctx) => {
@@ -178,15 +174,6 @@ sendMessageScene.on('message', async (ctx) => {
 sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
 });
-
-// **End of sendMessageScene Declaration**
-
-/* 
-// **Second Declaration of sendMessageScene** 
-// This duplicate declaration has been removed to fix the SyntaxError
-const sendMessageScene = new Scenes.BaseScene('send_message_scene');
-// ... rest of the duplicate code
-*/
 
 // Bank Linking Scene (for initial linking)
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
@@ -303,8 +290,8 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
       `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
       `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `*Account Number:* ${userState.wallets[walletIndex].bank.accountNumber}\n` + // Removed masking
-      `*Bank Code:* ${userState.wallets[walletIndex].bank.bankCode}\n`, { parse_mode: 'Markdown' });
+      `*Account Number:* ${userState.wallets[walletIndex].bank.accountNumber}\n` +
+      `*Bank Code:* ${userState.wallets[walletIndex].bank.bankCode}`, { parse_mode: 'Markdown' });
     logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
 
     // Refresh the main menu without sending the welcome message again
@@ -338,7 +325,7 @@ bankLinkingScene.leave((ctx) => {
 const bankEditingScene = new Scenes.BaseScene('bank_editing_scene');
 
 bankEditingScene.enter(async (ctx) => {
-  // Display the list of wallets in an inline keyboard for selection
+  // Display the list of wallets with inline buttons to select which one to edit
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -351,56 +338,139 @@ bankEditingScene.enter(async (ctx) => {
   }
 
   if (userState.wallets.length === 0) {
-    await ctx.replyWithMarkdown('⚠️ You have no wallets to edit. Please generate a wallet first.', getMainMenu(false, false));
+    await ctx.replyWithMarkdown('⚠️ You have no wallets linked. Please generate a wallet first.');
     ctx.scene.leave();
     return;
   }
 
-  // Create inline buttons for each wallet
-  const walletButtons = userState.wallets.map((wallet, index) => {
-    return [Markup.button.callback(wallet.name ? wallet.name : `Wallet ${index + 1}`, `select_wallet_${index}`)];
+  let inlineButtons = userState.wallets.map((wallet, index) => {
+    const displayName = wallet.name ? wallet.name : `Wallet ${index + 1}`;
+    return [Markup.button.callback(displayName, `edit_wallet_${index}`)];
   });
 
-  await ctx.replyWithMarkdown('🔄 *Select the wallet you want to edit the bank account for:*', Markup.inlineKeyboard(walletButtons));
+  inlineButtons.push([Markup.button.callback('🔙 Back to Main Menu', 'edit_back_main')]);
+
+  await ctx.replyWithMarkdown('💼 *Select a wallet to edit its bank account:*', Markup.inlineKeyboard(inlineButtons));
 });
 
-// Handle wallet selection for editing bank account
-bankEditingScene.action(/select_wallet_(\d+)/, async (ctx) => {
-  const selectedIndex = parseInt(ctx.match[1], 10);
+// Handle Wallet Selection for Editing
+bankEditingScene.action(/edit_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
   const userId = ctx.from.id.toString();
   let userState;
-
   try {
     userState = await getUserState(userId);
-    if (selectedIndex < 0 || selectedIndex >= userState.wallets.length) {
+    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
       throw new Error('Invalid wallet selection.');
     }
-
-    // Set the selected wallet index in session
-    ctx.session.walletIndex = selectedIndex;
-
-    // Enter the bank linking scene
-    await ctx.scene.enter('bank_linking_scene');
-
-    // Acknowledge the callback to remove the loading state
-    await ctx.answerCbQuery();
   } catch (error) {
-    logger.error(`Error selecting wallet ${selectedIndex} for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Failed to select the wallet. Please try again.');
-    await ctx.answerCbQuery();
+    logger.error(`Error selecting wallet ${walletIndex} for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Invalid wallet selection. Please try again.');
+    return ctx.answerCbQuery(); // Acknowledge to remove loading state
+  }
+
+  // Set the wallet index in session for bank editing
+  ctx.session.walletIndex = walletIndex;
+
+  // Proceed to bank linking scene with the selected wallet
+  await ctx.scene.enter('bank_linking_scene');
+
+  // Acknowledge the callback to remove loading state
+  await ctx.answerCbQuery();
+});
+
+// Handle Back to Main Menu from Bank Editing
+bankEditingScene.action('edit_back_main', async (ctx) => {
+  await ctx.replyWithMarkdown('🔙 Returning to the main menu.');
+  await sendMainMenu(ctx);
+  ctx.scene.leave();
+});
+
+// Wallet Naming Scene
+const walletNamingScene = new Scenes.BaseScene('wallet_naming_scene');
+
+walletNamingScene.enter(async (ctx) => {
+  // Display the generated wallet address before asking for a name
+  const walletAddress = ctx.session.generatedWalletAddress.address;
+  const chain = ctx.session.generatedWalletAddress.chain;
+
+  await ctx.replyWithMarkdown(`🔗 *Your new wallet address (${chain}):*\n\`${walletAddress}\`\n\n📝 You can assign a name to your wallet for easier identification.\n\n*Would you like to name this wallet?*`, Markup.inlineKeyboard([
+    [Markup.button.callback('✅ Yes', 'name_wallet_yes')],
+    [Markup.button.callback('❌ No, Skip', 'name_wallet_no')],
+  ]));
+});
+
+walletNamingScene.action('name_wallet_yes', async (ctx) => {
+  await ctx.replyWithMarkdown('📛 Please enter a name for your wallet (e.g., "Savings Wallet", "Investment Wallet"):');
+  ctx.session.awaitingWalletName = true;
+  ctx.scene.leave();
+});
+
+walletNamingScene.action('name_wallet_no', async (ctx) => {
+  // Proceed without naming
+  ctx.session.walletName = null;
+  await ctx.replyWithMarkdown('✅ Wallet created without a name.');
+
+  // Display wallet address in monospace without being clickable
+  await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
+
+  // Proceed to bank linking directly
+  await ctx.replyWithMarkdown('🏦 Let\'s link your bank account to this wallet.', Markup.inlineKeyboard([
+    [Markup.button.callback('🔗 Link Bank Account', 'link_bank_account')],
+  ]));
+
+  ctx.scene.leave();
+});
+
+walletNamingScene.on('text', async (ctx) => {
+  if (ctx.session.awaitingWalletName) {
+    const walletName = ctx.message.text.trim();
+    if (walletName.length === 0 || walletName.length > 50) {
+      return await ctx.replyWithMarkdown('❌ Invalid name. Please enter a name between 1 and 50 characters:');
+    }
+    ctx.session.walletName = walletName;
+    await ctx.replyWithMarkdown(`✅ Wallet named as "${walletName}".`);
+
+    // Update the wallet with the name in Firestore
+    const userId = ctx.from.id.toString();
+    try {
+      const walletAddress = ctx.session.generatedWalletAddress.address;
+      let userState = await getUserState(userId); // Ensure userState is fetched
+      const walletIndex = userState.wallets.findIndex(w => w.address === walletAddress);
+      if (walletIndex !== -1) {
+        userState.wallets[walletIndex].name = walletName;
+        await updateUserState(userId, { wallets: userState.wallets });
+      }
+    } catch (error) {
+      logger.error(`Error naming wallet for user ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ Failed to assign a name to your wallet. Please try again later.');
+    }
+
+    // Display wallet address in monospace without being clickable
+    await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
+
+    // Proceed to bank linking directly
+    await ctx.replyWithMarkdown('🏦 Let\'s link your bank account to this wallet.', Markup.inlineKeyboard([
+      [Markup.button.callback('🔗 Link Bank Account', 'link_bank_account')],
+    ]));
+
+    // Update the main menu without sending the welcome message again
+    await sendMainMenu(ctx);
     ctx.scene.leave();
+  } else {
+    await ctx.replyWithMarkdown('❌ Invalid input. Please follow the prompts.');
   }
 });
 
-bankEditingScene.leave((ctx) => {
-  delete ctx.session.walletIndex;
+walletNamingScene.on('message', async (ctx) => {
+  await ctx.replyWithMarkdown('❌ Please enter a valid name or choose to skip.');
 });
 
 // Register Scenes
 stage.register(sendMessageScene);
 stage.register(bankLinkingScene);
 stage.register(bankEditingScene);
-stage.register(walletNamingScene);
+stage.register(walletNamingScene); // Register the new wallet naming scene
 
 // Use session middleware
 bot.use(session());
@@ -523,24 +593,12 @@ async function getUserState(userId) {
         walletAddresses: [],
         hasReceivedDeposit: false,
         awaitingBroadcastMessage: false, // For admin broadcast
-        language: 'en', // Default language
-        notifications: {
-          transaction: true,
-          rate_alerts: true
-        },
-        defaultWallet: null // Index of default wallet
       });
       return {
         wallets: [],
         walletAddresses: [],
         hasReceivedDeposit: false,
         awaitingBroadcastMessage: false,
-        language: 'en',
-        notifications: {
-          transaction: true,
-          rate_alerts: true
-        },
-        defaultWallet: null
       };
     } else {
       const data = userDoc.data();
@@ -552,7 +610,7 @@ async function getUserState(userId) {
         awaitingBroadcastMessage: data.awaitingBroadcastMessage || false,
         language: data.language || 'en',
         notifications: data.notifications || { transaction: true, rate_alerts: true },
-        defaultWallet: data.defaultWallet || null
+        defaultWallet: data.defaultWallet !== undefined ? data.defaultWallet : null,
       };
     }
   } catch (error) {
@@ -1307,14 +1365,6 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
     logger.error(`Error fetching current rates: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
   }
-});
-
-// Admin Panel Selection (Select Bank to Manage - Placeholder)
-bot.action(/admin_manage_banks_(.+)/, async (ctx) => {
-  // Implement bank management based on the specific action
-  // This is a placeholder for future implementation
-  await ctx.replyWithMarkdown('🏦 *Bank Management* feature is under development. Stay tuned!');
-  await ctx.answerCbQuery();
 });
 
 // Initialize RatesManager
