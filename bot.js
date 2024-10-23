@@ -1,3 +1,4 @@
+// main.js
 // DIRECTPAY-TG-BOT//
 // DEV: TOLUWALASE ADUNBI//
 //-----------------------//
@@ -10,11 +11,12 @@ const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
 const ratesManager = require('./rates.js'); 
+const bankList = require('./banks.js'); // Importing from banks.js
 
-//  Environment Variables
+// Environment Variables
 require('dotenv').config();
 
-//  Winston Logger
+// Winston Logger
 const logger = winston.createLogger({
   level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
@@ -106,34 +108,6 @@ bot.use(session());
 
 // Use the Stage Middleware
 bot.use(stage.middleware());
-
-// Bank List with Names, Codes, and Aliases
-const bankList = [
-  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'] },
-  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'] },
-  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'] },
-  { name: 'First Bank', code: '011', aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'] },
-  { name: 'UBA', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'] },
-  { name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'] },
-  { name: 'Fidelity Bank', code: '070', aliases: ['fidelity', 'fidelity bank', 'fidelityb', 'fidelity bank nigeria'] },
-  { name: 'Ecobank', code: '050', aliases: ['ecobank', 'ecobank nigeria', 'eco bank'] },
-  { name: 'Union Bank', code: '032', aliases: ['union', 'union bank', 'unionb', 'union bank nigeria'] },
-  { name: 'Stanbic IBTC Bank', code: '221', aliases: ['stanbic', 'stanbic ibtc', 'stanbic bank', 'stanbic ibtc nigeria'] },
-  { name: 'Standard Chartered Bank', code: '068', aliases: ['standard chartered', 'standard bank', 'standard chartered nigeria'] },
-  { name: 'Sterling Bank', code: '232', aliases: ['sterling', 'sterling bank', 'sterlingb', 'sterling bank nigeria'] },
-  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'] },
-  { name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'] },
-  { name: 'Unity Bank', code: '215', aliases: ['unity', 'unity bank', 'unityb', 'unity bank nigeria'] },
-  { name: 'Heritage Bank', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'] },
-  { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'] },
-  { name: 'Jaiz Bank', code: '301', aliases: ['jaiz', 'jaiz bank', 'jaizb', 'jaiz bank nigeria'] },
-  { name: 'Parallex Bank', code: '104', aliases: ['parallex', 'parallex bank', 'parallexb', 'parallex bank nigeria'] },
-  { name: 'Kuda Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'] },
-  { name: 'Providus Bank', code: '101', aliases: ['providus', 'providus bank', 'providusb', 'providus bank nigeria'] },
-  { name: 'ALAT by WEMA', code: '035A', aliases: ['alat', 'alat by wema', 'alat nigeria'] },
-  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'] },
-  { name: 'Paycom', code: '999992', aliases: ['paycom', 'paycom nigeria'] }
-];
 
 // Verify Bank Account with Paystack
 async function verifyBankAccount(accountNumber, bankCode) {
@@ -340,7 +314,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
+    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets (testnet):** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
 
     // **Automatically initiate bank linking for the newly created wallet**
     const newWalletIndex = userState.wallets.length - 1; // Index of the newly added wallet
@@ -492,7 +466,7 @@ bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
   await ctx.scene.enter('bank_linking_scene');
 });
 
-// Handle Selecting Wallets for Editing or Linking Bank Accounts
+// Bank Linking Scene Handlers
 bankLinkingScene.enter(async (ctx) => {
   // Check if a bank linking process is already in progress
   if (ctx.session.isBankLinking) {
@@ -508,18 +482,7 @@ bankLinkingScene.enter(async (ctx) => {
   // ctx.session.walletIndex should already be set for auto-initiated linking
   logger.info(`Entering bankLinkingScene for user ${ctx.from.id}. Process Type: ${ctx.session.processType}. Wallet Index: ${ctx.session.walletIndex}`);
 
-  if (ctx.session.processType === 'linking' && ctx.session.walletIndex !== null && ctx.session.walletIndex !== undefined) {
-    // **Auto-initiated linking for a specific wallet**
-    await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
-
-    // Start the timeout for inactivity
-    ctx.session.bankLinkingTimeout = setTimeout(() => {
-      if (ctx.session.isBankLinking) {
-        ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
-        ctx.scene.leave();
-      }
-    }, BANK_LINKING_TIMEOUT);
-  } else if (ctx.session.processType === 'editing') {
+  if (ctx.session.processType === 'editing') {
     // **Editing bank account details for existing linked wallets or linking to unlinked wallets**
 
     let userState;
@@ -607,6 +570,14 @@ bankLinkingScene.enter(async (ctx) => {
       ));
     }
   }
+
+  // Start the inactivity timeout
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, BANK_LINKING_TIMEOUT);
 });
 
 // Handler for Selecting a Wallet to Link Bank Account
@@ -650,18 +621,7 @@ bankLinkingScene.on('text', async (ctx) => {
     ctx.session.bankData.bankName = bank.name;
     ctx.session.bankData.bankCode = bank.code;
 
-    if (ctx.session.processType === 'editing') {
-      // Determine if editing or linking based on context
-      if (ctx.session.walletIndex !== undefined && ctx.session.walletIndex !== null) {
-        await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
-      } else {
-        // User chose to link to an unlinked wallet
-        await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
-      }
-    } else {
-      // Linking process
-      await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
-    }
+    await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
   } else if (!ctx.session.bankData.accountNumber) {
     // Process Account Number
     if (!/^\d{10}$/.test(input)) {
@@ -788,7 +748,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       selectedWallet.bank = {
         bankName: bankData.bankName,
         bankCode: bankData.bankCode,
-        accountNumber: bankData.accountNumber,
+        accountNumber: bankData.bankAccountNumber, // Ensure consistency in property names
         accountName: bankData.accountName,
       };
 
@@ -921,7 +881,7 @@ bankLinkingScene.action('edit_existing_banks', async (ctx) => {
   ));
 });
 
-// Handler for Selecting a Wallet to Edit Existing Bank Account
+// Handle Selecting a Wallet to Edit Existing Bank Account
 bankLinkingScene.action(/edit_existing_wallet_(\d+)/, async (ctx) => {
   const walletIndex = parseInt(ctx.match[1], 10);
   ctx.session.walletIndex = walletIndex;
@@ -959,7 +919,7 @@ sendMessageScene.enter(async (ctx) => {
 
 sendMessageScene.on('text', async (ctx) => {
   const userIdToMessage = ctx.message.text.trim();
-  const userId = ctx.from.id.toString();
+  const adminId = ctx.from.id.toString();
 
   // Validate User ID (should be numeric)
   if (!/^\d+$/.test(userIdToMessage)) {
@@ -976,9 +936,15 @@ sendMessageScene.on('text', async (ctx) => {
   const messageContent = ctx.message.text;
 
   try {
+    // Validate if the user exists by attempting to get their info
+    const userInfo = await bot.telegram.getChat(userIdToMessage);
+    if (!userInfo) {
+      throw new Error('User does not exist.');
+    }
+
     await bot.telegram.sendMessage(userIdToMessage, `**📩 Message from Admin:**\n\n${messageContent}`, { parse_mode: 'Markdown' });
     await ctx.replyWithMarkdown('✅ Text message sent successfully.');
-    logger.info(`Admin sent message to user ${userIdToMessage}: ${messageContent}`);
+    logger.info(`Admin ${ctx.from.id} sent message to user ${userIdToMessage}: ${messageContent}`);
   } catch (error) {
     logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
@@ -997,14 +963,7 @@ sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
 });
 
-
-
 // Main Menu and Admin Menu Functions are defined above
-
-// Handle Unsupported Message Types in SendMessageScene
-sendMessageScene.on('message', async (ctx) => {
-  await ctx.replyWithMarkdown('❌ Please send text messages only.');
-});
 
 // Function to Send Detailed Tutorials in Support Section
 const detailedTutorials = {
@@ -1034,7 +993,7 @@ const detailedTutorials = {
 Your funds are secure with us. We utilize industry-standard encryption and security protocols to ensure your assets and information remain safe.
 
 **💬 Need Help?**
-Visit the support section or contact our support team at [@maxcswap](https://t.me/maxcswap) for any assistance.
+Visit the support section or contact our support team at [@your_support_username](https://t.me/your_support_username) for any assistance.
 `,
   transaction_guide: `
 **💰 Transaction Not Received?**
@@ -1045,7 +1004,7 @@ If you haven't received your transaction, follow these steps to troubleshoot:
    - Ensure that the sender used the correct wallet address provided by DirectPay.
 
 2. **Check Bank Linking:**
-   - Make sure your bank account is correctly linked
+   - Make sure your bank account is correctly linked under "💼 View Wallet."
    - If not linked, go to "🏦 Link Bank Account" to add your bank details.
 
 3. **Monitor Transaction Status:**
@@ -1056,7 +1015,7 @@ If you haven't received your transaction, follow these steps to troubleshoot:
    - Deposits might take a few minutes to reflect depending on the network congestion.
 
 5. **Contact Support:**
-   - If the issue persists after following the above steps, reach out to our support team at [@maxswap](https://t.me/maxcswap) with your transaction details for further assistance.
+   - If the issue persists after following the above steps, reach out to our support team at [@your_support_username](https://t.me/your_support_username) with your transaction details for further assistance.
 `,
   link_bank_tutorial: `
 **🏦 How to Link or Edit Your Bank Account**
@@ -1739,6 +1698,6 @@ bot.launch()
     process.exit(1); // Exit the process if bot fails to launch
   });
 
-//  Shutdown
+// Graceful Shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
