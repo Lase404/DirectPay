@@ -6,14 +6,14 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./utils/rates'); // Import the RatesManager
+const ratesManager = require('./rates.js'); //
 
 // environment variables
 require('dotenv').config();
 
 // Winston Logger
 const logger = winston.createLogger({
-  level: 'info', // Change to 'debug' for more detailed logs
+  level: 'info', 
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
