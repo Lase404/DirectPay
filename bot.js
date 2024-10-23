@@ -6,12 +6,12 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); //
+const ratesManager = require('./rates.js'); 
 
-// environment variables
+// Load environment variables
 require('dotenv').config();
 
-// Winston Logger
+// Configure Winston Logger
 const logger = winston.createLogger({
   level: 'info', 
   format: winston.format.combine(
@@ -27,7 +27,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase setup
-const serviceAccount = require('./directpay.json'); // Ensure this file is secure
+const serviceAccount = require('./directpay.json'); // this file is secure
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
