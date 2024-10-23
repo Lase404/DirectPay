@@ -6,14 +6,14 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); // Import the RatesManager
+const ratesManager = require('./rates.js'); 
 
 // environment variables
 require('dotenv').config();
 
 // Winston Logger
 const logger = winston.createLogger({
-  level: 'info', // Change to 'debug' for more detailed logs
+  level: 'info', 
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
@@ -27,7 +27,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase setup
-const serviceAccount = require('./directpay.json'); // Ensure this file is secure
+const serviceAccount = require('./directpay.json'); 
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
@@ -74,8 +74,8 @@ const web3 = new Web3('https://sepolia.base.org');
 
 // blockchain explorers
 const blockchainExplorers = {
-  Base: 'https://sepolia.etherscan.io', // Replace with actual Base explorer if available
-  Polygon: https://amoy.polygonscan.com/',
+  Base: 'https://sepolia.basescan.io', 
+  Polygon: 'https://amoy.polygonscan.com',
   'BNB Smart Chain': 'https://testnet.bscscan.com/',
 };
 
@@ -1465,6 +1465,6 @@ bot.launch()
   .then(() => logger.info('DirectPay bot is live!'))
   .catch((err) => logger.error(`Error launching bot: ${err.message}`));
 
-// Graceful Shutdown
+// Shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
