@@ -197,7 +197,55 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     // Fetch Current Rates
     const currentRates = await ratesManager.getRates();
 
-   
+   // Confirm Bank Account
+bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const bankData = ctx.session.bankData;
+  const walletIndex = ctx.session.walletIndex;
+
+  logger.info(`User ${userId} confirmed bank linking. Wallet Index: ${walletIndex}`);
+
+  try {
+    let userState = await getUserState(userId);
+
+    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
+      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.', getMainMenu(true, false));
+      ctx.scene.leave();
+      return;
+    }
+
+    // Retrieve the selected wallet
+    const selectedWallet = userState.wallets[walletIndex];
+
+    // Update Bank Details for the Selected Wallet
+    selectedWallet.bank = {
+      bankName: bankData.bankName,
+      bankCode: bankData.bankCode,
+      accountNumber: bankData.accountNumber,
+      accountName: bankData.accountName,
+    };
+
+    // Update User State in Firestore
+    await updateUserState(userId, {
+      wallets: userState.wallets,
+    });
+
+    // Fetch Current Rates
+    const currentRates = await ratesManager.getRates();
+
+    // Retrieve Wallet Address and Supported Tokens
+    const walletAddress = selectedWallet.address;
+    const supportedTokens = selectedWallet.supportedAssets.join(', ');
+
+    // Prepare Rates Message with Wallet Address and Supported Tokens
+    let ratesMessage = `✅ *Your bank account has been updated successfully!*\n\n`;
+    ratesMessage += `*Wallet Address:* \`${walletAddress}\`\n`;
+    ratesMessage += `*Supported Tokens:* ${supportedTokens}\n\n`;
+    ratesMessage += `*Current Exchange Rates:*\n`;
+    ratesMessage += `- *USDC:* ₦${currentRates.USDC} per USDC\n`;
+    ratesMessage += `- *USDT:* ₦${currentRates.USDT} per USDT\n`;
+    ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
+    ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
 
     await ctx.replyWithMarkdown(ratesMessage, getMainMenu(true, true));
 
@@ -675,7 +723,7 @@ bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
   // List Wallets with Linked Bank Accounts
   let walletSelection = '💼 *Select a Wallet to Edit Bank Account*:\n\n';
   userState.wallets.forEach((wallet, index) => {
-    if (wallet.bank) { // Only list wallets that have a bank linked
+    if (wallet.bank) { // Only lists wallets that have a bank linked
       walletSelection += `*#${index + 1} Wallet:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
     }
   });
