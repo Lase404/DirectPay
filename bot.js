@@ -7,11 +7,10 @@ const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
 const ratesManager = require('./rates.js');
-
 // Load environment variables
 require('dotenv').config();
 
-// Configure Winston Logger
+// Winston Logger
 const logger = winston.createLogger({
   level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
@@ -27,7 +26,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase setup
-const serviceAccount = require('./directpay.json'); // Ensure this file is secure
+const serviceAccount = require('./directpay.json'); // this file is secure
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
@@ -72,14 +71,21 @@ const chains = {
 // Web3 Setup for Base Testnet
 const web3 = new Web3('https://sepolia.base.org');
 
+// Define blockchain explorers (Removed explorer links for wallet addresses)
 const blockchainExplorers = {
-  Base: 'https://sepolia.basescan.io', 
+  Base: 'https://sepolia.etherscan.io', // Replace with actual Base explorer if available
   Polygon: 'https://polygonscan.com',
-  'BNB Smart Chain': 'https://testnet.bscscan.com/',
-
+  'BNB Smart Chain': 'https://bscscan.com',
+  // Add more chains and their explorers here if needed
 };
 
-
+/**
+ * Generates the explorer URL based on the chain and type.
+ * @param {string} chain - The name of the blockchain.
+ * @param {string} type - The type of the link ('transaction' or 'wallet').
+ * @param {string} identifier - The transaction hash or wallet address.
+ * @returns {string} - The full URL to the explorer.
+ */
 function generateExplorerLink(chain, type, identifier) {
   const baseURL = blockchainExplorers[chain];
   if (!baseURL) {
@@ -305,7 +311,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   ctx.scene.leave();
 });
 
-// Confirm Bank Account - No
+// Confirm Bank Edit - No
 bankLinkingScene.action('confirm_bank_no', async (ctx) => {
   await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
   // Reset bank data and restart the scene
@@ -468,7 +474,11 @@ bankEditingScene.leave((ctx) => {
 const walletNamingScene = new Scenes.BaseScene('wallet_naming_scene');
 
 walletNamingScene.enter(async (ctx) => {
-  await ctx.replyWithMarkdown('📝 You can assign a name to your wallet for easier identification.\n\n*Would you like to name this wallet?*', Markup.inlineKeyboard([
+  // Display the generated wallet address before asking for a name
+  const walletAddress = ctx.session.generatedWalletAddress.address;
+  const chain = ctx.session.generatedWalletAddress.chain;
+
+  await ctx.replyWithMarkdown(`🔗 *Your new wallet address (${chain}):*\n\`${walletAddress}\`\n\n📝 You can assign a name to your wallet for easier identification.\n\n*Would you like to name this wallet?*`, Markup.inlineKeyboard([
     [Markup.button.callback('✅ Yes', 'name_wallet_yes')],
     [Markup.button.callback('❌ No, Skip', 'name_wallet_no')],
   ]));
@@ -485,22 +495,14 @@ walletNamingScene.action('name_wallet_no', async (ctx) => {
   ctx.session.walletName = null;
   await ctx.replyWithMarkdown('✅ Wallet created without a name.');
 
-  // Generate explorer link (Removed link, display in monospace)
-  // const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
-  // await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-  //   [Markup.button.url('📋 Copy Address', explorerLink)]
-  // ]));
-
-  // Display wallet address in monospace
+  // Display wallet address in monospace without being clickable
   await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
 
-  // Add an inline menu for creating a new wallet
-  await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
-    [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
+  // Proceed to bank linking directly
+  await ctx.replyWithMarkdown('🏦 Let\'s link your bank account to this wallet.', Markup.inlineKeyboard([
+    [Markup.button.callback('🔗 Link Bank Account', 'link_bank_account')],
   ]));
 
-  // Update the main menu without sending the welcome message again
-  await sendMainMenu(ctx);
   ctx.scene.leave();
 });
 
@@ -528,12 +530,12 @@ walletNamingScene.on('text', async (ctx) => {
       await ctx.replyWithMarkdown('⚠️ Failed to assign a name to your wallet. Please try again later.');
     }
 
-    // Display wallet address in monospace
+    // Display wallet address in monospace without being clickable
     await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
 
-    // Add an inline menu for creating a new wallet
-    await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
-      [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
+    // Proceed to bank linking directly
+    await ctx.replyWithMarkdown('🏦 Let\'s link your bank account to this wallet.', Markup.inlineKeyboard([
+      [Markup.button.callback('🔗 Link Bank Account', 'link_bank_account')],
     ]));
 
     // Update the main menu without sending the welcome message again
@@ -546,6 +548,33 @@ walletNamingScene.on('text', async (ctx) => {
 
 walletNamingScene.on('message', async (ctx) => {
   await ctx.replyWithMarkdown('❌ Please enter a valid name or choose to skip.');
+});
+
+// Handle 'link_bank_account' action from wallet naming
+bot.action('link_bank_account', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  // Assuming the latest wallet is the one to link
+  const latestWalletIndex = userState.wallets.length - 1;
+
+  if (latestWalletIndex === -1) {
+    await ctx.replyWithMarkdown('⚠️ No wallet found to link a bank account. Please generate a wallet first.');
+    return;
+  }
+
+  // Set the wallet index in session for bank linking
+  ctx.session.walletIndex = latestWalletIndex;
+
+  // Enter the bank linking scene
+  await ctx.scene.enter('bank_linking_scene');
 });
 
 // Register Scenes
@@ -1016,7 +1045,7 @@ bot.action('support_generate_wallet', async (ctx) => {
     `2. Click on *💼 Generate Wallet*.\n` +
     `3. Choose your preferred blockchain network (Base, Polygon, BNB Smart Chain).\n` +
     `4. Follow the prompts to generate your new wallet.\n` +
-    `5. Optionally, name your wallet for easier identification.\n\n` +
+    `5. After wallet generation, you can optionally assign a name to your wallet for easier identification.\n\n` +
     `🔗 *Quick Links:*\n` +
     `• [Generate Wallet](https://t.me/${ctx.botInfo.username}?start=new_wallet)\n` +
     `• [Learn About Base](https://t.me/${ctx.botInfo.username}?start=learn_base)\n`,
