@@ -181,39 +181,6 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       return;
     }
 
-    // Update Bank Details for the Selected Wallet
-    userState.wallets[walletIndex].bank = {
-      bankName: bankData.bankName,
-      bankCode: bankData.bankCode,
-      accountNumber: bankData.accountNumber,
-      accountName: bankData.accountName,
-    };
-
-    // Update User State in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-    });
-
-    // Fetch Current Rates
-    const currentRates = await ratesManager.getRates();
-
-   // Confirm Bank Account
-bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const bankData = ctx.session.bankData;
-  const walletIndex = ctx.session.walletIndex;
-
-  logger.info(`User ${userId} confirmed bank linking. Wallet Index: ${walletIndex}`);
-
-  try {
-    let userState = await getUserState(userId);
-
-    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.', getMainMenu(true, false));
-      ctx.scene.leave();
-      return;
-    }
-
     // Retrieve the selected wallet
     const selectedWallet = userState.wallets[walletIndex];
 
@@ -245,16 +212,16 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     ratesMessage += `- *USDC:* ₦${currentRates.USDC} per USDC\n`;
     ratesMessage += `- *USDT:* ₦${currentRates.USDT} per USDT\n`;
     ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
-    ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
+    ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;  // ADD THE WALLET ADDRESS TO SEND THE SUPPORTED TOKENS
 
     await ctx.replyWithMarkdown(ratesMessage, getMainMenu(true, true));
 
     // Log to Admin
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
-      `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
-      `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
-    logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
+      `*Account Name:* ${selectedWallet.bank.accountName}\n` +
+      `*Bank Name:* ${selectedWallet.bank.bankName}\n` +
+      `*Account Number:* ****${selectedWallet.bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+    logger.info(`User ${userId} updated a bank account: ${JSON.stringify(selectedWallet.bank)}`);
   } catch (error) {
     logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
