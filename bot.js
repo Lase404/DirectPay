@@ -6,14 +6,14 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js');
+const ratesManager = require('./rates.js'); // Import the RatesManager
 
 // Load environment variables
 require('dotenv').config();
 
 // Configure Winston Logger
 const logger = winston.createLogger({
-  level: 'info', 
+  level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
@@ -27,7 +27,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase setup
-const serviceAccount = require('./directpay.json'); //  this file is secure
+const serviceAccount = require('./directpay.json'); // Ensure this file is secure
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
@@ -290,7 +290,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     await ctx.replyWithMarkdown(ratesMessage);
 
-    // Log to Admin with full bank details
+    // Log to Admin with full bank details (Unmasked)
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
       `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
       `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
@@ -436,7 +436,7 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
 
     await ctx.replyWithMarkdown(ratesMessage);
 
-    // Log to Admin with full bank details
+    // Log to Admin with full bank details (Unmasked)
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
       `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
       `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
@@ -492,11 +492,9 @@ walletNamingScene.action('name_wallet_no', async (ctx) => {
   ctx.session.walletName = null;
   await ctx.replyWithMarkdown('✅ Wallet created without a name.');
 
-  // Generate explorer link
+  // Generate explorer link (now only in monospace, no hyperlink)
   const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
-  await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-    [Markup.button.url('📋 Copy Address', explorerLink)]
-  ]));
+  await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
 
   // Add an inline menu for creating a new wallet
   await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
@@ -531,11 +529,9 @@ walletNamingScene.on('text', async (ctx) => {
       await ctx.replyWithMarkdown('⚠️ Failed to assign a name to your wallet. Please try again later.');
     }
 
-    // Generate explorer link
+    // Generate explorer link (now only in monospace, no hyperlink)
     const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
-    await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-      [Markup.button.url('📋 Copy Address', explorerLink)]
-    ]));
+    await ctx.replyWithMarkdown(`🔗 Your new wallet address:\n\`${ctx.session.generatedWalletAddress.address}\``);
 
     // Add an inline menu for creating a new wallet
     await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
@@ -861,13 +857,13 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
 👤 *Account Name:* ${wallet.bank.accountName}
 ` : '❌ No bank linked\n';
 
-    const explorerLink = generateExplorerLink(wallet.chain, 'wallet', wallet.address);
-    walletMessage += `*#${index + 1} Wallet Address:* [\`${wallet.address}\`](${explorerLink})\n${walletName}${bank}\n\n`;
+    // Display wallet address in monospace without explorer link
+    walletMessage += `*#${index + 1} Wallet Address:*\n\`${wallet.address}\`\n${walletName}${bank}\n\n`;
   });
 
   // Add inline menu for creating a new wallet
   walletMessage += `*Actions:*\n`;
-  walletMessage += `• [💼 Create New Wallet](https://t.me/${ctx.botInfo.username}?start=new_wallet)\n`;
+  walletMessage += `• 💼 Create New Wallet`;
 
   await ctx.replyWithMarkdown(walletMessage, Markup.inlineKeyboard([
     [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
@@ -1050,8 +1046,8 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
       message += `*Chain:* ${tx.chain || 'N/A'}\n`;
       if (tx.transactionHash) {
-        const explorerLink = generateExplorerLink(tx.chain, 'transaction', tx.transactionHash);
-        message += `*Explorer:* [View Transaction](${explorerLink})\n`;
+        // Removed explorer link, display transaction hash in monospace
+        message += `*Transaction Hash:* \`${tx.transactionHash}\`\n`;
       }
       message += `\n`;
     });
@@ -1111,14 +1107,14 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
       transactionsSnapshot.forEach((doc) => {
         const tx = doc.data();
-        const explorerLink = generateExplorerLink(tx.chain, 'transaction', tx.transactionHash);
+        // Removed explorer link; display transaction hash in monospace
         message += `*User ID:* ${tx.userId || 'N/A'}\n`;
         message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
         message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
         message += `*Status:* ${tx.status || 'Pending'}\n`;
         message += `*Chain:* ${tx.chain || 'N/A'}\n`;
         if (tx.transactionHash) {
-          message += `*Explorer:* [View Transaction](${explorerLink})\n`;
+          message += `*Transaction Hash:* \`${tx.transactionHash}\`\n`;
         }
         message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
       });
@@ -1171,8 +1167,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
           // Safely access accountName
           const accountName = data.bankDetails && data.bankDetails.accountName ? data.bankDetails.accountName : 'Valued User';
 
-          const explorerLink = generateExplorerLink(data.chain, 'transaction', data.transactionHash);
-
+          // Removed explorer link; display transaction hash in monospace
           await bot.telegram.sendMessage(
             data.userId,
             `🎉 *Transaction Successful!*\n\n` +
@@ -1182,7 +1177,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
             `*Account Name:* ${accountName}\n` +
             `*Account Number:* ${data.bankDetails.accountNumber}\n` +
             `*Payout (NGN):* ₦${payout}\n\n` +
-            `*Transaction Explorer:* [View Transaction](${explorerLink})\n` +
+            `*Transaction Hash:* \`${data.transactionHash}\`\n` +
             `🔹 *Chain:* ${data.chain}\n` +
             `*Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
             `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
@@ -1380,13 +1375,13 @@ app.post('/webhook/blockradar', async (req, res) => {
         `- *Wallet Address:* \`${walletAddress}\`\n\n` +
         `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
         `You will receive *NGN ${payout}* in your ${bankName} account ending with ${bankAccount} shortly.\n\n` +
-        `*Transaction Explorer:* [View Transaction](${explorerLink})\n\n` +
+        `*Transaction Hash:* \`${transactionHash}\`\n\n` +
         `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
         `*Note:* If you have any questions, feel free to reach out to our support team.`,
         { parse_mode: 'Markdown' }
       );
 
-      // Notify Admin with Detailed Transaction Information
+      // Notify Admin with Detailed Transaction Information (Unmasked)
       const adminDepositMessage = `⚡️ *New Deposit Received*:\n\n` +
         `*User ID:* ${userId}\n` +
         `*Amount Deposited:* ${amount} ${asset}\n` +
@@ -1400,7 +1395,6 @@ app.post('/webhook/blockradar', async (req, res) => {
         `  - *Bank Code:* ${wallet.bank.bankCode}\n` +
         `*Chain:* ${chain}\n` +
         `*Transaction Hash:* \`${transactionHash}\`\n` +
-        `*Transaction Explorer:* [View Transaction](${explorerLink})\n` +
         `*Reference ID:* ${referenceId}\n`;
 
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
