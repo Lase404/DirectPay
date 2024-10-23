@@ -6,14 +6,14 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); 
+const ratesManager = require('./rates.js');
 
-// Load environment variables
+//  environment variables
 require('dotenv').config();
 
-// Configure Winston Logger
+//  Winston Logger
 const logger = winston.createLogger({
-  level: 'info', 
+  level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
     winston.format.timestamp(),
     winston.format.printf(({ timestamp, level, message }) => {
@@ -71,6 +71,30 @@ const chains = {
 
 // Web3 Setup for Base Testnet
 const web3 = new Web3('https://sepolia.base.org');
+
+// Define blockchain explorers
+const blockchainExplorers = {
+  Base: 'https://sepolia.etherscan.io', // Replace with actual Base explorer if available
+  Polygon: 'https://polygonscan.com',
+  'BNB Smart Chain': 'https://bscscan.com',
+  // Add more chains and their explorers here if needed
+};
+
+
+function generateExplorerLink(chain, type, identifier) {
+  const baseURL = blockchainExplorers[chain];
+  if (!baseURL) {
+    return '#'; // Fallback URL if chain is not recognized
+  }
+
+  if (type === 'transaction') {
+    return `${baseURL}/tx/${identifier}`;
+  } else if (type === 'wallet') {
+    return `${baseURL}/address/${identifier}`;
+  } else {
+    return '#';
+  }
+}
 
 // Initialize Express App
 const app = express();
@@ -260,15 +284,16 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     await ctx.replyWithMarkdown(ratesMessage);
 
-    // Log to Admin
+    // Log to Admin with full bank details
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
       `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
       `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+      `*Account Number:* ${userState.wallets[walletIndex].bank.accountNumber}\n` +
+      `*Bank Code:* ${userState.wallets[walletIndex].bank.bankCode}`, { parse_mode: 'Markdown' });
     logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
 
-    // Refresh the main menu to reflect the updated bank status
-    await greetUser(ctx);
+    // Refresh the main menu without sending the welcome message again
+    await sendMainMenu(ctx); // Use the new function instead of greetUser(ctx)
   } catch (error) {
     logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
@@ -405,15 +430,16 @@ bankEditingScene.action('confirm_bank_edit_yes', async (ctx) => {
 
     await ctx.replyWithMarkdown(ratesMessage);
 
-    // Log to Admin
+    // Log to Admin with full bank details
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
       `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
       `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+      `*Account Number:* ${userState.wallets[walletIndex].bank.accountNumber}\n` +
+      `*Bank Code:* ${userState.wallets[walletIndex].bank.bankCode}`, { parse_mode: 'Markdown' });
     logger.info(`User ${userId} updated a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
 
-    // Refresh the main menu to reflect the updated bank status
-    await greetUser(ctx);
+    // Refresh the main menu without sending the welcome message again
+    await sendMainMenu(ctx); // Use the new function instead of greetUser(ctx)
   } catch (error) {
     logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
@@ -459,11 +485,20 @@ walletNamingScene.action('name_wallet_no', async (ctx) => {
   // Proceed without naming
   ctx.session.walletName = null;
   await ctx.replyWithMarkdown('✅ Wallet created without a name.');
+
+  // Generate explorer link
+  const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
   await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-    [Markup.button.url('📋 Copy Address', `https://etherscan.io/address/${ctx.session.generatedWalletAddress}`)]
+    [Markup.button.url('📋 Copy Address', explorerLink)]
   ]));
-  // Update the main menu
-  await greetUser(ctx);
+
+  // Add an inline menu for creating a new wallet
+  await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
+    [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
+  ]));
+
+  // Update the main menu without sending the welcome message again
+  await sendMainMenu(ctx);
   ctx.scene.leave();
 });
 
@@ -475,11 +510,34 @@ walletNamingScene.on('text', async (ctx) => {
     }
     ctx.session.walletName = walletName;
     await ctx.replyWithMarkdown(`✅ Wallet named as "${walletName}".`);
+
+    // Update the wallet with the name in Firestore
+    const userId = ctx.from.id.toString();
+    try {
+      const walletAddress = ctx.session.generatedWalletAddress.address;
+      const walletIndex = userState.wallets.findIndex(w => w.address === walletAddress);
+      if (walletIndex !== -1) {
+        userState.wallets[walletIndex].name = walletName;
+        await updateUserState(userId, { wallets: userState.wallets });
+      }
+    } catch (error) {
+      logger.error(`Error naming wallet for user ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ Failed to assign a name to your wallet. Please try again later.');
+    }
+
+    // Generate explorer link
+    const explorerLink = generateExplorerLink(ctx.session.generatedWalletAddress.chain, 'wallet', ctx.session.generatedWalletAddress.address);
     await ctx.replyWithMarkdown('🔗 Your new wallet address:', Markup.inlineKeyboard([
-      [Markup.button.url('📋 Copy Address', `https://etherscan.io/address/${ctx.session.generatedWalletAddress}`)]
+      [Markup.button.url('📋 Copy Address', explorerLink)]
     ]));
-    // Update the main menu
-    await greetUser(ctx);
+
+    // Add an inline menu for creating a new wallet
+    await ctx.replyWithMarkdown('Would you like to create another wallet?', Markup.inlineKeyboard([
+      [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
+    ]));
+
+    // Update the main menu without sending the welcome message again
+    await sendMainMenu(ctx);
     ctx.scene.leave();
   } else {
     await ctx.replyWithMarkdown('❌ Invalid input. Please follow the prompts.');
@@ -570,6 +628,24 @@ const getMainMenu = (walletExists, hasBankLinked) =>
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
     ['📈 View Current Rates'], // New button added
   ]).resize();
+
+// New Function: Send Main Menu Without Welcome Message
+const sendMainMenu = async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  const walletExists = userState.wallets.length > 0;
+  const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
+
+  await ctx.replyWithMarkdown('📋 *Main Menu:*', getMainMenu(walletExists, hasBankLinked));
+};
 
 // Admin Menu
 const getAdminMenu = () =>
@@ -732,7 +808,10 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Store the generated wallet address temporarily in session for naming
-    ctx.session.generatedWalletAddress = walletAddress;
+    ctx.session.generatedWalletAddress = {
+      address: walletAddress,
+      chain: chain
+    };
 
     // Enter the wallet naming scene
     await ctx.scene.enter('wallet_naming_scene');
@@ -751,7 +830,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
 });
 
 // View Wallet Button Handler
-bot.hears('💼 View Wallet', async (ctx) => {
+bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -772,18 +851,25 @@ bot.hears('💼 View Wallet', async (ctx) => {
     const walletName = wallet.name ? `*Name:* ${wallet.name}\n` : '';
     const bank = wallet.bank ? `
 🔗 *Linked Bank:* ${wallet.bank.bankName}
-🔢 *Account Number:* ****${wallet.bank.accountNumber.slice(-4)}
+🔢 *Account Number:* ${wallet.bank.accountNumber}
 👤 *Account Name:* ${wallet.bank.accountName}
 ` : '❌ No bank linked\n';
 
-    walletMessage += `*#${index + 1} Wallet Address:* \`${wallet.address}\`\n${walletName}${bank}\n`;
+    const explorerLink = generateExplorerLink(wallet.chain, 'wallet', wallet.address);
+    walletMessage += `*#${index + 1} Wallet Address:* [\`${wallet.address}\`](${explorerLink})\n${walletName}${bank}\n\n`;
   });
 
-  await ctx.replyWithMarkdown(walletMessage);
+  // Add inline menu for creating a new wallet
+  walletMessage += `*Actions:*\n`;
+  walletMessage += `• [💼 Create New Wallet](https://t.me/${ctx.botInfo.username}?start=new_wallet)\n`;
+
+  await ctx.replyWithMarkdown(walletMessage, Markup.inlineKeyboard([
+    [Markup.button.callback('💼 Create New Wallet', 'generate_new_wallet')]
+  ]));
 });
 
-// Edit Bank Account Option Handler
-bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
+// Handle 'generate_new_wallet' action from the View Wallet inline menu
+bot.action('generate_new_wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -794,46 +880,18 @@ bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
     return;
   }
 
-  if (userState.wallets.length === 0 || !userState.wallets.some(wallet => wallet.bank)) {
-    return await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
+  if (userState.wallets.length >= MAX_WALLETS) {
+    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
   }
 
-  // List wallets with part of the address hidden
-  let walletSelection = '💼 *Select a Wallet to Edit Bank Account*:\n\n';
-  userState.wallets.forEach((wallet, index) => {
-    if (wallet.bank) { // Only list wallets that have a bank linked
-      walletSelection += `*#${index + 1} Wallet:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
-    }
-  });
+  // Prompt user to select a network
+  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
+    [Markup.button.callback('Base', 'generate_wallet_Base')],
+    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+  ]));
 
-  await ctx.replyWithMarkdown(walletSelection, Markup.inlineKeyboard(
-    userState.wallets.map((wallet, index) => {
-      if (wallet.bank) {
-        return [Markup.button.callback(`Wallet ${index + 1}`, `edit_bank_${index}`)];
-      }
-      return null;
-    }).filter(button => button !== null)
-  ));
-});
-
-// Handler for selecting a wallet to edit bank account
-bot.action(/edit_bank_(\d+)/, async (ctx) => {
-  const walletIndex = parseInt(ctx.match[1], 10);
-  const userId = ctx.from.id.toString();
-  try {
-    let userState = await getUserState(userId);
-
-    if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
-      return await ctx.replyWithMarkdown('⚠️ Invalid wallet selected. Please try again.');
-    }
-
-    ctx.session.walletIndex = walletIndex;
-    await ctx.replyWithMarkdown('🔢 Please enter your new bank name (e.g., Access Bank):');
-    ctx.scene.enter('bank_editing_scene'); // Reuse the bank editing scene for updating
-  } catch (error) {
-    logger.error(`Error selecting wallet for editing bank: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-  }
+  ctx.answerCbQuery(); // Acknowledge the callback
 });
 
 // Learn About Base with Pagination and Inline Updates
@@ -933,6 +991,7 @@ bot.hears(/ℹ️\s*Support/i, async (ctx) => {
     [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
     [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
     [Markup.button.callback('💬 Contact Support', 'support_contact')],
+    [Markup.button.callback('🔧 How to Generate a New Wallet', 'support_generate_wallet')], // Added new support topic
   ]));
 });
 
@@ -947,6 +1006,22 @@ bot.action('support_not_received', async (ctx) => {
 
 bot.action('support_contact', async (ctx) => {
   await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
+});
+
+// New Support Action: How to Generate a New Wallet
+bot.action('support_generate_wallet', async (ctx) => {
+  await ctx.replyWithMarkdown(
+    `🆕 *How to Generate a New Wallet*\n\n` +
+    `1. Navigate to the *Main Menu* by sending /start or clicking the menu button.\n` +
+    `2. Click on *💼 Generate Wallet*.\n` +
+    `3. Choose your preferred blockchain network (Base, Polygon, BNB Smart Chain).\n` +
+    `4. Follow the prompts to generate your new wallet.\n` +
+    `5. Optionally, name your wallet for easier identification.\n\n` +
+    `🔗 *Quick Links:*\n` +
+    `• [Generate Wallet](https://t.me/${ctx.botInfo.username}?start=new_wallet)\n` +
+    `• [Learn About Base](https://t.me/${ctx.botInfo.username}?start=learn_base)\n`,
+    { parse_mode: 'Markdown' }
+  );
 });
 
 // View Transactions for Users
@@ -967,7 +1042,12 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
       message += `*Status:* ${tx.status || 'Pending'}\n`;
       message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
+      message += `*Chain:* ${tx.chain || 'N/A'}\n`;
+      if (tx.transactionHash) {
+        const explorerLink = generateExplorerLink(tx.chain, 'transaction', tx.transactionHash);
+        message += `*Explorer:* [View Transaction](${explorerLink})\n`;
+      }
+      message += `\n`;
     });
 
     await ctx.replyWithMarkdown(message);
@@ -1025,11 +1105,15 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
       transactionsSnapshot.forEach((doc) => {
         const tx = doc.data();
+        const explorerLink = generateExplorerLink(tx.chain, 'transaction', tx.transactionHash);
         message += `*User ID:* ${tx.userId || 'N/A'}\n`;
         message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
         message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
         message += `*Status:* ${tx.status || 'Pending'}\n`;
         message += `*Chain:* ${tx.chain || 'N/A'}\n`;
+        if (tx.transactionHash) {
+          message += `*Explorer:* [View Transaction](${explorerLink})\n`;
+        }
         message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
       });
 
@@ -1081,6 +1165,8 @@ bot.action(/admin_(.+)/, async (ctx) => {
           // Safely access accountName
           const accountName = data.bankDetails && data.bankDetails.accountName ? data.bankDetails.accountName : 'Valued User';
 
+          const explorerLink = generateExplorerLink(data.chain, 'transaction', data.transactionHash);
+
           await bot.telegram.sendMessage(
             data.userId,
             `🎉 *Transaction Successful!*\n\n` +
@@ -1088,8 +1174,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
             `*Amount Paid:* ${data.amount} ${data.asset}\n` +
             `*Bank:* ${data.bankDetails.bankName || 'N/A'}\n` +
             `*Account Name:* ${accountName}\n` +
-            `*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}\n` +
+            `*Account Number:* ${data.bankDetails.accountNumber}\n` +
             `*Payout (NGN):* ₦${payout}\n\n` +
+            `*Transaction Explorer:* [View Transaction](${explorerLink})\n` +
             `🔹 *Chain:* ${data.chain}\n` +
             `*Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
             `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
@@ -1156,7 +1243,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
   } else if (action === 'admin_back_to_main') {
     // Return to the main menu
     await ctx.answerCbQuery();
-    await greetUser(ctx);
+    await sendMainMenu(ctx);
     // Delete the admin panel message
     if (ctx.session.adminMessageId) {
       await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
@@ -1278,6 +1365,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       const safeAccountName = accountName ? accountName : 'Valued User';
 
       // Notify User of Successful Deposit
+      const explorerLink = generateExplorerLink(chain, 'transaction', transactionHash);
       await bot.telegram.sendMessage(userId,
         `Dear ${safeAccountName},\n\n` +
         `🎉 *Deposit Received*\n` +
@@ -1285,7 +1373,8 @@ app.post('/webhook/blockradar', async (req, res) => {
         `- *Chain:* ${chain}\n` +
         `- *Wallet Address:* \`${walletAddress}\`\n\n` +
         `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
-        `You will receive *NGN ${payout}* in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
+        `You will receive *NGN ${payout}* in your ${bankName} account ending with ${bankAccount} shortly.\n\n` +
+        `*Transaction Explorer:* [View Transaction](${explorerLink})\n\n` +
         `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
         `*Note:* If you have any questions, feel free to reach out to our support team.`,
         { parse_mode: 'Markdown' }
@@ -1301,9 +1390,11 @@ app.post('/webhook/blockradar', async (req, res) => {
         `*Bank Details:*\n` +
         `  - *Account Name:* ${safeAccountName}\n` +
         `  - *Bank Name:* ${bankName}\n` +
-        `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
+        `  - *Account Number:* ${bankAccount}\n` +
+        `  - *Bank Code:* ${wallet.bank.bankCode}\n` +
         `*Chain:* ${chain}\n` +
         `*Transaction Hash:* \`${transactionHash}\`\n` +
+        `*Transaction Explorer:* [View Transaction](${explorerLink})\n` +
         `*Reference ID:* ${referenceId}\n`;
 
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
