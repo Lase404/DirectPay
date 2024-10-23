@@ -1,4 +1,3 @@
-=// ---------------------- Imports and Initializations ---------------------- //
 
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const axios = require('axios');
@@ -8,7 +7,7 @@ const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
 const Web3 = require('web3');
-const ratesManager = require('./rates.js'); // Ensure this module exists and exports getRates and init functions
+const ratesManager = require('./rates.js'); // this module exists and exports getRates and init functions
 
 // Load environment variables
 require('dotenv').config();
