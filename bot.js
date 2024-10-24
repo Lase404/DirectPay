@@ -1427,7 +1427,7 @@ app.listen(port, () => {
 });
 
 // Launch Bot with Webhook
-const webhookURL = process.env.WEBHOOK_URL; // Ensure this is set in your .env file
+const webhookURL = process.env.WEBHOOK_DOMAIN; //  this is set in an .env file
 
 if (!webhookURL) {
   logger.error('WEBHOOK_URL is not set in the environment variables.');
