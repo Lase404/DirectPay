@@ -9,12 +9,12 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); 
+const ratesManager = require('./rates.js'); //  this module is correctly implemented and stored on server end
 
 // Environment Variables
 require('dotenv').config();
 
-// Winston Logger
+// Winston Logger Configuration
 const logger = winston.createLogger({
   level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
@@ -79,8 +79,6 @@ const web3 = new Web3('https://sepolia.base.org');
 // Initialize Express App for Webhooks
 const app = express();
 app.use(express.json());
-
-//-------TELEGRAF SESSION & HANDLERS-----//
 
 // Initialize Telegraf Bot
 const bot = new Telegraf(BOT_TOKEN);
@@ -221,6 +219,11 @@ async function updateUserState(userId, newState) {
   }
 }
 
+// Markdown Escaping Function
+function escapeMarkdown(text) {
+  return text.replace(/([_*[\]()~`>#+-=|{}.!])/g, '\\$1');
+}
+
 // Greet User
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
@@ -237,9 +240,12 @@ async function greetUser(ctx) {
   const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
   const adminUser = isAdmin(userId);
 
+  // Escape first_name to prevent Markdown parsing issues
+  const firstName = escapeMarkdown(ctx.from.first_name);
+
   const greeting = walletExists
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
-    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
+    ? `👋 Hello, ${firstName}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
+    : `👋 Welcome, ${firstName}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
 
   if (adminUser) {
     const sentMessage = await ctx.replyWithMarkdown(greeting, Markup.inlineKeyboard([
@@ -693,7 +699,8 @@ bot.on('text', async (ctx, next) => {
     return;
   }
 
-  await next(); // Pass control to the next handler
+  // Proceed to next middleware if not handling admin send message
+  await next();
 });
 
 // Confirm Bank Account
@@ -773,9 +780,9 @@ bot.action('cancel_bank_linking', async (ctx) => {
   ctx.answerCbQuery(); // Acknowledge the callback
 });
 
-// Broadcast Message Scene (Already Handled Above)
+// Broadcast Message Scene (Handled Below)
 
-// Handle Admin Actions (View Transactions, View Users, Broadcast, etc.)
+// Handle Admin Actions (View Transactions, View Users, Broadcast, Send Message, etc.)
 bot.action(/admin_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
 
@@ -864,6 +871,74 @@ bot.action(/admin_(.+)/, async (ctx) => {
       await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
       ctx.session.adminMessageId = null;
     }
+  } else if (action === 'send_message') {
+    // Handler for sending a direct message to a specific user
+
+    // Initialize session variables for admin message sending
+    ctx.session.adminSendMessage = {
+      awaitingUserId: true,
+      awaitingMessage: false,
+      targetUserId: null,
+    };
+
+    await ctx.reply('📩 *Send Message to User*\n\nPlease enter the *User ID* of the recipient:', { parse_mode: 'Markdown' });
+    ctx.answerCbQuery(); // Acknowledge the callback
+  } else if (action === 'admin_mark_paid') {
+    // Handle marking transactions as paid
+    try {
+      const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
+      if (pendingTransactions.empty) {
+        await ctx.editMessageText('✅ All transactions are already marked as paid.', { reply_markup: getAdminMenu().reply_markup });
+        return ctx.answerCbQuery();
+      }
+
+      const batch = db.batch();
+      pendingTransactions.forEach((transaction) => {
+        const docRef = db.collection('transactions').doc(transaction.id);
+        batch.update(docRef, { status: 'Paid' });
+      });
+
+      await batch.commit();
+
+      // Notify Users About Their Transactions Being Marked as Paid
+      for (const transaction of pendingTransactions.docs) {
+        const data = transaction.data();
+        try {
+          // Fetch Current Rates at the Time of Payout
+          const currentRates = await ratesManager.getRates();
+          const payout = await calculatePayout(data.asset, data.amount);
+
+          // Safely Access accountName
+          const accountName = data.bankDetails && data.bankDetails.accountName ? data.bankDetails.accountName : 'Valued User';
+
+          await bot.telegram.sendMessage(
+            data.userId,
+            `🎉 *Transaction Successful!*\n\n` +
+            `*Reference ID:* \`${data.referenceId || 'N/A'}\`\n` +
+            `*Amount Paid:* ${data.amount} ${data.asset}\n` +
+            `*Bank:* ${data.bankDetails.bankName || 'N/A'}\n` +
+            `*Account Name:* ${accountName}\n` +
+            `*Account Number:* ****${data.bankDetails.accountNumber}\n` +
+            `*Payout (NGN):* ₦${payout}\n\n` +
+            `🔹 *Chain:* ${data.chain}\n` +
+            `*Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
+            `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/your_support_username).`,
+            { parse_mode: 'Markdown' }
+          );
+          logger.info(`Notified user @${data.username} (ID: ${data.userId}) about paid transaction ${data.referenceId}`);
+        } catch (error) {
+          logger.error(`Error notifying user ${data.userId}: ${error.message}`);
+        }
+      }
+
+      // Edit the Admin Panel Message to Confirm
+      await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
+      ctx.answerCbQuery();
+    } catch (error) {
+      logger.error(`Error marking transactions as paid: ${error.message}`);
+      await ctx.editMessageText('⚠️ Error marking transactions as paid. Please try again later.', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
+      ctx.answerCbQuery();
+    }
   } else if (action === 'manage_banks') {
     // Implement bank management functionalities here
     await ctx.answerCbQuery();
@@ -882,222 +957,29 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
-// Handle Broadcast Message Input (Handled Earlier in bot.on('text'))
-// No changes needed here since it's already correctly implemented
+// Handle Admin Send Message Workflow
+// Handled in the 'bot.on('text')' above
 
-// Function to Send Detailed Tutorials in Support Section
-const detailedTutorials = {
-  how_it_works: `
-**📘 How DirectPay Works**
+// Support Functionality
+bot.hears(/ℹ️\s*Support/i, async (ctx) => {
+  await ctx.replyWithMarkdown('How can we assist you today?', Markup.inlineKeyboard([
+    [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
+    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+    [Markup.button.callback('💬 Contact Support', 'support_contact')],
+  ]));
+});
 
-1. **Generate Your Wallet:**
-   - Navigate to the "💼 Generate Wallet" option.
-   - Select your preferred network (Base, Polygon, BNB Smart Chain).
-   - Receive a unique wallet address where you can receive crypto payments.
+// Support Actions
+bot.action('support_how_it_works', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
+});
 
-2. **Link Your Bank Account:**
-   - Go to "🏦 Link Bank Account."
-   - Provide your bank details to securely receive payouts directly into your bank account.
+bot.action('support_not_received', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
+});
 
-3. **Receive Payments:**
-   - Share your wallet address with clients or payment sources.
-   - Once a deposit is made, DirectPay will automatically convert the crypto to NGN at current exchange rates.
-
-4. **Monitor Transactions:**
-   - Use the "💰 Transactions" option to view all your deposit and payout activities.
-
-5. **Support & Assistance:**
-   - Access detailed support tutorials anytime from the "ℹ️ Support" section.
-
-**🔒 Security:**
-Your funds are secure with us. We utilize industry-standard encryption and security protocols to ensure your assets and information remain safe.
-
-**💬 Need Help?**
-Visit the support section or contact our support team at [@your_support_username](https://t.me/your_support_username) for any assistance.
-`,
-  transaction_guide: `
-**💰 Transaction Not Received?**
-
-If you haven't received your transaction, follow these steps to troubleshoot:
-
-1. **Verify Wallet Address:**
-   - Ensure that the sender used the correct wallet address provided by DirectPay.
-
-2. **Check Bank Linking:**
-   - Make sure your bank account is correctly linked under "💼 View Wallet."
-   - If not linked, go to "🏦 Link Bank Account" to add your bank details.
-
-3. **Monitor Transaction Status:**
-   - Use the "💰 Transactions" section to check the status of your deposit.
-   - Pending status indicates that the deposit is being processed.
-
-4. **Wait for Confirmation:**
-   - Deposits might take a few minutes to reflect depending on the network congestion.
-
-5. **Contact Support:**
-   - If the issue persists after following the above steps, reach out to our support team at [@your_support_username](https://t.me/your_support_username) with your transaction details for further assistance.
-`,
-};
-
-// Function to Send Detailed Tutorials in Support Section (Optional)
-const detailedBankTutorial = {
-  link_bank_tutorial: `
-**🏦 How to Link or Edit Your Bank Account**
-
-*Linking a New Bank Account:*
-
-1. **Navigate to Bank Linking:**
-   - Click on "🏦 Link Bank Account" from the main menu.
-
-2. **Select Your Wallet:**
-   - If you have multiple wallets, select the one you want to link a bank account to.
-
-3. **Provide Bank Details:**
-   - Enter your bank name (e.g., Access Bank).
-   - Input your 10-digit bank account number.
-
-4. **Verify Account:**
-   - DirectPay will verify your bank account details.
-   - Confirm the displayed account holder name.
-
-5. **Completion:**
-   - Once verified, your bank account is linked and ready to receive payouts.
-
-*Editing an Existing Bank Account:*
-
-1. **Navigate to Bank Editing:**
-   - Click on "🏦 Edit Bank Account" from the main menu.
-
-2. **Select the Wallet:**
-   - Choose the wallet whose bank account you wish to edit.
-
-3. **Provide New Bank Details:**
-   - Enter the updated bank name or account number as required.
-
-4. **Verify Changes:**
-   - Confirm the updated account holder name.
-
-5. **Completion:**
-   - Your bank account details have been updated successfully.
-`,
-};
-
-// Webhook Handler for Deposits
-app.post('/webhook/blockradar', async (req, res) => {
-  try {
-    const event = req.body;
-    logger.info(`Received webhook: ${JSON.stringify(event)}`);
-    fs.appendFileSync(path.join(__dirname, 'webhook_logs.txt'), `${new Date().toISOString()} - ${JSON.stringify(event, null, 2)}\n`);
-
-    // Extract Common Event Data
-    const eventType = event?.event || 'Unknown Event';
-    const walletAddress = event?.data?.recipientAddress || null;
-    const amount = parseFloat(event?.data?.amount) || 0;
-    const asset = event?.data?.asset?.symbol || null;
-    const transactionHash = event?.data?.hash || null;
-    const chain = event?.data?.blockchain?.name || null;
-
-    if (eventType === 'deposit.success') {
-      if (!walletAddress) {
-        logger.error('Webhook missing wallet address.');
-        return res.status(400).send('Missing wallet address.');
-      }
-
-      // Find User by Wallet Address
-      const usersSnapshot = await db.collection('users').where('walletAddresses', 'array-contains', walletAddress).get();
-      if (usersSnapshot.empty) {
-        logger.warn(`No user found for wallet ${walletAddress}`);
-        // Notify Admin About the Unmatched Wallet
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No user found for wallet address: \`${walletAddress}\``, { parse_mode: 'Markdown' });
-        return res.status(200).send('OK');
-      }
-
-      const userDoc = usersSnapshot.docs[0];
-      const userId = userDoc.id;
-      const userState = userDoc.data();
-
-      const wallet = userState.wallets?.find(w => w.address === walletAddress);
-
-      // Check if Wallet has Linked Bank
-      if (!wallet?.bank) {
-        await bot.telegram.sendMessage(userId, `💰 Deposit Received: ${amount} ${asset} on ${chain}.\n\nPlease link a bank account to receive your payout securely.`, { parse_mode: 'Markdown' });
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} (@${userState.username}) has received a deposit but hasn't linked a bank account.`, { parse_mode: 'Markdown' });
-        return res.status(200).send('OK');
-      }
-
-      // Fetch Current Rates
-      const currentRates = await ratesManager.getRates();
-
-      if (!currentRates || !currentRates[asset]) {
-        throw new Error(`Unsupported or unavailable rate for asset: ${asset}`);
-      }
-
-      const rate = currentRates[asset];
-      const payout = (amount * rate).toFixed(2);
-      const referenceId = generateReferenceId();
-      const bankName = wallet.bank.bankName || 'N/A';
-      const bankAccount = wallet.bank.accountNumber || 'N/A';
-      const accountName = wallet.bank.accountName || 'Valued User';
-
-      // Notify User of Successful Deposit
-      await bot.telegram.sendMessage(userId,
-        `Dear ${accountName},\n\n` +
-        `🎉 *Deposit Received*\n` +
-        `- *Amount:* ${amount} ${asset}\n` +
-        `- *Chain:* ${chain}\n` +
-        `- *Wallet Address:* \`${walletAddress}\`\n\n` +
-        `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
-        `You will receive *NGN ${payout}* in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
-        `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
-        `*Note:* If you have any questions, feel free to reach out to our support team.`,
-        { parse_mode: 'Markdown' }
-      );
-
-      // Notify Admin with Detailed Transaction Information
-      const adminDepositMessage = `⚡️ *New Deposit Received*:\n\n` +
-        `*User ID:* ${userId}\n` +
-        `*Username:* @${userState.username}\n` +
-        `*Amount Deposited:* ${amount} ${asset}\n` +
-        `*Exchange Rate:* NGN ${rate} per ${asset}\n` +
-        `*Amount to be Paid:* NGN ${payout}\n` +
-        `*Time:* ${new Date().toLocaleString()}\n` +
-        `*Bank Details:*\n` +
-        `  - *Account Name:* ${accountName}\n` +
-        `  - *Bank Name:* ${bankName}\n` +
-        `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
-        `*Chain:* ${chain}\n` +
-        `*Transaction Hash:* \`${transactionHash}\`\n` +
-        `*Reference ID:* ${referenceId}\n`;
-
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
-
-      // Store Transaction in Firestore
-      await db.collection('transactions').add({
-        userId,
-        walletAddress,
-        chain,
-        amount,
-        asset,
-        transactionHash,
-        referenceId,
-        bankDetails: wallet.bank,
-        timestamp: new Date().toISOString(),
-        status: 'Pending',
-      });
-
-      logger.info(`Transaction stored for user ${userId} (@${userState.username}): Reference ID ${referenceId}`);
-      logger.info(`User @${userState.username} (ID: ${userId}) deposited ${amount} ${asset} on ${chain}.`);
-      return res.status(200).send('OK');
-    } else {
-      // Handle Other Event Types if Necessary
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `ℹ️ *Unhandled event type:* ${eventType}`, { parse_mode: 'Markdown' });
-      return res.status(200).send('OK');
-    }
-  } catch (error) {
-    logger.error(`Error processing webhook: ${error.message}`);
-    res.status(500).send('Error');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing webhook: ${error.message}`, { parse_mode: 'Markdown' });
-  }
+bot.action('support_contact', async (ctx) => {
+  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
 });
 
 // Add the New "View Current Rates" Command
@@ -1235,7 +1117,59 @@ bot.action('support_contact', async (ctx) => {
   await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
 });
 
-// Handle Broadcast Message Input (Already Handled Earlier)
+// Function to Send Detailed Tutorials in Support Section
+const detailedTutorials = {
+  how_it_works: `
+**📘 How DirectPay Works**
+
+1. **Generate Your Wallet:**
+   - Navigate to the "💼 Generate Wallet" option.
+   - Select your preferred network (Base, Polygon, BNB Smart Chain).
+   - Receive a unique wallet address where you can receive crypto payments.
+
+2. **Link Your Bank Account:**
+   - Go to "🏦 Link Bank Account."
+   - Provide your bank details to securely receive payouts directly into your bank account.
+
+3. **Receive Payments:**
+   - Share your wallet address with clients or payment sources.
+   - Once a deposit is made, DirectPay will automatically convert the crypto to NGN at current exchange rates.
+
+4. **Monitor Transactions:**
+   - Use the "💰 Transactions" option to view all your deposit and payout activities.
+
+5. **Support & Assistance:**
+   - Access detailed support tutorials anytime from the "ℹ️ Support" section.
+
+**🔒 Security:**
+Your funds are secure with us. We utilize industry-standard encryption and security protocols to ensure your assets and information remain safe.
+
+**💬 Need Help?**
+Visit the support section or contact our support team at [@your_support_username](https://t.me/your_support_username) for any assistance.
+`,
+  transaction_guide: `
+**💰 Transaction Not Received?**
+
+If you haven't received your transaction, follow these steps to troubleshoot:
+
+1. **Verify Wallet Address:**
+   - Ensure that the sender used the correct wallet address provided by DirectPay.
+
+2. **Check Bank Linking:**
+   - Make sure your bank account is correctly linked under "💼 View Wallet."
+   - If not linked, go to "🏦 Link Bank Account" to add your bank details.
+
+3. **Monitor Transaction Status:**
+   - Use the "💰 Transactions" section to check the status of your deposit.
+   - Pending status indicates that the deposit is being processed.
+
+4. **Wait for Confirmation:**
+   - Deposits might take a few minutes to reflect depending on the network congestion.
+
+5. **Contact Support:**
+   - If the issue persists after following the above steps, reach out to our support team at [@your_support_username](https://t.me/your_support_username) with your transaction details for further assistance.
+`,
+};
 
 // Function to Send Detailed Tutorials in Support Section (Optional)
 const detailedBankTutorial = {
@@ -1308,7 +1242,145 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
   }
 });
 
-// Function to Send Detailed Tutorials in Support Section (Reused)
+// Webhook Handler for Deposits
+app.post('/webhook/blockradar', async (req, res) => {
+  try {
+    const event = req.body;
+    logger.info(`Received webhook: ${JSON.stringify(event)}`);
+    fs.appendFileSync(path.join(__dirname, 'webhook_logs.txt'), `${new Date().toISOString()} - ${JSON.stringify(event, null, 2)}\n`);
+
+    // Extract Common Event Data
+    const eventType = event?.event || 'Unknown Event';
+    const walletAddress = event?.data?.recipientAddress || null;
+    const amount = parseFloat(event?.data?.amount) || 0;
+    const asset = event?.data?.asset?.symbol || null;
+    const transactionHash = event?.data?.hash || null;
+    const chain = event?.data?.blockchain?.name || null;
+
+    if (eventType === 'deposit.success') {
+      if (!walletAddress) {
+        logger.error('Webhook missing wallet address.');
+        return res.status(400).send('Missing wallet address.');
+      }
+
+      // Find User by Wallet Address
+      const usersSnapshot = await db.collection('users').where('walletAddresses', 'array-contains', walletAddress).get();
+      if (usersSnapshot.empty) {
+        logger.warn(`No user found for wallet ${walletAddress}`);
+        // Notify Admin About the Unmatched Wallet
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No user found for wallet address: \`${walletAddress}\``, { parse_mode: 'Markdown' });
+        return res.status(200).send('OK');
+      }
+
+      const userDoc = usersSnapshot.docs[0];
+      const userId = userDoc.id;
+      const userState = userDoc.data();
+
+      const wallet = userState.wallets?.find(w => w.address === walletAddress);
+
+      // Check if Wallet has Linked Bank
+      if (!wallet?.bank) {
+        await bot.telegram.sendMessage(userId, `💰 Deposit Received: ${amount} ${asset} on ${chain}.\n\nPlease link a bank account to receive your payout securely.`, { parse_mode: 'Markdown' });
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} (@${userState.username}) has received a deposit but hasn't linked a bank account.`, { parse_mode: 'Markdown' });
+        return res.status(200).send('OK');
+      }
+
+      // Fetch Current Rates
+      const currentRates = await ratesManager.getRates();
+
+      if (!currentRates || !currentRates[asset]) {
+        throw new Error(`Unsupported or unavailable rate for asset: ${asset}`);
+      }
+
+      const rate = currentRates[asset];
+      const payout = (amount * rate).toFixed(2);
+      const referenceId = generateReferenceId();
+      const bankName = wallet.bank.bankName || 'N/A';
+      const bankAccount = wallet.bank.accountNumber || 'N/A';
+      const accountName = wallet.bank.accountName || 'Valued User';
+
+      // Notify User of Successful Deposit
+      await bot.telegram.sendMessage(userId,
+        `Dear ${accountName},\n\n` +
+        `🎉 *Deposit Received*\n` +
+        `- *Amount:* ${amount} ${asset}\n` +
+        `- *Chain:* ${chain}\n` +
+        `- *Wallet Address:* \`${walletAddress}\`\n\n` +
+        `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
+        `You will receive *NGN ${payout}* in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
+        `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
+        `*Note:* If you have any questions, feel free to reach out to our support team.`,
+        { parse_mode: 'Markdown' }
+      );
+
+      // Notify Admin with Detailed Transaction Information
+      const adminDepositMessage = `⚡️ *New Deposit Received*:\n\n` +
+        `*User ID:* ${userId}\n` +
+        `*Username:* @${userState.username}\n` +
+        `*Amount Deposited:* ${amount} ${asset}\n` +
+        `*Exchange Rate:* NGN ${rate} per ${asset}\n` +
+        `*Amount to be Paid:* NGN ${payout}\n` +
+        `*Time:* ${new Date().toLocaleString()}\n` +
+        `*Bank Details:*\n` +
+        `  - *Account Name:* ${accountName}\n` +
+        `  - *Bank Name:* ${bankName}\n` +
+        `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
+        `*Chain:* ${chain}\n` +
+        `*Transaction Hash:* \`${transactionHash}\`\n` +
+        `*Reference ID:* ${referenceId}\n`;
+
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
+
+      // Store Transaction in Firestore
+      await db.collection('transactions').add({
+        userId,
+        walletAddress,
+        chain,
+        amount,
+        asset,
+        transactionHash,
+        referenceId,
+        bankDetails: wallet.bank,
+        timestamp: new Date().toISOString(),
+        status: 'Pending',
+      });
+
+      logger.info(`Transaction stored for user ${userId} (@${userState.username}): Reference ID ${referenceId}`);
+      logger.info(`User @${userState.username} (ID: ${userId}) deposited ${amount} ${asset} on ${chain}.`);
+      return res.status(200).send('OK');
+    } else {
+      // Handle Other Event Types if Necessary
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `ℹ️ *Unhandled event type:* ${eventType}`, { parse_mode: 'Markdown' });
+      return res.status(200).send('OK');
+    }
+  } catch (error) {
+    logger.error(`Error processing webhook: ${error.message}`);
+    res.status(500).send('Error');
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing webhook: ${error.message}`, { parse_mode: 'Markdown' });
+  }
+});
+
+// Admin Panel Entry Point
+bot.action('open_admin_panel', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isAdmin(userId)) {
+    return await ctx.replyWithMarkdown('⚠️ Unauthorized access.');
+  }
+
+  // Reset Session Variables if Necessary
+  ctx.session.adminMessageId = null;
+
+  const sentMessage = await ctx.replyWithMarkdown('👨‍💼 *Admin Panel*\n\nSelect an option below:', getAdminMenu());
+  ctx.session.adminMessageId = sentMessage.message_id;
+
+  // Set a Timeout to Delete the Admin Panel Message After 5 Minutes
+  setTimeout(() => {
+    if (ctx.session.adminMessageId) {
+      ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
+      ctx.session.adminMessageId = null;
+    }
+  }, 300000); // Delete after 5 minutes
+});
 
 // Initialize RatesManager
 ratesManager.init().catch(error => {
@@ -1337,6 +1409,10 @@ async function handleBankLinking(ctx, userId, bankName) {
   await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
 }
 
+// Graceful Shutdown
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
 // Start Express Server
 const port = process.env.PORT || 4000;
 app.listen(port, () => {
@@ -1350,7 +1426,3 @@ bot.launch()
     logger.error(`Error launching bot: ${err.message}`);
     process.exit(1); // Exit the process if bot fails to launch
   });
-
-//  Shutdown
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
