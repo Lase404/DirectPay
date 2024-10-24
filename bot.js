@@ -1,6 +1,7 @@
 // DIRECTPAY-TG-BOT//
 // DEV: TOLUWALASE ADUNBI//
 //-----------------------//
+
 ///--------MODULES👇-------//
 const { Telegraf, Markup, session } = require('telegraf');
 const axios = require('axios');
@@ -9,7 +10,7 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); //  this module is correctly implemented and stored on server end
+const ratesManager = require('./rates.js'); // Ensure this module is correctly implemented
 
 // Environment Variables
 require('dotenv').config();
@@ -263,10 +264,16 @@ bot.start(async (ctx) => {
     const userId = ctx.from.id.toString();
     const username = ctx.from.username || 'No Username';
 
+    // Ensure ctx.session exists
+    if (!ctx.session) {
+      ctx.session = {};
+      logger.warn(`Session was undefined for user ${userId}. Initialized new session.`);
+    }
+
     // Fetch or initialize user state
     let userState = await getUserState(userId);
 
-    // If the user just joined, update their username
+    // Update username if changed
     if (userState.username !== username) {
       await updateUserState(userId, { username });
     }
@@ -918,7 +925,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
             `*Amount Paid:* ${data.amount} ${data.asset}\n` +
             `*Bank:* ${data.bankDetails.bankName || 'N/A'}\n` +
             `*Account Name:* ${accountName}\n` +
-            `*Account Number:* ****${data.bankDetails.accountNumber}\n` +
+            `*Account Number:* ****${data.bankDetails.accountNumber.slice(-4)}\n` +
             `*Payout (NGN):* ₦${payout}\n\n` +
             `🔹 *Chain:* ${data.chain}\n` +
             `*Date:* ${new Date(data.timestamp).toLocaleString()}\n\n` +
@@ -1419,9 +1426,21 @@ app.listen(port, () => {
   logger.info(`Webhook server running on port ${port}`);
 });
 
-// Launch Bot
-bot.launch()
-  .then(() => logger.info('DirectPay bot is live!'))
+// Launch Bot with Webhook
+const webhookURL = process.env.WEBHOOK_URL; // Ensure this is set in your .env file
+
+if (!webhookURL) {
+  logger.error('WEBHOOK_URL is not set in the environment variables.');
+  process.exit(1);
+}
+
+bot.launch({
+  webhook: {
+    domain: webhookURL,
+    hookPath: '/webhook/blockradar'
+  }
+})
+  .then(() => logger.info('DirectPay bot is live with webhooks!'))
   .catch((err) => {
     logger.error(`Error launching bot: ${err.message}`);
     process.exit(1); // Exit the process if bot fails to launch
