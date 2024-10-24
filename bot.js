@@ -9,12 +9,12 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
-const ratesManager = require('./rates.js'); 
+const ratesManager = require('./rates.js'); // Assuming you have a rates manager module
 
 // Environment Variables
 require('dotenv').config();
 
-// Winston Logger
+// Winston Logger Configuration
 const logger = winston.createLogger({
   level: 'info', // Change to 'debug' for more detailed logs
   format: winston.format.combine(
@@ -30,7 +30,7 @@ const logger = winston.createLogger({
 });
 
 // Firebase Setup
-const serviceAccount = require('./directpay.json'); // this file is secured on server end
+const serviceAccount = require('./directpay.json'); // Ensure this file is secured on the server
 admin.initializeApp({
   credential: admin.credential.cert(serviceAccount),
   databaseURL: "https://directpay9ja.firebaseio.com"
@@ -72,10 +72,6 @@ const chains = {
   }
 };
 
-// Web3 Setup for Base Testnet
-const Web3 = require('web3');
-const web3 = new Web3('https://sepolia.base.org');
-
 // Initialize Express App for Webhooks
 const app = express();
 app.use(express.json());
@@ -91,7 +87,7 @@ const stage = new Scenes.Stage();
 // Bank Linking Scene (Handles Both Linking and Editing)
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
-// Send Message Scene (Text and Images)
+// Send Message Scene (Text Only)
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
 // Define a Timeout Duration (e.g., 5 minutes)
@@ -953,7 +949,7 @@ bankLinkingScene.leave((ctx) => {
   }
 });
 
-// Send Message Scene (Text and Images)
+// Send Message Scene (Text Only)
 sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
 });
@@ -964,35 +960,52 @@ sendMessageScene.on('text', async (ctx) => {
     const userIdToMessage = ctx.message.text.trim();
     const userId = ctx.from.id.toString();
 
-    // Validate User ID (should be numeric)
-    if (!/^\d+$/.test(userIdToMessage)) {
-      return await ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a numeric User ID:');
+    // Validate User ID (should be numeric and reasonable length, e.g., Telegram IDs are typically between 5 to 15 digits)
+    if (!/^\d{5,15}$/.test(userIdToMessage)) {
+      return await ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a valid numeric User ID (5-15 digits):');
     }
 
+    // Optionally, verify if the User ID exists in your database
+    const userDoc = await db.collection('users').doc(userIdToMessage).get();
+    if (!userDoc.exists) {
+      return await ctx.replyWithMarkdown('❌ User ID not found. Please ensure the User ID is correct or try another one:');
+    }
+
+    // Proceed to Step 2
     ctx.session.sendMessageStep = 2;
     ctx.session.userIdToMessage = userIdToMessage;
     await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user:');
   } else if (ctx.session.sendMessageStep === 2) {
     // Step 2: Capture Message Content
     const userIdToMessage = ctx.session.userIdToMessage;
-    const messageContent = ctx.message.text;
+    const messageContent = ctx.message.text.trim();
+
+    if (!messageContent) {
+      return await ctx.replyWithMarkdown('❌ Message content cannot be empty. Please enter a valid message:');
+    }
 
     try {
+      // Send the message to the target user
       await bot.telegram.sendMessage(userIdToMessage, `**📩 Message from Admin:**\n\n${messageContent}`, { parse_mode: 'Markdown' });
       await ctx.replyWithMarkdown('✅ Text message sent successfully.');
-      logger.info(`Admin sent message to user ${userIdToMessage}: ${messageContent}`);
+      logger.info(`Admin ${userId} sent message to user ${userIdToMessage}: ${messageContent}`);
     } catch (error) {
       logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
       await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
     }
 
+    // Reset Session Variables and Leave the Scene
+    delete ctx.session.userIdToMessage;
+    delete ctx.session.sendMessageStep;
     ctx.scene.leave();
   }
 });
 
 // Handle Unsupported Message Types in SendMessageScene
 sendMessageScene.on('message', async (ctx) => {
-  await ctx.replyWithMarkdown('❌ Please send text messages only.');
+  if (ctx.session.sendMessageStep !== undefined) {
+    await ctx.replyWithMarkdown('❌ Please send text messages only.');
+  }
 });
 
 // Handle Scene Exit
@@ -1000,8 +1013,6 @@ sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
   delete ctx.session.sendMessageStep;
 });
-
-// Main Menu and Admin Menu Functions are defined above
 
 // Function to Send Detailed Tutorials in Support Section
 const detailedTutorials = {
@@ -1660,9 +1671,6 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
     await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
   }
 });
-
-// Admin: Send Message to User (Scene Handler)
-// Note: This has been refactored above to use a single 'text' handler within the sendMessageScene
 
 // Initialize RatesManager
 ratesManager.init().catch(error => {
