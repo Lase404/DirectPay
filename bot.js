@@ -89,7 +89,7 @@ const stage = new Scenes.Stage();
 // Bank Linking Scene (Handles Both Linking and Editing)
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
-// Send Message Scene (Text Only)
+// Send Message Scene (Handles Text and Images)
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
 // Register Scenes
@@ -930,16 +930,25 @@ bankLinkingScene.action(/edit_existing_wallet_(\d+)/, async (ctx) => {
   }, 300000); // 5 minutes timeout
 });
 
-// Send Message Scene (Text Only)
+// Send Message Scene (Handles Text and Images)
 sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
 });
 
-sendMessageScene.on('text', async (ctx) => {
+sendMessageScene.on('message', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
   if (!ctx.session.sendMessageStep) {
     // Step 1: Capture User ID
     const userIdToMessage = ctx.message.text.trim();
-    const userId = ctx.from.id.toString();
 
     // Validate User ID (should be numeric and reasonable length, e.g., Telegram IDs are typically between 5 to 15 digits)
     if (!/^\d{5,15}$/.test(userIdToMessage)) {
@@ -955,24 +964,48 @@ sendMessageScene.on('text', async (ctx) => {
     // Proceed to Step 2
     ctx.session.sendMessageStep = 2;
     ctx.session.userIdToMessage = userIdToMessage;
-    await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user:');
+    await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user. You can also attach an image (receipt) with your message.');
   } else if (ctx.session.sendMessageStep === 2) {
     // Step 2: Capture Message Content
     const userIdToMessage = ctx.session.userIdToMessage;
-    const messageContent = ctx.message.text.trim();
 
-    if (!messageContent) {
-      return await ctx.replyWithMarkdown('❌ Message content cannot be empty. Please enter a valid message:');
-    }
+    if (ctx.message.photo) {
+      // Message contains a photo
+      const photoArray = ctx.message.photo;
+      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
+      const fileId = highestResolutionPhoto.file_id;
+      const caption = ctx.message.caption || '';
 
-    try {
-      // Send the message to the target user
-      await bot.telegram.sendMessage(userIdToMessage, `**📩 Message from Admin:**\n\n${messageContent}`, { parse_mode: 'Markdown' });
-      await ctx.replyWithMarkdown('✅ Text message sent successfully.');
-      logger.info(`Admin ${userId} sent message to user ${userIdToMessage}: ${messageContent}`);
-    } catch (error) {
-      logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
+      try {
+        // Send the photo with caption to the target user
+        await bot.telegram.sendPhoto(userIdToMessage, fileId, { caption: caption, parse_mode: 'Markdown' });
+        await ctx.replyWithMarkdown('✅ Photo message sent successfully.');
+        logger.info(`Admin ${userId} sent photo message to user ${userIdToMessage}. Caption: ${caption}`);
+      } catch (error) {
+        logger.error(`Error sending photo to user ${userIdToMessage}: ${error.message}`);
+        await ctx.replyWithMarkdown('⚠️ Error sending photo. Please ensure the User ID is correct and the user has not blocked the bot.');
+      }
+    } else if (ctx.message.text) {
+      // Message contains only text
+      const messageContent = ctx.message.text.trim();
+
+      if (!messageContent) {
+        return await ctx.replyWithMarkdown('❌ Message content cannot be empty. Please enter a valid message:');
+      }
+
+      try {
+        // Send the text message to the target user
+        await bot.telegram.sendMessage(userIdToMessage, `**📩 Message from Admin:**\n\n${messageContent}`, { parse_mode: 'Markdown' });
+        await ctx.replyWithMarkdown('✅ Text message sent successfully.');
+        logger.info(`Admin ${userId} sent text message to user ${userIdToMessage}: ${messageContent}`);
+      } catch (error) {
+        logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
+        await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
+      }
+    } else {
+      // Unsupported message type
+      await ctx.replyWithMarkdown('❌ Unsupported message type. Please send text or a photo (receipt).');
+      return;
     }
 
     // Reset Session Variables and Leave the Scene
@@ -985,7 +1018,7 @@ sendMessageScene.on('text', async (ctx) => {
 // Handle Unsupported Message Types in SendMessageScene
 sendMessageScene.on('message', async (ctx) => {
   if (ctx.session.sendMessageStep !== undefined) {
-    await ctx.replyWithMarkdown('❌ Please send text messages only.');
+    await ctx.replyWithMarkdown('❌ Please send text messages or photos only.');
   }
 });
 
@@ -1403,7 +1436,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
     case 'broadcast_message':
       // Handle broadcasting messages
-      await ctx.reply('📢 Please enter the message you want to broadcast to all users:');
+      await ctx.reply('📢 Please enter the message you want to broadcast to all users. You can also attach an image (receipt) with your message:');
       // Set state to indicate awaiting broadcast message
       await updateUserState(userId, { awaitingBroadcastMessage: true });
       // Delete the admin panel message to keep chat clean
@@ -1437,7 +1470,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
 });
 
 // Handle Broadcast Message Input
-bot.on('text', async (ctx, next) => {
+bot.on('message', async (ctx, next) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -1449,12 +1482,18 @@ bot.on('text', async (ctx, next) => {
   }
 
   if (userState.awaitingBroadcastMessage) {
-    const broadcastMessage = ctx.message.text.trim();
-    if (!broadcastMessage) {
-      return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
-    }
+    const message = ctx.message;
 
-    try {
+    if (message.photo) {
+      // Broadcast with Photo
+      const photoArray = message.photo;
+      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
+      const fileId = highestResolutionPhoto.file_id;
+      const caption = message.caption || '';
+
+      let successCount = 0;
+      let failureCount = 0;
+
       const usersSnapshot = await db.collection('users').get();
       if (usersSnapshot.empty) {
         await ctx.reply('No users to broadcast to.', getAdminMenu());
@@ -1462,8 +1501,35 @@ bot.on('text', async (ctx, next) => {
         return;
       }
 
+      for (const doc of usersSnapshot.docs) {
+        const targetUserId = doc.id;
+        try {
+          await bot.telegram.sendPhoto(targetUserId, fileId, { caption: caption, parse_mode: 'Markdown' });
+          successCount++;
+        } catch (error) {
+          logger.error(`Error sending broadcast photo to user ${targetUserId}: ${error.message}`);
+          failureCount++;
+        }
+      }
+
+      await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
+      logger.info(`Admin ${userId} broadcasted photo message. Success: ${successCount}, Failed: ${failureCount}`);
+    } else if (message.text) {
+      // Broadcast with Text
+      const broadcastMessage = message.text.trim();
+      if (!broadcastMessage) {
+        return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
+      }
+
       let successCount = 0;
       let failureCount = 0;
+
+      const usersSnapshot = await db.collection('users').get();
+      if (usersSnapshot.empty) {
+        await ctx.reply('No users to broadcast to.', getAdminMenu());
+        await updateUserState(userId, { awaitingBroadcastMessage: false });
+        return;
+      }
 
       for (const doc of usersSnapshot.docs) {
         const targetUserId = doc.id;
@@ -1471,16 +1537,16 @@ bot.on('text', async (ctx, next) => {
           await bot.telegram.sendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
           successCount++;
         } catch (error) {
-          logger.error(`Error sending broadcast to user ${targetUserId}: ${error.message}`);
+          logger.error(`Error sending broadcast message to user ${targetUserId}: ${error.message}`);
           failureCount++;
         }
       }
 
       await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
       logger.info(`Admin ${userId} broadcasted message. Success: ${successCount}, Failed: ${failureCount}`);
-    } catch (error) {
-      logger.error(`Error broadcasting message from admin ${userId}: ${error.message}`);
-      await ctx.reply('⚠️ Error broadcasting message. Please try again later.', getAdminMenu());
+    } else {
+      // Unsupported message type
+      await ctx.reply('❌ Unsupported message type. Please send text or a photo (receipt).', getAdminMenu());
     }
 
     // Reset broadcast message state
@@ -1489,10 +1555,6 @@ bot.on('text', async (ctx, next) => {
 
   await next(); // Pass control to the next handler
 });
-
-// Function to Send Detailed Tutorials in Support Section (Already Defined Above)
-
-// Learn About Base and Support Sections (Already Defined Above)
 
 // Webhook Handler for Deposits
 app.post('/webhook/blockradar', async (req, res) => {
