@@ -144,7 +144,7 @@ async function verifyBankAccount(accountNumber, bankCode) {
   }
 }
 
-// Calculate Payout Based on Asset Type Using Hardcoded Rates
+// Calculate Payout Based on Asset Type Using Hardcoded Rates (Only for Webhook)
 function calculatePayout(asset, amount) {
   const hardcodedRates = { USDC: 1690, USDT: 1690, ETH: 4300000 };
   const rate = hardcodedRates[asset];
@@ -157,6 +157,27 @@ function calculatePayout(asset, amount) {
 // Generate a Unique Reference ID for Transactions
 function generateReferenceId() {
   return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+}
+
+// Function to Fetch Dynamic Rates from CoinGecko
+async function fetchDynamicRates() {
+  try {
+    const response = await axios.get('https://api.coingecko.com/api/v3/simple/price', {
+      params: {
+        ids: 'usd-coin,tether,ethereum',
+        vs_currencies: 'ngn',
+      },
+    });
+    const rates = {
+      USDC: response.data['usd-coin'].ngn,
+      USDT: response.data['tether'].ngn,
+      ETH: response.data['ethereum'].ngn,
+    };
+    return rates;
+  } catch (error) {
+    logger.error(`Error fetching dynamic rates from CoinGecko: ${error.message}`);
+    throw new Error('Failed to fetch dynamic rates.');
+  }
 }
 
 // Main Menu Dynamically Updated Based on Wallet and Bank Status
@@ -680,8 +701,7 @@ bankLinkingScene.on('text', async (ctx) => {
       ctx.session.bankData.step = 4;
 
       // Ask for Confirmation
-      await ctx.replyWithMarkdown(
-        `🏦 *Bank Account Verification*\n\n` +
+      await ctx.replyWithMarkdown(`🏦 *Bank Account Verification*\n\n` +
         `Please confirm your bank details:\n` +
         `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
         `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
@@ -783,9 +803,6 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
         accountName: bankData.accountName,
       };
 
-      // Calculate Payout using Hardcoded Rates
-      const payout = calculatePayout(selectedWallet.supportedAssets[0], selectedWallet.amount || 0); // Adjust as needed
-
       // Update User State in Firestore
       await updateUserState(userId, {
         wallets: userState.wallets,
@@ -796,10 +813,27 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       ratesMessage += `*Wallet Address:* \`${selectedWallet.address}\`\n`;
       ratesMessage += `*Supported Tokens:* ${selectedWallet.supportedAssets.join(', ')}\n\n`;
       ratesMessage += `*Current Exchange Rates:*\n`;
-      ratesMessage += `- *USDC:* ₦1690 per USDC\n`;
-      ratesMessage += `- *USDT:* ₦1690 per USDT\n`;
-      ratesMessage += `- *ETH:* ₦4300000 per ETH\n\n`;
-      ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;  // ADD THE WALLET ADDRESS TO SEND THE SUPPORTED TOKENS
+      ratesMessage += `- *USDC:* ₦${selectedWallet.supportedAssets.includes('USDC') ? 'Fetching...' : 'N/A'} per USDC\n`;
+      ratesMessage += `- *USDT:* ₦${selectedWallet.supportedAssets.includes('USDT') ? 'Fetching...' : 'N/A'} per USDT\n`;
+      ratesMessage += `- *ETH:* ₦${selectedWallet.supportedAssets.includes('ETH') ? 'Fetching...' : 'N/A'} per ETH\n\n`;
+      ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
+
+      // Fetch dynamic rates for display
+      try {
+        const dynamicRates = await fetchDynamicRates();
+        let dynamicRatesMessage = `📈 *Current Exchange Rates:*\n\n`;
+        for (const [asset, rate] of Object.entries(dynamicRates)) {
+          dynamicRatesMessage += `- *${asset}:* ₦${rate} per ${asset}\n`;
+        }
+        dynamicRatesMessage += `\n*Note:* These rates are fetched in real-time for accuracy.`;
+
+        ratesMessage = `✅ *Your bank account has been updated successfully!*\n\n` +
+          `*Wallet Address:* \`${selectedWallet.address}\`\n` +
+          `*Supported Tokens:* ${selectedWallet.supportedAssets.join(', ')}\n\n` +
+          `*Current Exchange Rates:*\n${dynamicRatesMessage}`;
+      } catch (error) {
+        ratesMessage += `\n⚠️ Unable to fetch dynamic exchange rates. Please try again later.`;
+      }
 
       await ctx.replyWithMarkdown(ratesMessage, getMainMenu(true, true));
 
@@ -1365,9 +1399,8 @@ bot.action(/admin_(.+)/, async (ctx) => {
         pendingTransactions.forEach(async (transaction) => {
           const data = transaction.data();
           try {
-            // Use Hardcoded Rates for Webhook Notifications
-            const hardcodedRates = { USDC: 1690, USDT: 1690, ETH: 4300000 };
-            const payout = (data.amount * (hardcodedRates[data.asset] || 0)).toFixed(2);
+            // **Use Hardcoded Rates for Webhook Notifications**
+            const payout = calculatePayout(data.asset, data.amount); // Using hardcoded rates
 
             // Safely Access accountName
             const accountName = data.bankDetails && data.bankDetails.accountName ? data.bankDetails.accountName : 'Valued User';
@@ -1469,91 +1502,138 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
-// Handle Broadcast Message Input
-bot.on('message', async (ctx, next) => {
+// Handler for Selecting a Transaction to Mark as Paid
+bot.action(/select_tx_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  let userState;
+  const transactionId = ctx.match[1];
+
+  // Acknowledge the callback to remove loading state
+  await ctx.answerCbQuery();
+
   try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred. Please try again later.');
-    return;
-  }
+    const transactionDoc = await db.collection('transactions').doc(transactionId).get();
 
-  if (userState.awaitingBroadcastMessage) {
-    const message = ctx.message;
-
-    if (message.photo) {
-      // Broadcast with Photo
-      const photoArray = message.photo;
-      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
-      const fileId = highestResolutionPhoto.file_id;
-      const caption = message.caption || '';
-
-      let successCount = 0;
-      let failureCount = 0;
-
-      const usersSnapshot = await db.collection('users').get();
-      if (usersSnapshot.empty) {
-        await ctx.reply('No users to broadcast to.', getAdminMenu());
-        await updateUserState(userId, { awaitingBroadcastMessage: false });
-        return;
-      }
-
-      for (const doc of usersSnapshot.docs) {
-        const targetUserId = doc.id;
-        try {
-          await bot.telegram.sendPhoto(targetUserId, fileId, { caption: caption, parse_mode: 'Markdown' });
-          successCount++;
-        } catch (error) {
-          logger.error(`Error sending broadcast photo to user ${targetUserId}: ${error.message}`);
-          failureCount++;
-        }
-      }
-
-      await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
-      logger.info(`Admin ${userId} broadcasted photo message. Success: ${successCount}, Failed: ${failureCount}`);
-    } else if (message.text) {
-      // Broadcast with Text
-      const broadcastMessage = message.text.trim();
-      if (!broadcastMessage) {
-        return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
-      }
-
-      let successCount = 0;
-      let failureCount = 0;
-
-      const usersSnapshot = await db.collection('users').get();
-      if (usersSnapshot.empty) {
-        await ctx.reply('No users to broadcast to.', getAdminMenu());
-        await updateUserState(userId, { awaitingBroadcastMessage: false });
-        return;
-      }
-
-      for (const doc of usersSnapshot.docs) {
-        const targetUserId = doc.id;
-        try {
-          await bot.telegram.sendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
-          successCount++;
-        } catch (error) {
-          logger.error(`Error sending broadcast message to user ${targetUserId}: ${error.message}`);
-          failureCount++;
-        }
-      }
-
-      await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
-      logger.info(`Admin ${userId} broadcasted message. Success: ${successCount}, Failed: ${failureCount}`);
-    } else {
-      // Unsupported message type
-      await ctx.reply('❌ Unsupported message type. Please send text or a photo (receipt).', getAdminMenu());
+    if (!transactionDoc.exists) {
+      await ctx.replyWithMarkdown('⚠️ Transaction not found.');
+      return;
     }
 
-    // Reset broadcast message state
-    await updateUserState(userId, { awaitingBroadcastMessage: false });
-  }
+    const tx = transactionDoc.data();
 
-  await next(); // Pass control to the next handler
+    if (tx.status === 'Paid') {
+      await ctx.replyWithMarkdown('⚠️ This transaction is already marked as paid.');
+      return;
+    }
+
+    // Confirm with Admin before marking as paid
+    await ctx.replyWithMarkdown(`🔖 *Mark Transaction as Paid*\n\n` +
+      `*Reference ID:* \`${tx.referenceId}\`\n` +
+      `*User ID:* ${tx.userId}\n` +
+      `*Amount Deposited:* ${tx.amount} ${tx.asset}\n` +
+      `*Payout:* NGN ${tx.payout}\n` +
+      `*Bank Paid To:* ${tx.bankDetails?.bankName || 'N/A'} (${tx.bankDetails?.accountNumber || 'N/A'})\n` +
+      `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n` +
+      `Are you sure you want to mark this transaction as paid?`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes, Mark as Paid', `confirm_mark_paid_${transactionId}`)],
+        [Markup.button.callback('❌ No, Cancel', 'cancel_mark_paid')]
+      ])
+    );
+
+    logger.info(`Admin ${userId} selected transaction ${tx.referenceId} for marking as paid.`);
+  } catch (error) {
+    logger.error(`Error fetching transaction ${transactionId} for admin ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while fetching the transaction.');
+  }
+});
+
+// Confirm Marking Transaction as Paid
+bot.action(/confirm_mark_paid_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const transactionId = ctx.match[1];
+
+  // Acknowledge the callback to remove loading state
+  await ctx.answerCbQuery();
+
+  try {
+    const transactionDoc = await db.collection('transactions').doc(transactionId).get();
+
+    if (!transactionDoc.exists) {
+      await ctx.replyWithMarkdown('⚠️ Transaction not found.');
+      return;
+    }
+
+    const tx = transactionDoc.data();
+
+    if (tx.status === 'Paid') {
+      await ctx.replyWithMarkdown('⚠️ This transaction is already marked as paid.');
+      return;
+    }
+
+    // Update transaction status to 'Paid'
+    await db.collection('transactions').doc(transactionId).update({ status: 'Paid' });
+
+    // Notify User about the payout
+    await bot.telegram.sendMessage(tx.userId, `🎉 *Transaction Paid*\n\n` +
+      `*Reference ID:* \`${tx.referenceId}\`\n` +
+      `*Amount Paid:* ${tx.amount} ${tx.asset}\n` +
+      `*Payout:* NGN ${tx.payout}\n` +
+      `*Bank:* ${tx.bankDetails.bankName}\n` +
+      `*Account Holder:* ${tx.bankDetails.accountName}\n` +
+      `*Account Number:* ****${tx.bankDetails.accountNumber.slice(-4)}\n\n` +
+      `Your payout has been successfully transferred to your bank account. Thank you for using *DirectPay*!`,
+      { parse_mode: 'Markdown' }
+    );
+
+    // Notify Admin about the successful payout
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ *Transaction Marked as Paid*\n\n` +
+      `*Reference ID:* \`${tx.referenceId}\`\n` +
+      `*User ID:* ${tx.userId}\n` +
+      `*Amount Paid:* ${tx.amount} ${tx.asset}\n` +
+      `*Payout:* NGN ${tx.payout}\n` +
+      `*Bank:* ${tx.bankDetails.bankName}\n` +
+      `*Account Holder:* ${tx.bankDetails.accountName}\n` +
+      `*Account Number:* ****${tx.bankDetails.accountNumber.slice(-4)}\n\n` +
+      `*Admin:* ${userId} has marked this transaction as paid.`,
+      { parse_mode: 'Markdown' }
+    );
+
+    await ctx.replyWithMarkdown('✅ Transaction has been marked as paid.');
+    logger.info(`Admin ${userId} marked transaction ${tx.referenceId} as paid.`);
+  } catch (error) {
+    logger.error(`Error marking transaction ${transactionId} as paid for admin ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while updating the transaction.');
+  }
+});
+
+// Cancel Marking Transaction as Paid
+bot.action('cancel_mark_paid', async (ctx) => {
+  await ctx.replyWithMarkdown('❌ Transaction marking has been canceled.');
+  ctx.answerCbQuery();
+  logger.info(`Admin canceled marking transaction as paid.`);
+});
+
+// Function to Send Current Rates to Users with Dynamic Rates
+bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
+  try {
+    const dynamicRates = await fetchDynamicRates();
+
+    if (!dynamicRates || Object.keys(dynamicRates).length === 0) {
+      throw new Error('Rates data is unavailable.');
+    }
+
+    let ratesMessage = `📈 *Current Exchange Rates:*\n\n`;
+    for (const [asset, rate] of Object.entries(dynamicRates)) {
+      ratesMessage += `- *${asset}:* ₦${rate} per ${asset}\n`;
+    }
+    ratesMessage += `\n*Note:* These rates are fetched in real-time for accuracy.`;
+
+    await ctx.replyWithMarkdown(ratesMessage);
+    logger.info(`User ${ctx.from.username || ctx.from.first_name} (${ctx.from.id}) viewed current rates.`);
+  } catch (error) {
+    logger.error(`Error fetching current rates: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
+  }
 });
 
 // Webhook Handler for Deposits
@@ -1599,14 +1679,8 @@ app.post('/webhook/blockradar', async (req, res) => {
         return res.status(200).send('OK');
       }
 
-      // Use Hardcoded Rates for Webhook Notifications
-      const hardcodedRates = { USDC: 1690, USDT: 1690, ETH: 4300000 };
-      const rate = hardcodedRates[asset];
-      if (!rate) {
-        throw new Error(`Unsupported asset received: ${asset}`);
-      }
-
-      const payout = (amount * rate).toFixed(2);
+      // **Use Hardcoded Rates for Webhook Calculations**
+      const payout = calculatePayout(asset, amount);
       const referenceId = generateReferenceId();
       const bankName = wallet.bank.bankName || 'N/A';
       const bankAccount = wallet.bank.accountNumber || 'N/A';
@@ -1619,7 +1693,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         `- *Amount:* ${amount} ${asset}\n` +
         `- *Chain:* ${chain}\n` +
         `- *Wallet Address:* \`${walletAddress}\`\n\n` +
-        `We are processing your transaction at a rate of *NGN ${rate}* per ${asset}.\n` +
+        `We are processing your transaction at a rate of *NGN ${payout / amount}* per ${asset}.\n` +
         `You will receive *NGN ${payout}* in your ${bankName} account ending with ****${bankAccount.slice(-4)} shortly.\n\n` +
         `Thank you for using *DirectPay*. We appreciate your trust in our services.\n\n` +
         `*Note:* If you have any questions, feel free to reach out to our support team.`,
@@ -1630,7 +1704,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
         `*User ID:* ${userId}\n` +
         `*Amount Deposited:* ${amount} ${asset}\n` +
-        `*Exchange Rate:* NGN ${rate} per ${asset}\n` +
+        `*Exchange Rate:* NGN ${(payout / amount).toFixed(2)} per ${asset}\n` +
         `*Amount to be Paid:* NGN ${payout}\n` +
         `*Time:* ${new Date().toLocaleString()}\n` +
         `*Bank Details:*\n` +
@@ -1670,29 +1744,6 @@ app.post('/webhook/blockradar', async (req, res) => {
     logger.error(`Error processing webhook: ${error.message}`);
     res.status(500).send('Error');
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing webhook: ${error.message}`);
-  }
-});
-
-// Add the New "View Current Rates" Command
-bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
-  try {
-    // Since we are using hardcoded rates, you can define them here
-    const currentRates = { USDC: 1690, USDT: 1690, ETH: 4300000 };
-
-    if (!currentRates) {
-      throw new Error('Rates data is unavailable.');
-    }
-
-    let ratesMessage = `📈 *Current Exchange Rates:*\n\n`;
-    ratesMessage += `- *USDC:* ₦${currentRates.USDC} per USDC\n`;
-    ratesMessage += `- *USDT:* ₦${currentRates.USDT} per USDT\n`;
-    ratesMessage += `- *ETH:* ₦${currentRates.ETH} per ETH\n\n`;
-    ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
-
-    await ctx.replyWithMarkdown(ratesMessage);
-  } catch (error) {
-    logger.error(`Error fetching current rates: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
   }
 });
 
