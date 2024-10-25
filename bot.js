@@ -44,9 +44,9 @@ const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(i
 const MAX_WALLETS = 5;
 
 // Telegram Webhook Configuration
-const WEBHOOK_PATH = process.env.WEBHOOK_PATH ||
+const WEBHOOK_PATH = process.env.WEBHOOK_PATH || '/webhook'; 
 const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN;
-const TELEGRAM_WEBHOOK_URL = `${WEBHOOK_DOMAIN}${TELEGRAM_WEBHOOK_PATH}`;
+const TELEGRAM_WEBHOOK_URL = `${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`;
 
 // Multi-Chain Wallet Configuration with Blockradar's API
 const chains = {
