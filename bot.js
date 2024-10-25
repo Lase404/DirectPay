@@ -351,7 +351,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
+    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets (testnet only):** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
 
     // **Automatically initiate bank linking for the newly created wallet**
     const newWalletIndex = userState.wallets.length - 1; // Index of the newly added wallet
