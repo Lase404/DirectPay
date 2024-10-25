@@ -1810,52 +1810,6 @@ bot.on('callback_query', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// Function to Send "How It Works" Pages
-async function sendHowItWorksPage(ctx, pageIndex) {
-  const page = howItWorksPages[pageIndex];
-  const totalPages = howItWorksPages.length;
-
-  const buttons = [];
-
-  if (pageIndex > 0) {
-    buttons.push(Markup.button.callback('⬅️ Back', `how_it_works_back_${pageIndex - 1}`));
-  }
-
-  if (pageIndex < totalPages - 1) {
-    buttons.push(Markup.button.callback('Next ➡️', `how_it_works_next_${pageIndex + 1}`));
-  }
-
-  buttons.push(Markup.button.callback('🔚 Exit', 'how_it_works_exit'));
-
-  const inlineKeyboard = Markup.inlineKeyboard([buttons]);
-
-  if (pageIndex === 0) {
-    // Send the first page
-    const sentMessage = await ctx.replyWithMarkdown(`**${page.title}**\n\n${page.text}`, inlineKeyboard);
-    // Store the message ID in session
-    ctx.session.howItWorksMessageId = sentMessage.message_id;
-  } else {
-    try {
-      // Edit the existing message to show the new page
-      await ctx.editMessageText(`**${page.title}**\n\n${page.text}`, {
-        parse_mode: 'Markdown',
-        reply_markup: inlineKeyboard.reply_markup,
-      });
-    } catch (error) {
-      // If editing message fails, send a new message and update session
-      const sentMessage = await ctx.replyWithMarkdown(`**${page.title}**\n\n${page.text}`, inlineKeyboard);
-      ctx.session.howItWorksMessageId = sentMessage.message_id;
-    }
-  }
-
-  // Optionally, set a timeout to delete the message after 2 minutes
-  setTimeout(() => {
-    if (ctx.session.howItWorksMessageId) {
-      ctx.deleteMessage(ctx.session.howItWorksMessageId).catch(() => {});
-      ctx.session.howItWorksMessageId = null;
-    }
-  }, 120000); // Delete after 2 minutes
-}
 
 // Webhook Handler for Deposits
 app.post('/webhook/blockradar', async (req, res) => {
