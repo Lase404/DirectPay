@@ -83,7 +83,7 @@ app.use(express.json());
 // Initialize Telegraf Bot with Session and Stage Middleware
 const bot = new Telegraf(BOT_TOKEN);
 
-// Create a New Stage for Admin Actions and Bank Linking Using Telegraf Scenes
+// Stage for Admin Actions and Bank Linking Using Telegraf Scenes
 const stage = new Scenes.Stage();
 
 // Bank Linking Scene (Handles Both Linking and Editing)
@@ -92,9 +92,15 @@ const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 // Send Message Scene (Handles Text and Images)
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
+// Payment Request Scene (Handles Payment Requests)
+const paymentRequestScene = new Scenes.BaseScene('payment_request_scene');
+
+
 // Register Scenes
 stage.register(bankLinkingScene);
 stage.register(sendMessageScene);
+stage.register(paymentRequestScene);
+
 
 // Use Session Middleware
 bot.use(session());
@@ -185,7 +191,7 @@ const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
     [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', hasBankLinked ? '🏦 Edit Bank Account' : '🏦 Link Bank Account'],
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
-    ['📈 View Current Rates'], // New button added
+    ['📈 View Current Rates', '📤 Send Payment Request'],
   ]).resize();
 
 // Admin Menu
@@ -433,6 +439,292 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   ]);
 
   await ctx.replyWithMarkdown(walletMessage, inlineButtons);
+});
+
+// Handle "📤 Send Payment Request" Button
+bot.hears(/📤\s*Send Payment Request/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  if (userState.wallets.length === 0) {
+    return await ctx.replyWithMarkdown('⚠️ You have no wallets linked. Please generate a wallet first.', getMainMenu(false, false));
+  }
+
+  // Check if a payment request process is already in progress
+  if (ctx.session.isPaymentRequesting) {
+    return await ctx.replyWithMarkdown('⚠️ You are already in the process of sending a payment request. Please complete the ongoing process before initiating a new one.');
+  }
+
+  // Initiate the payment request scene
+  await ctx.scene.enter('payment_request_scene');
+});
+
+// Payment Request Scene Entry
+paymentRequestScene.enter(async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+
+  if (userState.wallets.length === 0) {
+    await ctx.replyWithMarkdown('⚠️ You have no wallets linked. Please generate a wallet first.', getMainMenu(false, false));
+    return ctx.scene.leave();
+  }
+
+  // Set the flag to indicate payment request process is active
+  ctx.session.isPaymentRequesting = true;
+  ctx.session.paymentRequest = {}; // Initialize payment request data
+
+  // Prompt user to enter the recipient's Telegram username
+  await ctx.replyWithMarkdown('📤 *Send Payment Request*\n\nPlease enter the *Telegram username* of the person you want to send the invoice to (without @):');
+});
+
+// Payment Request Scene Message Handler
+paymentRequestScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+
+  // Check which step the user is in
+  if (!ctx.session.paymentRequest.step) {
+    // Step 1: Enter Recipient Username
+    const inputUsername = ctx.message.text.trim().replace('@', '');
+    if (!inputUsername) {
+      return await ctx.replyWithMarkdown('❌ Username cannot be empty. Please enter a valid Telegram username (without @):');
+    }
+
+    // Attempt to fetch recipient's chat info
+    try {
+      const recipient = await bot.telegram.getChat(`@${inputUsername}`);
+      const recipientId = recipient.id.toString();
+      const recipientName = `${recipient.first_name} ${recipient.last_name || ''}`.trim();
+      const recipientUsername = recipient.username || 'N/A';
+
+      // Check if recipient exists in Firestore (has started the bot)
+      const recipientDoc = await db.collection('users').doc(recipientId).get();
+      if (!recipientDoc.exists) {
+        await ctx.replyWithMarkdown(
+          `⚠️ *User @${inputUsername} hasn't started the DirectPay bot yet.*\n` +
+          `Please ask them to start the bot by clicking [here](https://t.me/YourBotUsername?start=invite_${userId}).`,
+          { parse_mode: 'Markdown', disable_web_page_preview: true }
+        );
+        ctx.session.isPaymentRequesting = false;
+        return ctx.scene.leave();
+      }
+
+      // Store recipient details
+      ctx.session.paymentRequest.recipientId = recipientId;
+      ctx.session.paymentRequest.recipientName = recipientName;
+      ctx.session.paymentRequest.recipientUsername = recipientUsername;
+      ctx.session.paymentRequest.step = 2;
+
+      // Ask for the amount to request
+      await ctx.replyWithMarkdown(
+        `🔄 *Recipient Selected:*\n\n*Name:* ${recipientName}\n*Username:* @${recipientUsername}\n\nPlease enter the amount you wish to request in NGN:`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('🔄 Change Recipient', 'change_recipient')],
+          [Markup.button.callback('❌ Cancel Payment Request', 'cancel_payment_request')],
+        ])
+      );
+    } catch (error) {
+      logger.error(`Error fetching user info for username @${inputUsername}: ${error.message}`);
+
+      if (error.code === 403) {
+        // Bot was blocked by the user or user hasn't started the bot
+        await ctx.replyWithMarkdown(
+          `⚠️ *Unable to find user @${inputUsername}.*\n` +
+          `They might have blocked the bot or haven't started it.\n` +
+          `Please ensure they have started the DirectPay bot before sending a payment request.`
+        );
+      } else if (error.code === 404) {
+        // User not found
+        await ctx.replyWithMarkdown(
+          `❌ *User @${inputUsername} not found.*\n` +
+          `Please check the username and try again.`
+        );
+      } else {
+        // Other errors
+        await ctx.replyWithMarkdown('⚠️ An unexpected error occurred. Please try again later.');
+      }
+
+      ctx.session.isPaymentRequesting = false;
+      return ctx.scene.leave();
+    }
+  } else if (ctx.session.paymentRequest.step === 2) {
+    // Step 2: Enter Amount
+    const amountInput = ctx.message.text.trim();
+    const amount = parseFloat(amountInput);
+
+    if (isNaN(amount) || amount <= 0) {
+      return await ctx.replyWithMarkdown('❌ Invalid amount. Please enter a positive number for the amount in NGN:');
+    }
+
+    ctx.session.paymentRequest.amount = amount;
+    ctx.session.paymentRequest.step = 3;
+
+    // Display confirmation summary
+    await ctx.replyWithMarkdown(
+      `📄 *Payment Request Summary:*\n\n` +
+      `*Recipient:* ${ctx.session.paymentRequest.recipientName} (@${ctx.session.paymentRequest.recipientUsername})\n` +
+      `*Amount:* ₦${amount.toFixed(2)}\n\n` +
+      `Do you want to confirm this payment request?`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Confirm', 'confirm_payment_request')],
+        [Markup.button.callback('❌ Cancel', 'cancel_payment_request')],
+      ])
+    );
+  }
+});
+
+// Change Recipient
+paymentRequestScene.action('change_recipient', async (ctx) => {
+  await ctx.replyWithMarkdown('🔄 *Change Recipient*\n\nPlease enter the new Telegram username of the person you want to send the invoice to (without @):');
+  ctx.session.paymentRequest.step = 1;
+  ctx.answerCbQuery();
+});
+
+// Confirm Payment Request
+paymentRequestScene.action('confirm_payment_request', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const paymentRequest = ctx.session.paymentRequest;
+
+  // Generate a unique reference ID
+  const referenceId = generateReferenceId();
+  paymentRequest.referenceId = referenceId;
+  paymentRequest.status = 'Awaiting Deposit'; // Initial status
+
+  // Store the payment request in Firestore
+  try {
+    await db.collection('paymentRequests').add({
+      requesterId: userId,
+      requesterName: ctx.from.first_name + (ctx.from.last_name ? ' ' + ctx.from.last_name : ''),
+      recipientId: paymentRequest.recipientId,
+      recipientUsername: paymentRequest.recipientUsername,
+      amount: paymentRequest.amount,
+      status: paymentRequest.status,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      referenceId: referenceId,
+    });
+  } catch (error) {
+    logger.error(`Error storing payment request for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Failed to create payment request. Please try again later.');
+    ctx.session.isPaymentRequesting = false;
+    return ctx.scene.leave();
+  }
+
+  // Notify the recipient
+  try {
+    await bot.telegram.sendMessage(paymentRequest.recipientId,
+      `📄 *Payment Request Received*\n\n` +
+      `*From:* ${paymentRequest.requesterName} (@${ctx.from.username || 'N/A'})\n` +
+      `*Amount:* ₦${paymentRequest.amount.toFixed(2)}\n` +
+      `*Reference ID:* ${referenceId}\n\n` +
+      `Please confirm if you have sent the payment.`,
+      {
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Confirm Payment Sent', `confirm_payment_${referenceId}`)],
+          [Markup.button.callback('❌ Cancel Payment Request', 'cancel_payment_request')],
+        ]),
+      }
+    );
+
+    // Notify admin about the new payment request
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `📄 *New Payment Request*\n\n` +
+      `*Reference ID:* ${referenceId}\n` +
+      `*Requester:* ${paymentRequest.requesterName} (@${ctx.from.username || 'N/A'})\n` +
+      `*Recipient:* @${paymentRequest.recipientUsername || 'N/A'}\n` +
+      `*Amount:* ₦${paymentRequest.amount.toFixed(2)}\n` +
+      `*Timestamp:* ${new Date().toLocaleString()}`,
+      { parse_mode: 'Markdown' }
+    );
+
+    await ctx.replyWithMarkdown('📄 *Payment Request Sent Successfully!*', getMainMenu(true, true));
+    logger.info(`User ${userId} requested ₦${paymentRequest.amount} from user ${paymentRequest.recipientId} with Reference ID ${referenceId}`);
+  } catch (error) {
+    logger.error(`Error notifying recipient ${paymentRequest.recipientId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Failed to notify the recipient. They might have blocked the bot or haven\'t started it yet.');
+    ctx.session.isPaymentRequesting = false;
+    return ctx.scene.leave();
+  }
+
+  // Clear the session and exit the scene
+  ctx.session.isPaymentRequesting = false;
+  delete ctx.session.paymentRequest;
+  ctx.scene.leave();
+  ctx.answerCbQuery();
+});
+
+// Cancel Payment Request
+paymentRequestScene.action('cancel_payment_request', async (ctx) => {
+  await ctx.replyWithMarkdown('❌ *Payment Request Canceled.*');
+  ctx.session.isPaymentRequesting = false;
+  delete ctx.session.paymentRequest;
+  ctx.scene.leave();
+  ctx.answerCbQuery();
+});
+// Handle Recipient's Confirmation of Payment Sent
+bot.action(/confirm_payment_(.+)/, async (ctx) => {
+  const referenceId = ctx.match[1];
+  const recipientId = ctx.from.id.toString();
+
+  // Update the payment request status in Firestore
+  try {
+    const paymentRequests = await db.collection('paymentRequests')
+      .where('referenceId', '==', referenceId)
+      .where('recipientId', '==', recipientId)
+      .get();
+
+    if (paymentRequests.empty) {
+      await ctx.replyWithMarkdown('⚠️ Payment request not found or already confirmed.');
+      return ctx.answerCbQuery();
+    }
+
+    const paymentRequestDoc = paymentRequests.docs[0];
+    const paymentRequestData = paymentRequestDoc.data();
+
+    // Update the status
+    await paymentRequestDoc.ref.update({ status: 'Payment Sent' });
+
+    // Notify the requester
+    await bot.telegram.sendMessage(paymentRequestData.requesterId,
+      `✅ *Payment Sent Confirmation*\n\n` +
+      `*Recipient:* @${paymentRequestData.recipientUsername}\n` +
+      `*Amount:* ₦${paymentRequestData.amount.toFixed(2)}\n` +
+      `*Reference ID:* ${referenceId}\n\n` +
+      `The recipient has confirmed that the payment has been sent.`,
+      { parse_mode: 'Markdown' }
+    );
+
+    // Notify the recipient
+    await ctx.replyWithMarkdown('✅ *You have confirmed that the payment has been sent.*');
+
+    // Notify admin
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID,
+      `✅ *Payment Sent Confirmation*\n\n` +
+      `*Reference ID:* ${referenceId}\n` +
+      `*Requester:* @${paymentRequestData.requesterUsername}\n` +
+      `*Recipient:* @${paymentRequestData.recipientUsername}\n` +
+      `*Amount:* ₦${paymentRequestData.amount.toFixed(2)}\n` +
+      `*Timestamp:* ${new Date().toLocaleString()}`,
+      { parse_mode: 'Markdown' }
+    );
+
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error confirming payment for reference ID ${referenceId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while confirming the payment. Please try again later.');
+    ctx.answerCbQuery();
+  }
+});
+
+// Payment Request Scene Leave Handler
+paymentRequestScene.leave((ctx) => {
+  ctx.session.isPaymentRequesting = false;
+  delete ctx.session.paymentRequest;
 });
 
 // Handler for "Create New Wallet" Button
@@ -1854,7 +2146,6 @@ app.post('/webhook/blockradar', async (req, res) => {
         return res.status(200).send('OK');
       }
 
-  
       const payout = calculatePayout(asset, amount);
       const referenceId = generateReferenceId();
       const bankName = wallet.bank.bankName || 'N/A';
@@ -1908,6 +2199,40 @@ app.post('/webhook/blockradar', async (req, res) => {
       });
 
       logger.info(`Transaction stored for user ${userId}: Reference ID ${referenceId}`);
+
+     
+      const paymentRequestsSnapshot = await db.collection('paymentRequests')
+        .where('recipientId', '==', userId)
+        .where('status', '==', 'Awaiting Deposit')
+        .orderBy('timestamp', 'desc')
+        .limit(1)
+        .get();
+
+      if (!paymentRequestsSnapshot.empty) {
+        const paymentRequestDoc = paymentRequestsSnapshot.docs[0];
+        const paymentRequestData = paymentRequestDoc.data();
+
+       
+        await paymentRequestDoc.ref.update({ status: 'Deposit Confirmed' });
+        
+        await bot.telegram.sendMessage(paymentRequestData.requesterId,
+          `🎉 *Payment Received!*\n\n` +
+          `*Recipient:* @${paymentRequestData.recipientUsername}\n` +
+          `*Amount:* ₦${paymentRequestData.amount.toFixed(2)}\n` +
+          `*Reference ID:* ${paymentRequestData.referenceId}\n\n` +
+          `The deposit corresponding to your payment request has been confirmed.`,
+          { parse_mode: 'Markdown' }
+        );
+
+        // **Notify the recipient**
+        await bot.telegram.sendMessage(userId,
+          `✅ *Deposit Confirmed*\n\n` +
+          `Your deposit of *${amount} ${asset}* has been confirmed and linked to the payment request from *@${paymentRequestData.requesterUsername}*.\n\n` +
+          `*Reference ID:* ${paymentRequestData.referenceId}\n` +
+          `Thank you for using DirectPay!`,
+          { parse_mode: 'Markdown' }
+        );
+      }
 
       return res.status(200).send('OK');
     } else {
