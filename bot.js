@@ -92,10 +92,10 @@ setInterval(fetchExchangeRates, 300000); // 5 minutes
 // Multi-Chain Wallet Configuration with Blockradar's API
 const chains = {
   Base: {
-    id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
+    id: '83eeb82c-bf7b-4e70-bdd0-ab87b4fbcc2d', // Updated to match apiUrl
     key: 'i76FL4yzaRuYXPUzskM0Piodo5r08iJ1FUTgpuiylSDqYIVlcdEcPv5df3kbTvw',
     address: '0xfBeEC99b731B97271FF31E518c84d4a0E24B1118',
-    apiUrl: 'https://api.blockradar.co/v1/wallets/83eeb82c-bf7b-4e70-bdd0-ab87b4fbcc2d/addresses',
+    apiUrl: 'https://api.blockradar.co/v1/wallets/83eeb82c-bf7b-4e70-bdd0-ab87b4fbcc2d/addresses', // Ensure walletId matches 'id'
     supportedAssets: ['USDC', 'USDT'],
     network: 'Base'
   },
@@ -298,22 +298,25 @@ bot.start(async (ctx) => {
   }
 });
 
-// Generate Wallet Function
-async function generateWallet(chain) {
+// Generate Address Function (Renamed from generateWallet)
+async function generateAddress(chain) {
   try {
     const response = await axios.post(
       chains[chain].apiUrl,
-      { name: `DirectPay_User_Wallet_${chain}` },
+      { name: `DirectPay_User_Address_${chain}` }, // Renamed for clarity
       { headers: { 'x-api-key': chains[chain].key } }
     );
+    if (response.data.statusCode !== 200) {
+      throw new Error(`Unexpected status code: ${response.data.statusCode}`);
+    }
     const walletAddress = response.data.data.address;
     if (!walletAddress) {
-      throw new Error('Wallet address not returned from Blockradar.');
+      throw new Error('Address not returned from Blockradar.');
     }
     return walletAddress;
   } catch (error) {
-    logger.error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
-    throw new Error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
+    logger.error(`Error generating address for ${chain}: ${error.response ? JSON.stringify(error.response.data) : error.message}`);
+    throw new Error(`Error generating address for ${chain}: ${error.response ? error.response.data.message : error.message}`);
   }
 }
 
@@ -362,7 +365,7 @@ async function createPaycrestOrder(wallet, ngnAmount, rate) {
     // Return the order data
     return orderResp.data.data; // Contains id, amount, token, network, receiveAddress, etc.
   } catch (err) {
-    logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
+    logger.error(`Error creating Paycrest order: ${err.response ? JSON.stringify(err.response.data) : err.message}`);
     throw new Error('Failed to create Paycrest order.');
   }
 }
@@ -402,13 +405,13 @@ async function withdrawFromBlockradar(chain, assetId, address, amount, reference
     }
     return data;
   } catch (error) {
-    logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
+    logger.error(`Error withdrawing from Blockradar: ${error.response ? JSON.stringify(error.response.data) : error.message}`);
     throw error;
   }
 }
 
-// Wallet Generation Handler
-bot.action(/generate_wallet_(.+)/, async (ctx) => {
+// Create Address Button Handler
+bankLinkingScene.action(/generate_wallet_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
   const selectedChainKey = ctx.match[1]; // 'Base', 'Polygon', 'BNB Smart Chain'
 
@@ -423,11 +426,11 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   // Acknowledge the Callback to Remove Loading State
   await ctx.answerCbQuery();
 
-  // Inform User That Wallet Generation Has Started
-  const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet for *${chain}*... Please wait a moment.`);
+  // Inform User That Address Generation Has Started
+  const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Address for *${chain}*... Please wait a moment.`);
 
   try {
-    const walletAddress = await generateWallet(chain);
+    const walletAddress = await generateAddress(chain);
 
     // Fetch Updated User State
     const userState = await getUserState(userId);
@@ -438,7 +441,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
       return;
     }
 
-    // Add the New Wallet to User State
+    // Add the New Address to User State
     userState.wallets.push({
       address: walletAddress || 'N/A',
       chain: chain || 'N/A',
@@ -458,9 +461,9 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
+    await ctx.replyWithMarkdown(`✅ Success! Your new address has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
 
-    // **Automatically initiate bank linking for the newly created wallet**
+    // **Automatically initiate bank linking for the newly created address**
     const newWalletIndex = userState.wallets.length - 1; // Index of the newly added wallet
     ctx.session.walletIndex = newWalletIndex;
     ctx.session.processType = 'linking'; // Indicate that this is a linking process
@@ -471,17 +474,17 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     // Delete the Generating Message
     await ctx.deleteMessage(generatingMessage.message_id);
 
-    // Log Wallet Generation
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId} on ${chain}: ${walletAddress}`, { parse_mode: 'Markdown' });
-    logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
+    // Log Address Generation
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Address generated for user ${userId} on ${chain}: ${walletAddress}`, { parse_mode: 'Markdown' });
+    logger.info(`Address generated for user ${userId} on ${chain}: ${walletAddress}`);
   } catch (error) {
-    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
+    logger.error(`Error generating address for user ${userId} on ${chain}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ There was an issue generating your address. Please try again later.');
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating address for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
   }
 });
 
-// Generate Wallet Button Handler
+// Generate Wallet Button Handler (Updated to use generateAddress)
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
@@ -541,7 +544,7 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   await ctx.replyWithMarkdown(walletMessage, inlineButtons);
 });
 
-// Handler for "Create New Wallet" Button
+// Create New Wallet Button Handler
 bot.action('create_new_wallet', async (ctx) => {
   // Check if a bank linking process is already in progress
   if (ctx.session.isBankLinking) {
