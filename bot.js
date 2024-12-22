@@ -93,7 +93,7 @@ setInterval(fetchExchangeRates, 300000); // 5 minutes
 const chains = {
   Base: {
     id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
-    key: 'i76FL4yzaRuYXPUzskM0Piodo5r08iJ1FUTgpuiylSDqYIVlcdEcPv5df3kbTvw',
+    key: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
     address: '0xfBeEC99b731B97271FF31E518c84d4a0E24B1118',
     apiUrl: 'https://api.blockradar.co/v1/wallets/83eeb82c-bf7b-4e70-bdd0-ab87b4fbcc2d/addresses',
     supportedAssets: ['USDC', 'USDT'],
