@@ -38,7 +38,8 @@ const db = admin.firestore();
 // Configuration & API Keys
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY; // Client ID
-const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secret
+const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secre
+const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
 const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
 const MAX_WALLETS = 5;
