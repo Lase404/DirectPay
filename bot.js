@@ -344,6 +344,248 @@ bot.start(async (ctx) => {
   }
 });
 
+// Handle "💼 View Wallet" Button
+bot.hears(/💼\s*View Wallet/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  if (userState.wallets.length === 0) {
+    await ctx.replyWithMarkdown('❌ You have no wallets. Please generate one using the "💼 Generate Wallet" button.');
+    return;
+  }
+
+  // Construct Wallet Details Message
+  let message = `💼 *Your Wallets*:\n\n`;
+  userState.wallets.forEach((wallet, index) => {
+    message += `*Wallet ${index + 1}:*\n`;
+    message += `• *Chain:* ${wallet.chain}\n`;
+    message += `• *Address:* \`${wallet.address}\`\n`;
+    message += `• *Supported Assets:* ${wallet.supportedAssets.join(', ')}\n`;
+    message += `• *Bank Linked:* ${wallet.bank ? 'Yes' : 'No'}\n`;
+    message += `\n`;
+  });
+
+  // Send Wallet Details with Management Options
+  await ctx.replyWithMarkdown(message, Markup.inlineKeyboard(
+    userState.wallets.map((wallet, index) => [
+      Markup.button.callback(`Manage Wallet ${index + 1}`, `manage_wallet_${index}`)
+    ])
+  ));
+});
+
+// Handle "Manage Wallet" Actions
+bot.action(/manage_wallet_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = parseInt(ctx.match[1], 10);
+
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  const wallet = userState.wallets[walletIndex];
+  if (!wallet) {
+    await ctx.replyWithMarkdown('❌ Wallet not found.');
+    return;
+  }
+
+  // Provide Management Options
+  await ctx.replyWithMarkdown(`🔧 *Manage Wallet ${walletIndex + 1}:* ${wallet.address}`, Markup.inlineKeyboard([
+    [Markup.button.callback(wallet.bank ? '🏦 Edit Bank Account' : '🏦 Link Bank Account', `manage_wallet_link_bank_${walletIndex}`)],
+    [Markup.button.callback('🔍 View Details', `manage_wallet_view_details_${walletIndex}`)],
+    [Markup.button.callback('🔙 Back to Wallet List', 'back_to_wallet_list')]
+  ]));
+
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Handle "Manage Wallet Link Bank" Actions
+bot.action(/manage_wallet_link_bank_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = walletIndex !== undefined ? 'editing' : 'linking';
+  await ctx.scene.enter('bank_linking_scene');
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Handle "Manage Wallet View Details" Actions
+bot.action(/manage_wallet_view_details_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = parseInt(ctx.match[1], 10);
+
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  const wallet = userState.wallets[walletIndex];
+  if (!wallet) {
+    await ctx.replyWithMarkdown('❌ Wallet not found.');
+    return;
+  }
+
+  // Display Detailed Information
+  let detailsMessage = `🔍 *Wallet Details ${walletIndex + 1}:*\n\n`;
+  detailsMessage += `• *Chain:* ${wallet.chain}\n`;
+  detailsMessage += `• *Address:* \`${wallet.address}\`\n`;
+  detailsMessage += `• *Supported Assets:* ${wallet.supportedAssets.join(', ')}\n`;
+  detailsMessage += `• *Bank Linked:* ${wallet.bank ? 'Yes' : 'No'}\n`;
+
+  if (wallet.bank) {
+    detailsMessage += `  - *Bank Name:* ${wallet.bank.bankName}\n`;
+    detailsMessage += `  - *Account Number:* ****${wallet.bank.accountNumber.slice(-4)}\n`;
+    detailsMessage += `  - *Account Holder:* ${wallet.bank.accountName}\n`;
+  }
+
+  await ctx.replyWithMarkdown(detailsMessage, Markup.inlineKeyboard([
+    [Markup.button.callback('🔙 Back to Wallet Management', `manage_wallet_${walletIndex}`)],
+    [Markup.button.callback('🔙 Back to Wallet List', 'back_to_wallet_list')]
+  ]));
+
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Handle "Back to Wallet List" Button
+bot.action('back_to_wallet_list', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  // Construct Wallet Details Message
+  let message = `💼 *Your Wallets*:\n\n`;
+  userState.wallets.forEach((wallet, index) => {
+    message += `*Wallet ${index + 1}:*\n`;
+    message += `• *Chain:* ${wallet.chain}\n`;
+    message += `• *Address:* \`${wallet.address}\`\n`;
+    message += `• *Supported Assets:* ${wallet.supportedAssets.join(', ')}\n`;
+    message += `• *Bank Linked:* ${wallet.bank ? 'Yes' : 'No'}\n`;
+    message += `\n`;
+  });
+
+  // Send Wallet Details with Management Options
+  await ctx.editMessageText(message, {
+    parse_mode: 'Markdown',
+    reply_markup: Markup.inlineKeyboard(
+      userState.wallets.map((wallet, index) => [
+        Markup.button.callback(`Manage Wallet ${index + 1}`, `manage_wallet_${index}`)
+      ])
+    ).reply_markup
+  });
+
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Handle "🏦 Link Bank Account" Button
+bot.hears(/🏦\s*Link Bank Account/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  if (userState.wallets.length === 0) {
+    await ctx.replyWithMarkdown('❌ You have no wallets to link a bank account to. Please generate a wallet first using the "💼 Generate Wallet" button.');
+    return;
+  }
+
+  // List Wallets without Bank Accounts
+  const unlinkedWallets = userState.wallets
+    .map((wallet, index) => ({ wallet, index }))
+    .filter(item => !item.wallet.bank);
+
+  if (unlinkedWallets.length === 0) {
+    await ctx.replyWithMarkdown('✅ All your wallets have linked bank accounts.');
+    return;
+  }
+
+  // Prompt User to Select a Wallet to Link Bank Account
+  let selectionMessage = '🏦 *Select a Wallet to Link Your Bank Account*:\n\n';
+  unlinkedWallets.forEach((item) => {
+    const { wallet, index } = item;
+    selectionMessage += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
+  });
+
+  await ctx.replyWithMarkdown(selectionMessage, Markup.inlineKeyboard(
+    unlinkedWallets.map(item => [Markup.button.callback(`Wallet ${item.index + 1}`, `link_bank_wallet_${item.index}`)])
+  ));
+});
+
+// Handle "Link Bank Account" for a Specific Wallet
+bot.action(/link_bank_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = 'linking';
+  await ctx.scene.enter('bank_linking_scene');
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Handle "🏦 Edit Bank Account" Button
+bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  const linkedWallets = userState.wallets
+    .map((wallet, index) => ({ wallet, index }))
+    .filter(item => item.wallet.bank);
+
+  if (linkedWallets.length === 0) {
+    await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
+    return;
+  }
+
+  // Prompt User to Select a Wallet to Edit Bank Account
+  let selectionMessage = '✏️ *Select a Wallet to Edit Its Bank Account*:\n\n';
+  linkedWallets.forEach((item) => {
+    const { wallet, index } = item;
+    selectionMessage += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
+  });
+
+  await ctx.replyWithMarkdown(selectionMessage, Markup.inlineKeyboard(
+    linkedWallets.map(item => [Markup.button.callback(`Wallet ${item.index + 1}`, `edit_bank_wallet_${item.index}`)])
+  ));
+});
+
+// Handle "Edit Bank Account" for a Specific Wallet
+bot.action(/edit_bank_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = 'editing';
+  await ctx.scene.enter('bank_linking_scene');
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
 // Generate Wallet Function
 async function generateWallet(chain) {
   try {
@@ -1327,7 +1569,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n` +
               `*Amount Paid:* ${txData.amount} ${txData.asset}\n` +
               `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
-              `*Account Name:* ${accountName}\n` +
+              `*Account Holder:* ${accountName}\n` +
               `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
               `*Payout (NGN):* ₦${payout}\n\n` +
               `🔹 *Chain:* ${txData.chain}\n` +
@@ -1780,3 +2022,53 @@ app.listen(port, () => {
 // Graceful Shutdown
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+// Handle "💼 Generate Wallet" Button (Added Missing Handler)
+bot.hears(/💼\s*Generate Wallet/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  
+  // Check if user has reached the maximum number of wallets
+  let userState;
+  try {
+    userState = await getUserState(userId);
+    if (userState.wallets.length >= MAX_WALLETS) {
+      return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+    }
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    return await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  }
+
+  // Prompt user to select a chain/network
+  await ctx.replyWithMarkdown('🔄 Please select the network for your new wallet:', Markup.inlineKeyboard([
+    [Markup.button.callback('Base', 'generate_wallet_Base')],
+    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+  ]));
+});
+
+// Handle "📈 View Current Rates" Button (Added Missing Handler)
+bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  logger.info(`User ${userId} requested current exchange rates.`);
+  try {
+    if (exchangeRates.USDC && exchangeRates.USDT) {
+      const ratesMessage = `📈 *Current Exchange Rates:*\n\n` +
+        `• *USDC:* ₦${exchangeRates.USDC} per USDC\n` +
+        `• *USDT:* ₦${exchangeRates.USDT} per USDT\n\n` +
+        `🔄 Rates are updated every 5 minutes for accuracy.`;
+      await ctx.replyWithMarkdown(ratesMessage);
+    } else {
+      await ctx.replyWithMarkdown('⚠️ Exchange rates are currently unavailable. Please try again later.');
+    }
+  } catch (error) {
+    logger.error(`Error fetching current rates for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while fetching exchange rates. Please try again later.');
+  }
+});
+
+// Handle Unknown Text Inputs (Fallback Handler)
+bot.on('text', async (ctx) => {
+  await ctx.reply('⚠️ I didn\'t understand that command. Please use the menu buttons to navigate.');
+});
+
