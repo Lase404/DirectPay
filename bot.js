@@ -210,7 +210,7 @@ const bankList = [
 // Verify Bank Account with Paystack
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
-    const response = await axios.get(https://api.paystack.co/bank/resolve), {
+    const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
       params: { account_number: accountNumber, bank_code: bankCode },
       headers: { Authorization: Bearer ${PAYSTACK_API_KEY} },
     });
