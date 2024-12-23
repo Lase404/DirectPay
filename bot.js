@@ -210,7 +210,7 @@ const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
 // Verify Bank Account with Paycrest
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
-    const response = await axios.get(``https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode`, { // Assuming Paycrest has a similar endpoint
+    const response = await axios.get(`https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode`, { // Assuming Paycrest has a similar endpoint
       params: { account_number: accountNumber, bank_code: bankCode },
       headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
     });
