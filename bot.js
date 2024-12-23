@@ -37,12 +37,14 @@ const db = admin.firestore();
 
 // Configuration & API Keys
 const BOT_TOKEN = process.env.BOT_TOKEN;
-const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY; // Client ID
-const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secret
+const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY || 'YOUR_PAYSTACK_API_KEY'; // Paystack Secret Key
+const PAYSTACK_SECRET_KEY = process.env.PAYSTACK_SECRET_KEY || 'YOUR_PAYSTACK_SECRET_KEY'; // Paystack Secret Key for webhook verification
+const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY || 'YOUR_PAYCREST_API_KEY'; // Paycrest API Key|| 'YOUR_PAYCREST_CLIENT_SECRET'; // Paycrest Client Secret for webhook verification
 const PAYCREST_RATE_API_URL = process.env.PAYCREST_RATE_API_URL || 'https://api.paycrest.io/v1/rates'; // Paycrest Rate API Endpoint
+const PAYCREST_ORDER_API_URL = process.env.PAYCREST_ORDER_API_URL || 'https://api.paycrest.io/v1/sender/orders'; // Paycrest Order API Endpoint
 const PAYCREST_RETURN_ADDRESS = process.env.PAYCREST_RETURN_ADDRESS || "0xYourReturnAddressHere"; // Paycrest Return Address
-const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
-const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
+const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID; // Admin's Telegram Chat ID
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : []; // Comma-separated Admin IDs
 const MAX_WALLETS = 5;
 
 // Telegram Webhook Configuration
@@ -123,7 +125,7 @@ const chains = {
     address: '0xfBeEC99b731B97271FF31E518c84d4a0E24B1118',
     apiUrl: 'https://api.blockradar.co/v1/wallets/e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1/addresses',
     supportedAssets: ['USDC', 'USDT'],
-    network: 'Base'
+    network: 'base'
   },
   Polygon: {
     id: 'f7d5b102-e94a-493a-8e0c-8da96fe70655',
@@ -131,7 +133,7 @@ const chains = {
     address: '0x9A52605A21e3bacD791579D980A975b258968041',
     apiUrl: 'https://api.blockradar.co/v1/wallets/f7d5b102-e94a-493a-8e0c-8da96fe70655/addresses',
     supportedAssets: ['USDC', 'USDT'],
-    network: 'Polygon'
+    network: 'polygon'
   },
   'BNB Smart Chain': {
     id: '2cab1ef2-8589-4ff9-9017-76cc4d067719',
@@ -139,7 +141,7 @@ const chains = {
     address: '0x9A52605A21e3bacD791579D980A975b258968041',
     apiUrl: 'https://api.blockradar.co/v1/wallets/2cab1ef2-8589-4ff9-9017-76cc4d067719/addresses',
     supportedAssets: ['USDT', 'USDC'],
-    network: 'BNB Smart Chain'
+    network: 'bnb-smart-chain'
   }
 };
 
@@ -153,7 +155,7 @@ const chainMapping = {
   'bnb': 'BNB Smart Chain',
   // Add more mappings if necessary
 };
-const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
+
 // Initialize Express App for Webhooks
 const app = express();
 app.use(express.json());
@@ -172,39 +174,75 @@ bot.use(stage.middleware());
 
 // Updated Bank List with Paycrest Institution Codes
 const bankList = [
-  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
-  { name: 'Diamond Bank', code: '054', aliases: ['diamond', 'diamond bank', 'diamondb', 'diamond bank nigeria'], paycrestInstitutionCode: 'DBLNNGLA' },
-  { name: 'Fidelity Bank', code: '070', aliases: ['fidelity', 'fidelity bank', 'fidelityb', 'fidelity bank nigeria'], paycrestInstitutionCode: 'FIDTNGLA' },
-  { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGLA' },
-  { name: 'First Bank Of Nigeria', code: '011', aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'], paycrestInstitutionCode: 'FBNINGLA' },
-  { name: 'Guaranty Trust Bank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'], paycrestInstitutionCode: 'GTBINGLA' },
-  { name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'], paycrestInstitutionCode: 'PRDTNGLA' },
-  { name: 'Union Bank', code: '032', aliases: ['union', 'union bank', 'unionb', 'union bank nigeria'], paycrestInstitutionCode: 'UBNINGLA' },
-  { name: 'United Bank for Africa', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'], paycrestInstitutionCode: 'UNAFNGLA' },
-  { name: 'Citibank', code: '023', aliases: ['citibank', 'citibank nigeria', 'citi', 'citibank'], paycrestInstitutionCode: 'CITINGLA' },
-  { name: 'Ecobank Bank', code: '050', aliases: ['ecobank', 'ecobank nigeria', 'eco bank'], paycrestInstitutionCode: 'ECOCNGLA' },
-  { name: 'Heritage', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'], paycrestInstitutionCode: 'HBCLNGLA' },
-  { name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'], paycrestInstitutionCode: 'PLNINGLA' },
-  { name: 'Stanbic IBTC Bank', code: '221', aliases: ['stanbic', 'stanbic ibtc', 'stanbic bank', 'stanbic ibtc nigeria'], paycrestInstitutionCode: 'SBICNGLA' },
-  { name: 'Standard Chartered Bank', code: '068', aliases: ['standard chartered', 'standard bank', 'standard chartered nigeria'], paycrestInstitutionCode: 'SCBLNGLA' },
-  { name: 'Sterling Bank', code: '232', aliases: ['sterling', 'sterling bank', 'sterlingb', 'sterling bank nigeria'], paycrestInstitutionCode: 'NAMENGLA' },
-  { name: 'Unity Bank', code: '215', aliases: ['unity', 'unity bank', 'unityb', 'unity bank nigeria'], paycrestInstitutionCode: 'ICITNGLA' },
-  { name: 'Suntrust Bank', code: '033A', aliases: ['suntrust', 'suntrust bank', 'suntrustb', 'suntrust bank nigeria'], paycrestInstitutionCode: 'SUTGNGLA' },
-  { name: 'Providus Bank', code: '101', aliases: ['providus', 'providus bank', 'providusb', 'providus bank nigeria'], paycrestInstitutionCode: 'PROVNGLA' },
-  { name: 'FBNQuest Merchant Bank', code: '401', aliases: ['fbnquest', 'fbnquest merchant bank', 'fbnquest bank'], paycrestInstitutionCode: 'KDHLNGLA' },
-  { name: 'Greenwich Merchant Bank', code: '402', aliases: ['greenwich', 'greenwich merchant bank', 'greenwich bank'], paycrestInstitutionCode: 'GMBLNGLA' },
-  { name: 'FSDH Merchant Bank', code: '403', aliases: ['fsdh', 'fsdh merchant bank', 'fsdh bank'], paycrestInstitutionCode: 'FSDHNGLA' },
-  { name: 'Rand Merchant Bank', code: '404', aliases: ['rand', 'rand merchant bank', 'rand bank'], paycrestInstitutionCode: 'FIRNNGLA' },
-  { name: 'Jaiz Bank', code: '301', aliases: ['jaiz', 'jaiz bank', 'jaizb', 'jaiz bank nigeria'], paycrestInstitutionCode: 'JAIZNGLA' },
-  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZEIBNGLA' },
-  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
-  { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
-  { name: 'OPay', code: '99999', aliases: ['opay', 'opay nigeria'], paycrestInstitutionCode: 'OPAYNGPC' },
-  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'], paycrestInstitutionCode: 'PALMNGPC' },
-  { name: 'Paystack-Titan MFB', code: '999992', aliases: ['paystack', 'paystack mfb', 'paystack-titan mfb'], paycrestInstitutionCode: 'PAYTNGPC' },
-  { name: 'Moniepoint MFB', code: '999993', aliases: ['moniepoint', 'moniepoint mfb', 'moniepoint nigeria'], paycrestInstitutionCode: 'MONINGPC' },
-  { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' }
-  // Add more banks as needed
+  { 
+    name: 'Access Bank', 
+    paystackCode: '044', 
+    paycrestCode: 'ACCESSBANK', // Replace with actual Paycrest institution code
+    aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'] 
+  },
+  { 
+    name: 'Diamond Bank', 
+    paystackCode: '063', 
+    paycrestCode: 'DIAMONDBANK', // Replace with actual Paycrest institution code
+    aliases: ['diamond', 'diamond bank', 'diamondb', 'diamond bank nigeria'] 
+  },
+  { 
+    name: 'Ecobank', 
+    paystackCode: '050', 
+    paycrestCode: 'ECOBANK', // Replace with actual Paycrest institution code
+    aliases: ['ecobank', 'ecobank nigeria', 'eco bank'] 
+  },
+  { 
+    name: 'Fidelity Bank', 
+    paystackCode: '070', 
+    paycrestCode: 'FIDELITYBANK', // Replace with actual Paycrest institution code
+    aliases: ['fidelity', 'fidelity bank', 'fidelityb', 'fidelity bank nigeria'] 
+  },
+  { 
+    name: 'First Bank of Nigeria', 
+    paystackCode: '011', 
+    paycrestCode: 'FIRSTBANK', // Replace with actual Paycrest institution code
+    aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'] 
+  },
+  { 
+    name: 'Guaranty Trust Bank', 
+    paystackCode: '058', 
+    paycrestCode: 'GTBANK', // Replace with actual Paycrest institution code
+    aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'] 
+  },
+  { 
+    name: 'Zenith Bank', 
+    paystackCode: '057', 
+    paycrestCode: 'ZENITHBANK', // Replace with actual Paycrest institution code
+    aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'] 
+  },
+  // Add more banks as needed, ensuring to provide both paystackCode and paycrestCode
+  // Example:
+  { 
+    name: 'Kuda Microfinance Bank', 
+    paystackCode: '50211', 
+    paycrestCode: 'KUDABANK', // Replace with actual Paycrest institution code
+    aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'] 
+  },
+  { 
+    name: 'OPay', 
+    paystackCode: '99999', 
+    paycrestCode: 'OPAY', // Replace with actual Paycrest institution code
+    aliases: ['opay', 'opay nigeria'] 
+  },
+  { 
+    name: 'PalmPay', 
+    paystackCode: '999991', 
+    paycrestCode: 'PALMPAY', // Replace with actual Paycrest institution code
+    aliases: ['palmpay', 'palmpay nigeria'] 
+  },
+  { 
+    name: 'Moniepoint MFB', 
+    paystackCode: '999993', 
+    paycrestCode: 'MONIEPOINT', // Replace with actual Paycrest institution code
+    aliases: ['moniepoint', 'moniepoint mfb', 'moniepoint nigeria'] 
+  },
+  // Continue adding as necessary
 ];
 
 // Verify Bank Account with Paystack
@@ -212,11 +250,18 @@ async function verifyBankAccount(accountNumber, bankCode) {
   try {
     const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
       params: { account_number: accountNumber, bank_code: bankCode },
-      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
+      headers: {
+        Authorization: `Bearer ${PAYSTACK_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
     });
-    return response.data;
+    if (response.data.status) {
+      return response.data.data; // Contains account_name, etc.
+    } else {
+      throw new Error(response.data.message || 'Bank account verification failed.');
+    }
   } catch (error) {
-    logger.error(Error verifying bank account (${accountNumber}, ${bankCode}): ${error.message});
+    logger.error(`Error verifying bank account (${accountNumber}, ${bankCode}): ${error.response ? error.response.data.message : error.message}`);
     throw new Error('Failed to verify bank account. Please try again later.');
   }
 }
@@ -321,7 +366,7 @@ async function greetUser(ctx) {
   const adminUser = isAdmin(userId);
 
   const greeting = walletExists
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **View Your Wallet**\n2. **Edit Your Bank Account**\n3. **Monitor Your Transactions**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
+    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
     : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
 
   if (adminUser) {
@@ -344,6 +389,38 @@ bot.start(async (ctx) => {
   }
 });
 
+// Generate Wallet Handler
+bot.hears('💼 Generate Wallet', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
+  }
+
+  if (userState.wallets.length >= MAX_WALLETS) {
+    await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+    return;
+  }
+
+  // Ask user to select a network to generate wallet
+  await ctx.replyWithMarkdown('🔧 *Select the network for the new wallet:*', Markup.inlineKeyboard([
+    [Markup.button.callback('Base', 'generate_wallet_Base')],
+    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+    [Markup.button.callback('🔙 Back', 'back_to_main')]
+  ]));
+});
+
+// Handle 'back_to_main' action
+bot.action('back_to_main', async (ctx) => {
+  await greetUser(ctx);
+  ctx.answerCbQuery();
+});
+
 // Generate Wallet Function
 async function generateWallet(chain) {
   try {
@@ -363,165 +440,28 @@ async function generateWallet(chain) {
   }
 }
 
-// Create Paycrest Order Function
-async function createPaycrestOrder(userId, amount, token, network, recipientDetails) {
-  try {
-    // Map to Paycrest network and token
-    const paycrestMapping = mapToPaycrest(token, network);
-    if (!paycrestMapping) {
-      throw new Error('No Paycrest mapping for the selected asset/chain.');
-    }
-
-    // Fetch the Paycrest Institution Code
-    const bank = bankList.find(b => b.name.toLowerCase() === recipientDetails.bankName.toLowerCase());
-    if (!bank || !bank.paycrestInstitutionCode) {
-      const errorMsg = `No Paycrest institution code found for bank: ${recipientDetails.bankName}`;
-      logger.error(errorMsg);
-      // Notify admin about the missing institution code
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ ${errorMsg} for user ${userId}.`);
-      throw new Error(errorMsg);
-    }
-
-    // Construct the recipient object as per Paycrest API
-    const recipient = {
-      institution: bank.paycrestInstitutionCode, // Use the mapped Paycrest institution code
-      accountIdentifier: recipientDetails.accountNumber,
-      accountName: recipientDetails.accountName,
-      memo: `Payment from DirectPay`,
-      providerId: "" // Assuming empty; update if necessary
-    };
-
-    // Fetch the current rate from exchangeRates
-    const rate = exchangeRates[token];
-    if (!rate) {
-      throw new Error(`Exchange rate for ${token} not available.`);
-    }
-
-    // Construct the payload
-    const orderPayload = {
-      amount: String(amount), // Token amount as string
-      rate: String(rate), // Exchange rate as string from Paycrest Rate API
-      network: paycrestMapping.network, // e.g., 'polygon', 'base', etc.
-      token: paycrestMapping.token, // 'USDT' or 'USDC'
-      recipient: recipient,
-      returnAddress: PAYCREST_RETURN_ADDRESS, // Use environment variable
-      feePercent: 2, // Example fee percentage
-    };
-
-    // Make the API request to Paycrest
-    const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
-      headers: {
-        'API-Key': PAYCREST_API_KEY,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    // Check if the response is successful
-    if (orderResp.data.status !== 'success') {
-      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
-    }
-
-    // Return the order data
-    return orderResp.data.data; // Contains id, amount, token, network, receiveAddress, etc.
-  } catch (err) {
-    logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
-    throw new Error('Failed to create Paycrest order.');
-  }
-}
-
-// Map Chain/Asset to Paycrest Network/Token
-function mapToPaycrest(asset, chainName) {
-  // Only USDC and USDT are supported
-  if (!SUPPORTED_ASSETS.includes(asset)) return null;
-
-  let token = asset.toUpperCase(); // 'USDC' or 'USDT'
-  let network;
-  const chainKey = chainMapping[chainName.toLowerCase()];
-  if (!chainKey) {
-    logger.error(`No mapping found for chain name: ${chainName}`);
-    return null;
-  }
-  if (/polygon/i.test(chainKey)) network = 'polygon';
-  else if (/base/i.test(chainKey)) network = 'base';
-  else if (/bnb-smart-chain/i.test(chainKey)) network = 'bnb-smart-chain';
-  else return null;
-  return { token, network };
-}
-
-// Withdraw from Blockradar Function
-async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
-  try {
-    // Ensure the chain exists in the mapping
-    const chainKey = chainMapping[chain.toLowerCase()];
-    if (!chainKey) {
-      throw new Error(`Unsupported or unknown chain: ${chain}`);
-    }
-
-    const chainData = chains[chainKey];
-    if (!chainData) {
-      throw new Error(`Chain data not found for: ${chainKey}`);
-    }
-
-    const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`, {
-      address,
-      amount: String(amount),
-      assetId,
-      reference,
-      metadata
-    }, {
-      headers: {
-        'x-api-key': BLOCKRADAR_API_KEY,
-        'Content-Type': 'application/json'
-      }
-    });
-    const data = resp.data;
-    if (data.statusCode !== 200) {
-      throw new Error(`Blockradar withdrawal error: ${JSON.stringify(data)}`);
-    }
-    return data;
-  } catch (error) {
-    logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
-    throw error;
-  }
-}
-
-// Wallet Generation Handler (Inline Buttons)
+// Handler for Generate Wallet actions
 bot.action(/generate_wallet_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  const selectedChainRaw = ctx.match[1]; // e.g., 'Base', 'Polygon', 'BNB Smart Chain'
-
-  // Normalize and map the selected chain
-  const selectedChainKey = chainMapping[selectedChainRaw.toLowerCase()];
-  if (!selectedChainKey) {
-    await ctx.replyWithMarkdown('⚠️ Invalid network selection. Please try again.');
-    return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
-  }
-
-  const chain = selectedChainKey;
+  const selectedChain = ctx.match[1]; // e.g., 'Base', 'Polygon', 'BNB Smart Chain'
 
   // Acknowledge the Callback to Remove Loading State
   await ctx.answerCbQuery();
 
   // Inform User That Wallet Generation Has Started
-  const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet for *${chain}*... Please wait a moment.`);
+  const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet for *${selectedChain}*... Please wait a moment.`);
 
   try {
-    const walletAddress = await generateWallet(chain);
+    const walletAddress = await generateWallet(selectedChain);
 
     // Fetch Updated User State
     const userState = await getUserState(userId);
 
-    if (userState.wallets.length >= MAX_WALLETS) {
-      await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
-      await ctx.deleteMessage(generatingMessage.message_id);
-      return;
-    }
-
     // Add the New Wallet to User State
     userState.wallets.push({
       address: walletAddress || 'N/A',
-      chain: chain || 'N/A',
-      supportedAssets: chains[chain].supportedAssets ? [...chains[chain].supportedAssets] : [],
+      chain: selectedChain || 'N/A',
+      supportedAssets: chains[selectedChain].supportedAssets ? [...chains[selectedChain].supportedAssets] : [],
       bank: null,
       amount: 0 // Initialize amount if needed
     });
@@ -537,7 +477,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     });
 
     // Update Menu
-    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${chain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[chain].supportedAssets.join(', ')}`, getMainMenu(true, false));
+    await ctx.replyWithMarkdown(`✅ Success! Your new wallet has been generated on **${selectedChain}**:\n\n\`${walletAddress}\`\n\n**Supported Assets:** ${chains[selectedChain].supportedAssets.join(', ')}`, getMainMenu(true, false));
 
     // **Automatically initiate bank linking for the newly created wallet**
     const newWalletIndex = userState.wallets.length - 1; // Index of the newly added wallet
@@ -551,10 +491,10 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     await ctx.deleteMessage(generatingMessage.message_id);
 
     // Log Wallet Generation
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId} on ${chain}: ${walletAddress}`, { parse_mode: 'Markdown' });
-    logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId} on ${selectedChain}: ${walletAddress}`, { parse_mode: 'Markdown' });
+    logger.info(`Wallet generated for user ${userId} on ${selectedChain}: ${walletAddress}`);
   } catch (error) {
-    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
+    logger.error(`Error generating wallet for user ${userId} on ${selectedChain}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
   }
@@ -573,28 +513,29 @@ bot.hears('💼 View Wallet', async (ctx) => {
   }
 
   if (userState.wallets.length === 0) {
-    await ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+    await ctx.replyWithMarkdown('❌ You have no wallets. Please generate one using the "💼 Generate Wallet" button.');
     return;
   }
 
+  // List all wallets with their details
   let walletsMessage = '💼 *Your Wallets*:\n\n';
   userState.wallets.forEach((wallet, index) => {
     walletsMessage += `*Wallet ${index + 1}:*\n`;
-    walletsMessage += `- *Address:* \`${wallet.address}\`\n`;
     walletsMessage += `- *Chain:* ${wallet.chain}\n`;
+    walletsMessage += `- *Address:* \`${wallet.address}\`\n`;
     walletsMessage += `- *Supported Assets:* ${wallet.supportedAssets.join(', ')}\n`;
     walletsMessage += `- *Bank Linked:* ${wallet.bank ? 'Yes' : 'No'}\n\n`;
   });
 
   await ctx.replyWithMarkdown(walletsMessage, Markup.inlineKeyboard([
-    [Markup.button.callback('🔄 Refresh Wallets', 'refresh_wallets')],
-    [Markup.button.callback('✏️ Edit Bank Accounts', 'edit_existing_banks')],
+    [Markup.button.callback('🔗 Link Bank Account', 'link_bank_account')],
+    [Markup.button.callback('✏️ Edit Bank Account', 'edit_bank_account')],
     [Markup.button.callback('🔙 Back to Main Menu', 'back_to_main')]
   ]));
 });
 
-// Refresh Wallets Handler
-bot.action('refresh_wallets', async (ctx) => {
+// Link Bank Account Handler
+bot.hears('🏦 Link Bank Account', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -606,38 +547,45 @@ bot.action('refresh_wallets', async (ctx) => {
   }
 
   if (userState.wallets.length === 0) {
-    await ctx.editMessageText('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
-    return ctx.answerCbQuery();
+    await ctx.replyWithMarkdown('❌ You have no wallets to link a bank account to. Please generate a wallet first using the "💼 Generate Wallet" button.');
+    return;
   }
 
-  let walletsMessage = '💼 *Your Wallets*:\n\n';
+  // Prompt user to select a wallet to link bank account
+  let selectionMessage = '🏦 *Select a Wallet to Link a Bank Account*:\n\n';
   userState.wallets.forEach((wallet, index) => {
-    walletsMessage += `*Wallet ${index + 1}:*\n`;
-    walletsMessage += `- *Address:* \`${wallet.address}\`\n`;
-    walletsMessage += `- *Chain:* ${wallet.chain}\n`;
-    walletsMessage += `- *Supported Assets:* ${wallet.supportedAssets.join(', ')}\n`;
-    walletsMessage += `- *Bank Linked:* ${wallet.bank ? 'Yes' : 'No'}\n\n`;
+    selectionMessage += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
   });
 
-  await ctx.editMessageText(walletsMessage, {
-    parse_mode: 'Markdown',
-    reply_markup: Markup.inlineKeyboard([
-      [Markup.button.callback('🔄 Refresh Wallets', 'refresh_wallets')],
-      [Markup.button.callback('✏️ Edit Bank Accounts', 'edit_existing_banks')],
-      [Markup.button.callback('🔙 Back to Main Menu', 'back_to_main')]
-    ]).reply_markup
-  });
-  ctx.answerCbQuery();
+  await ctx.replyWithMarkdown(selectionMessage, Markup.inlineKeyboard(
+    userState.wallets.map((wallet, index) => [
+      Markup.button.callback(`Wallet ${index + 1}`, `link_wallet_${index}`)
+    ])
+  ));
 });
 
-// Back to Main Menu Handler
-bot.action('back_to_main', async (ctx) => {
-  await greetUser(ctx);
-  ctx.answerCbQuery();
+// Handler for Selecting Wallet to Link Bank
+bankLinkingScene.action(/link_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = 'linking';
+  await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
+  ctx.answerCbQuery(); // Acknowledge the callback
+
+  // Clear any existing timeout and start a new one
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, 300000); // 5 minutes timeout
 });
 
-// Handle "💼 Generate Wallet" Button
-bot.hears('💼 Generate Wallet', async (ctx) => {
+// Handle Editing Existing Bank Accounts
+bot.hears('🏦 Edit Bank Account', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -648,34 +596,279 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     return;
   }
 
-  if (userState.wallets.length >= MAX_WALLETS) {
-    await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+  const linkedWallets = userState.wallets
+    .map((wallet, index) => ({ wallet, index }))
+    .filter(item => item.wallet.bank);
+
+  if (linkedWallets.length === 0) {
+    await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
     return;
   }
 
-  // Prompt user to select a chain
-  await ctx.replyWithMarkdown('🔗 *Select a Network for Your New Wallet:*', Markup.inlineKeyboard([
-    [Markup.button.callback('🌐 Base', 'generate_wallet_Base')],
-    [Markup.button.callback('🟢 Polygon', 'generate_wallet_Polygon')],
-    [Markup.button.callback('🐍 BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-    [Markup.button.callback('❌ Cancel', 'cancel_wallet_generation')]
-  ]));
-});
-
-// Cancel Wallet Generation Handler
-bankLinkingScene.action('cancel_wallet_generation', async (ctx) => {
-  await ctx.replyWithMarkdown('❌ Wallet generation has been canceled.');
-  ctx.scene.leave();
-  ctx.answerCbQuery();
-});
-
-// View Current Rates Handler
-bot.hears('📈 View Current Rates', async (ctx) => {
-  let ratesMessage = '*Current Exchange Rates:*\n\n';
-  SUPPORTED_ASSETS.forEach(asset => {
-    ratesMessage += `- *${asset}:* ₦${exchangeRates[asset] || 'Fetching...'} per ${asset}\n`;
+  // Prompt User to Select a Wallet to Edit
+  let selectionMessage = '✏️ *Select a Wallet to Edit Its Bank Account*:\n\n';
+  linkedWallets.forEach((item) => {
+    const { wallet, index } = item;
+    selectionMessage += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
   });
-  await ctx.replyWithMarkdown(ratesMessage);
+
+  await ctx.replyWithMarkdown(selectionMessage, Markup.inlineKeyboard(
+    linkedWallets.map(item => [Markup.button.callback(`Wallet ${item.index + 1}`, `edit_existing_wallet_${item.index}`)])
+  ));
+});
+
+// Handler for Selecting Wallet to Edit Bank Account
+bankLinkingScene.action(/edit_existing_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = 'editing';
+  await ctx.replyWithMarkdown('🏦 Please enter your new bank name (e.g., Access Bank):');
+  ctx.answerCbQuery(); // Acknowledge the callback
+
+  // Clear any existing timeout and start a new one
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, 300000); // 5 minutes timeout
+});
+
+// Bank Linking Scene
+bankLinkingScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const input = ctx.message.text.trim();
+
+  if (ctx.session.bankData.step === 1) {
+    // Step 1: Capture Bank Name
+    const bankNameInput = input.toLowerCase();
+    const bank = bankList.find(b => b.aliases.includes(bankNameInput));
+    if (!bank) {
+      await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name (e.g., Access Bank):');
+      return;
+    }
+
+    ctx.session.bankData.bankName = bank.name;
+    ctx.session.bankData.paycrestCode = bank.paycrestCode;
+    ctx.session.bankData.paystackCode = bank.paystackCode;
+    ctx.session.bankData.step = 2;
+
+    await ctx.replyWithMarkdown('🏦 Please enter your 10-digit bank account number:');
+  } else if (ctx.session.bankData.step === 2) {
+    // Step 2: Capture Account Number
+    const accountNumber = input;
+    if (!/^\d{10}$/.test(accountNumber)) {
+      await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a 10-digit bank account number:');
+      return;
+    }
+
+    ctx.session.bankData.accountNumber = accountNumber;
+    ctx.session.bankData.step = 3;
+
+    // Proceed to verify account with Paystack
+    try {
+      const accountDetails = await verifyBankAccount(accountNumber, ctx.session.bankData.paystackCode);
+      ctx.session.bankData.accountName = accountDetails.account_name;
+
+      // Confirm with the user
+      await ctx.replyWithMarkdown(`✅ *Account Name:* ${ctx.session.bankData.accountName}\n\nIs this correct?`, Markup.inlineKeyboard([
+        [Markup.button.callback('Yes ✅', 'confirm_bank_yes'), Markup.button.callback('No ❌', 'confirm_bank_no')],
+        [Markup.button.callback('Cancel ❌', 'cancel_bank_linking')]
+      ]));
+
+      // Proceed to confirmation step
+      ctx.session.bankData.step = 4;
+    } catch (error) {
+      await ctx.replyWithMarkdown(`⚠️ ${error.message}\n\nPlease try linking your bank account again.`);
+      ctx.scene.leave();
+    }
+  }
+});
+
+// Confirm Bank Account Linking
+bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const bankData = ctx.session.bankData;
+  const walletIndex = ctx.session.walletIndex;
+
+  logger.info(`User ${userId} confirmed bank linking/editing. Wallet Index: ${walletIndex}`);
+
+  try {
+    let userState = await getUserState(userId);
+
+    if (ctx.session.processType === 'editing') {
+      // Editing Bank Account Details
+      if (ctx.session.walletIndex !== undefined && ctx.session.walletIndex !== null) {
+        // Editing existing bank account
+        if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
+          await ctx.replyWithMarkdown('⚠️ No linked bank account found for the selected wallet. Please try again.', getMainMenu(true, false));
+          ctx.scene.leave();
+          return;
+        }
+
+        // Update Bank Details for the Selected Wallet
+        userState.wallets[walletIndex].bank = {
+          bankName: bankData.bankName,
+          bankCode: bankData.paycrestCode,
+          accountNumber: bankData.accountNumber,
+          accountName: bankData.accountName,
+        };
+
+        // Update User State in Firestore
+        await updateUserState(userId, {
+          wallets: userState.wallets,
+        });
+
+        // Prepare Confirmation Message
+        let confirmationMessage = `✅ *Bank Account Updated Successfully!*\n\n`;
+        confirmationMessage += `*Bank Name:* ${bankData.bankName}\n`;
+        confirmationMessage += `*Account Number:* ${bankData.accountNumber}\n`;
+        confirmationMessage += `*Account Holder:* ${bankData.accountName}\n\n`;
+        confirmationMessage += `You can view your updated bank details using the "💼 View Wallet" option.`;
+
+        await ctx.replyWithMarkdown(confirmationMessage, getMainMenu(true, true));
+
+        // Log to Admin
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} edited a bank account:\n\n` +
+          `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
+          `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
+          `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+        logger.info(`User ${userId} edited a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
+      } else {
+        // Linking to Unlinked Wallets (This should not occur as walletIndex should be set)
+        await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.', getMainMenu(true, false));
+        ctx.scene.leave();
+        return;
+      }
+    } else {
+      // Linking Process
+      if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
+        await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.', getMainMenu(true, false));
+        ctx.scene.leave();
+        return;
+      }
+
+      // Retrieve the selected wallet
+      const selectedWallet = userState.wallets[walletIndex];
+
+      // Update Bank Details for the Selected Wallet
+      selectedWallet.bank = {
+        bankName: bankData.bankName,
+        bankCode: bankData.paycrestCode,
+        accountNumber: bankData.accountNumber,
+        accountName: bankData.accountName,
+      };
+
+      // Update User State in Firestore
+      await updateUserState(userId, {
+        wallets: userState.wallets,
+      });
+
+      // Prepare Rates Message with Wallet Address and Supported Tokens
+      let ratesMessage = `✅ *Your bank account has been updated successfully!*\n\n`;
+      ratesMessage += `*Wallet Address:* \`${selectedWallet.address}\`\n`;
+      ratesMessage += `*Supported Tokens:* ${selectedWallet.supportedAssets.join(', ')}\n\n`;
+      ratesMessage += `*Current Exchange Rates:*\n`;
+      ratesMessage += `- *USDC:* ₦${exchangeRates.USDC} per USDC\n`;
+      ratesMessage += `- *USDT:* ₦${exchangeRates.USDT} per USDT\n\n`;
+      ratesMessage += `*Note:* These rates are updated every 5 minutes for accuracy.`;
+
+      await ctx.replyWithMarkdown(ratesMessage, getMainMenu(true, true));
+
+      // Notify Admin about Bank Linking
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
+        `*Account Name:* ${selectedWallet.bank.accountName}\n` +
+        `*Bank Name:* ${selectedWallet.bank.bankName}\n` +
+        `*Account Number:* ****${selectedWallet.bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+      logger.info(`User ${userId} linked a bank account: ${JSON.stringify(selectedWallet.bank)}`);
+
+      // Note: If you store 'payout' during initial deposit, no need to store here. If not, adjust accordingly.
+    }
+
+    // Store Transaction in Firestore (if applicable)
+    // (Assuming transactions are only stored upon deposit, not during bank linking)
+
+    // Reset Bank Linking Flags and Session Variables
+    delete ctx.session.walletIndex;
+    delete ctx.session.bankData;
+    delete ctx.session.processType;
+    delete ctx.session.isBankLinking; // Reset the bank linking flag
+
+    // Clear the inactivity timeout
+    if (ctx.session.bankLinkingTimeout) {
+      clearTimeout(ctx.session.bankLinkingTimeout);
+      delete ctx.session.bankLinkingTimeout;
+    }
+
+    ctx.scene.leave();
+  } catch (error) {
+    logger.error(`Error confirming bank account update for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An unexpected error occurred while processing your request. Please ensure your bank account details are correct or contact support if the issue persists.');
+  }
+});
+
+// Decline Bank Account Confirmation
+bankLinkingScene.action('confirm_bank_no', async (ctx) => {
+  await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
+
+  // Reset Bank Data and Restart the Scene
+  ctx.session.bankData = {};
+  ctx.session.bankData.step = 1;
+
+  // Restart the inactivity timeout
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, 300000); // 5 minutes timeout
+
+  ctx.scene.reenter(); // Restart the scene
+});
+
+// Handle Cancellation of Bank Linking
+bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
+  await ctx.replyWithMarkdown('❌ Bank linking process has been canceled.');
+
+  // Clean Up Session Variables
+  delete ctx.session.walletIndex;
+  delete ctx.session.bankData;
+  delete ctx.session.processType;
+  delete ctx.session.isBankLinking; // Ensure flag is reset
+
+  // Clear the inactivity timeout
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+    delete ctx.session.bankLinkingTimeout;
+  }
+
+  ctx.scene.leave();
+});
+
+// Handle Editing Existing Bank Accounts
+bankLinkingScene.action(/edit_existing_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = 'editing';
+  await ctx.replyWithMarkdown('🏦 Please enter your new bank name (e.g., Access Bank):');
+  ctx.answerCbQuery(); // Acknowledge the callback
+
+  // Clear any existing timeout and start a new one
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, 300000); // 5 minutes timeout
 });
 
 // Send Message Scene (Handles Text and Images)
@@ -683,20 +876,13 @@ sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
 });
 
-sendMessageScene.on('message', async (ctx) => {
+sendMessageScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
+  const input = ctx.message.text.trim();
 
   if (!ctx.session.sendMessageStep) {
     // Step 1: Capture User ID
-    const userIdToMessage = ctx.message.text.trim();
+    const userIdToMessage = input;
 
     // Validate User ID (should be numeric and reasonable length, e.g., Telegram IDs are typically between 5 to 15 digits)
     if (!/^\d{5,15}$/.test(userIdToMessage)) {
@@ -743,7 +929,7 @@ sendMessageScene.on('message', async (ctx) => {
 
       try {
         // Send the text message to the target user
-        await bot.telegram.sendMessage(userIdToMessage, `**📩 Message from Admin:**\n\n${messageContent}`, { parse_mode: 'Markdown' });
+        await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${messageContent}`, { parse_mode: 'Markdown' });
         await ctx.replyWithMarkdown('✅ Text message sent successfully.');
         logger.info(`Admin ${userId} sent text message to user ${userIdToMessage}: ${messageContent}`);
       } catch (error) {
@@ -979,7 +1165,7 @@ bot.action('support_not_received', async (ctx) => {
 });
 
 bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
+  await ctx.replyWithMarkdown('You can contact our support team at [@maxcswap](https://t.me/maxcswap).');
 });
 
 // View Transactions for Users
@@ -1311,7 +1497,7 @@ bot.on('message', async (ctx, next) => {
   await next(); // Pass control to the next handler
 });
 
-// Function to Verify Paycrest Webhook Signature
+// Function to Verify Paycrest Webhook Signature (if Paycrest has webhook signatures)
 function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
   const calculatedSignature = calculateHmacSignature(requestBody, secretKey);
   return signatureHeader === calculatedSignature;
@@ -1501,6 +1687,127 @@ app.post('/webhook/blockradar', async (req, res) => {
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing webhook: ${error.message}`);
   }
 });
+
+// Function to create Paycrest order
+async function createPaycrestOrder(userId, amount, token, network, recipientDetails) {
+  try {
+    // Map to Paycrest network and token
+    const paycrestMapping = mapToPaycrest(token, network);
+    if (!paycrestMapping) {
+      throw new Error('No Paycrest mapping for the selected asset/chain.');
+    }
+
+    // Find the bank in the bank list
+    const bank = bankList.find(b => b.name.toLowerCase() === recipientDetails.bankName.toLowerCase());
+    if (!bank || !bank.paycrestCode) {
+      const errorMsg = `No Paycrest institution code found for bank: ${recipientDetails.bankName}`;
+      logger.error(errorMsg);
+      // Notify admin about the missing bank code
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ ${errorMsg} for user ${userId}.`);
+      throw new Error(errorMsg);
+    }
+
+    // Construct the recipient object as per Paycrest API
+    const recipient = {
+      bank_code: bank.paycrestCode, // Paycrest's institution code
+      account_number: recipientDetails.accountNumber,
+      account_name: recipientDetails.accountName,
+      // Additional fields as required by Paycrest
+    };
+
+    // Fetch the current rate from exchangeRates
+    const rate = exchangeRates[token];
+    if (!rate) {
+      throw new Error(`Exchange rate for ${token} not available.`);
+    }
+
+    // Construct the payload
+    const orderPayload = {
+      amount: String(amount), // Token amount as string
+      rate: String(rate), // Exchange rate as string from Paycrest Rate API
+      network: paycrestMapping.network, // e.g., 'polygon', 'base', etc.
+      token: paycrestMapping.token, // 'USDT' or 'USDC'
+      recipient: recipient,
+      return_address: PAYCREST_RETURN_ADDRESS, // Use environment variable
+      fee_percent: 2, // Example fee percentage
+    };
+
+    // Make the API request to Paycrest
+    const orderResp = await axios.post(PAYCREST_ORDER_API_URL, orderPayload, {
+      headers: {
+        'API-Key': PAYCREST_API_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // Check if the response is successful
+    if (orderResp.data.status !== 'success') {
+      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
+    }
+
+    // Return the order data
+    return orderResp.data.data; // Contains id, amount, token, network, receiveAddress, etc.
+  } catch (err) {
+    logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
+    throw new Error('Failed to create Paycrest order.');
+  }
+}
+
+// Map Chain/Asset to Paycrest Network/Token
+function mapToPaycrest(asset, chainName) {
+  // Only USDC and USDT are supported
+  if (!SUPPORTED_ASSETS.includes(asset)) return null;
+
+  let token = asset.toUpperCase(); // 'USDC' or 'USDT'
+  let network;
+  const chainKey = chainMapping[chainName.toLowerCase()];
+  if (!chainKey) {
+    logger.error(`No mapping found for chain name: ${chainName}`);
+    return null;
+  }
+  if (/polygon/i.test(chainKey)) network = 'polygon';
+  else if (/base/i.test(chainKey)) network = 'base';
+  else if (/bnb-smart-chain/i.test(chainKey)) network = 'bnb-smart-chain';
+  else return null;
+  return { token, network };
+}
+
+// Withdraw from Blockradar Function
+async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
+  try {
+    // Ensure the chain exists in the mapping
+    const chainKey = chainMapping[chain.toLowerCase()];
+    if (!chainKey) {
+      throw new Error(`Unsupported or unknown chain: ${chain}`);
+    }
+
+    const chainData = chains[chainKey];
+    if (!chainData) {
+      throw new Error(`Chain data not found for: ${chainKey}`);
+    }
+
+    const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`, {
+      address,
+      amount: String(amount),
+      assetId,
+      reference,
+      metadata
+    }, {
+      headers: {
+        'x-api-key': BLOCKRADAR_API_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+    const data = resp.data;
+    if (data.statusCode !== 200) {
+      throw new Error(`Blockradar withdrawal error: ${JSON.stringify(data)}`);
+    }
+    return data;
+  } catch (error) {
+    logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
+    throw error;
+  }
+}
 
 // PAYCREST WEBHOOK HANDLER
 app.post('/webhook/paycrest', async (req, res) => {
