@@ -65,7 +65,7 @@ let exchangeRates = {
 // Function to fetch exchange rates from Paycrest
 async function fetchExchangeRate(asset) {
   try {
-    const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
+    const response = await axios.get(`${PAYCREST_RATE_API_URL}/${asset}`, {
       headers: {
         'Authorization': `Bearer ${PAYCREST_API_KEY}`,
         'Content-Type': 'application/json'
@@ -597,6 +597,7 @@ bankLinkingScene.on('text', async (ctx) => {
 
     ctx.session.bankData.bankName = bank.name;
     ctx.session.bankData.bankCode = bank.code;
+    ctx.session.bankData.paycrestInstitutionCode = bank.paycrestInstitutionCode;
     ctx.session.bankData.step = 2;
 
     await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
@@ -1194,7 +1195,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
     const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
 
     if (transactionsSnapshot.empty) {
-      return await ctx.replyWithMarkdown('You have no transactions at the moment.');
+      return await ctx.replyWithMarkdown('📂 You have no transactions at the moment.');
     }
 
     let message = '💰 *Your Transactions*:\n\n';
@@ -1205,7 +1206,8 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
       message += `*Status:* ${tx.status || 'Pending'}\n`;
       message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
+      message += `*Chain:* ${tx.chain || 'N/A'}\n`;
+      message += `*Transaction Hash:* \`${tx.transactionHash || 'N/A'}\`\n\n`;
     });
 
     await ctx.replyWithMarkdown(message);
@@ -1270,6 +1272,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
           message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
           message += `*Status:* ${tx.status || 'Pending'}\n`;
           message += `*Chain:* ${tx.chain || 'N/A'}\n`;
+          message += `*Transaction Hash:* \`${tx.transactionHash || 'N/A'}\`\n`;
           message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
         });
 
@@ -1447,7 +1450,7 @@ bot.on('message', async (ctx, next) => {
 
         const usersSnapshot = await db.collection('users').get();
         if (usersSnapshot.empty) {
-          await ctx.reply('No users to broadcast to.', getAdminMenu());
+          await ctx.reply('❌ No users to broadcast to.', getAdminMenu());
           await updateUserState(userId, { awaitingBroadcastMessage: false });
           return;
         }
@@ -1482,7 +1485,7 @@ bot.on('message', async (ctx, next) => {
 
         const usersSnapshot = await db.collection('users').get();
         if (usersSnapshot.empty) {
-          await ctx.reply('No users to broadcast to.', getAdminMenu());
+          await ctx.reply('❌ No users to broadcast to.', getAdminMenu());
           await updateUserState(userId, { awaitingBroadcastMessage: false });
           return;
         }
@@ -1606,12 +1609,14 @@ app.post('/webhook/blockradar', async (req, res) => {
       // Notify user with a detailed message
       await bot.telegram.sendMessage(userId,
         `🎉 *Deposit Received Successfully!*\n\n` +
-        `- *Amount:* ${amount} ${asset}\n` +
-        `- *Chain:* ${chainRaw}\n` +
-        `- *Wallet Address:* \`${walletAddress}\`\n\n` +
-        `Your deposit has been securely received. We are currently processing your withdrawal, which involves transferring the funds from Blockradar to Paycrest. Once the withdrawal is confirmed, the equivalent amount in NGN will be credited to your linked bank account.\n\n` +
+        `• *Reference ID:* \`${referenceId}\`\n` +
+        `• *Amount:* ${amount} ${asset}\n` +
+        `• *Chain:* ${chainRaw}\n` +
+        `• *Wallet Address:* \`${walletAddress}\`\n` +
+        `• *Transaction Hash:* \`${transactionHash}\`\n\n` +
+        `Your deposit of ${amount} ${asset} has been securely received on the ${chainRaw} network. We are currently processing your withdrawal, which involves transferring the funds from Blockradar to Paycrest. Once the withdrawal is confirmed, the equivalent amount of ₦${ngnAmount} will be credited to your linked bank account.\n\n` +
         `🔄 *Status:* Pending Withdrawal\n` +
-        `📅 *Estimated Time:* Within the next 30 minutes\n\n` +
+        `📅 *Estimated Time:* Within the next 5 minutes\n\n` +
         `Thank you for choosing *DirectPay*. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
         { parse_mode: 'Markdown' }
       );
@@ -1619,6 +1624,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       // Notify admin with detailed deposit information
       const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
         `*User ID:* ${userId}\n` +
+        `*Reference ID:* \`${referenceId}\`\n` +
         `*Amount Deposited:* ${amount} ${asset}\n` +
         `*Exchange Rate:* ₦${rate} per ${asset}\n` +
         `*Amount to be Paid:* ₦${ngnAmount}\n` +
@@ -1738,8 +1744,21 @@ app.post('/webhook/paycrest', async (req, res) => {
       // Update transaction to Paid
       await db.collection('transactions').doc(txDoc.id).update({ status: 'Paid' });
 
-      // Notify user
-      await bot.telegram.sendMessage(userId, `🎉 *Your funds have been credited to your bank account!*\n\n*Reference ID:* ${txData.referenceId}`, { parse_mode: 'Markdown' });
+      // Notify user with detailed message
+await bot.telegram.sendMessage(userId, 
+  `Hello ${txData.userName},\n\n` +
+  `We’ve successfully processed your deposit of ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}, and NGN ${txData.payout || 'N/A'} has been credited to your linked bank account.\n\n` +
+  `Transaction Details:\n` +
+  `*Crypto Amount:* ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}\n` +
+  `*Cash Amount:* ₦${txData.payout || 'N/A'}\n` +
+  `*Rate:* ₦${txData.exchangeRate || 'N/A'} / ${txData.asset || 'N/A'}\n` +
+  `*Network:* ${txData.chain || 'N/A'}\n` +
+  `*Receiving Account:* ${txData.bankDetails.bankName || 'N/A'} ****${txData.bankDetails.accountNumber.slice(-4) || 'N/A'}\n` +
+  `*Date:* ${new Date(txData.timestamp).toLocaleString() || 'N/A'}\n` +
+  `*Reference:* ${txData.referenceId || 'N/A'}\n\n` +
+  `If you have any questions or need further assistance, please contact us; we’d love to help.`, 
+  { parse_mode: 'Markdown' }
+);
 
       res.status(200).send('OK');
     } catch (error) {
