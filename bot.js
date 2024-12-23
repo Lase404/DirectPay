@@ -44,6 +44,7 @@ const PAYCREST_RETURN_ADDRESS = process.env.PAYCREST_RETURN_ADDRESS || "0xYourRe
 const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
 const MAX_WALLETS = 5;
+const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY; 
 
 // Telegram Webhook Configuration
 const TELEGRAM_WEBHOOK_PATH = process.env.WEBHOOK_PATH || '/webhook/telegram'; // e.g., '/webhook/telegram'
@@ -210,9 +211,9 @@ const bankList = [
 // Verify Bank Account with Paycrest
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
-    const response = await axios.get(`https://api.paycrest.io/v1/bank/resolve`, { // Assuming Paycrest has a similar endpoint
+    const response = await axios.get(`api.paystack.co/bank/resolve,`, { // Assuming Paycrest has a similar endpoint
       params: { account_number: accountNumber, bank_code: bankCode },
-      headers: { Authorization: `Bearer ${PAYCREST_API_KEY}` },
+      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
     });
     return response.data;
   } catch (error) {
