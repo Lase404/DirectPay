@@ -618,12 +618,29 @@ bot.hears(/💼 View Wallet/i, async (ctx) => {
       message += `- *Chain:* ${wallet.chain}\n`;
       message += `- *Supported Tokens:* ${wallet.supportedAssets.join(', ')}\n\n`;
     });
+  // **Add inline buttons: Create New Wallet**
+  const inlineButtons = Markup.inlineKeyboard([
+    [Markup.button.callback('➕ Create New Wallet', 'create_new_wallet')],
+  ]);
 
-    await ctx.replyWithMarkdown(message);
-  } catch (error) {
-    logger.error(`Error fetching wallets for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch wallets. Please try again later.');
+  await ctx.replyWithMarkdown(walletMessage, inlineButtons);
+});
+
+// Handler for "Create New Wallet" Button
+bot.action('create_new_wallet', async (ctx) => {
+  // Check if a bank linking process is already in progress
+  if (ctx.session.isBankLinking) {
+    await ctx.replyWithMarkdown('⚠️ You are currently linking a bank account. Please complete that process before creating a new wallet.');
+    return ctx.answerCbQuery(); // Acknowledge the callback
   }
+
+  // Prompt the user to select a network
+  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
+    [Markup.button.callback('Base', 'generate_wallet_Base')],
+    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+  ]));
+  ctx.answerCbQuery(); // Acknowledge the callback
 });
 
 // Bank Linking Scene
