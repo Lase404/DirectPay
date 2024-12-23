@@ -38,8 +38,7 @@ const db = admin.firestore();
 // Configuration & API Keys
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY; // Client ID
-const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secre
-const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
+const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secret
 const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
 const MAX_WALLETS = 5;
@@ -134,32 +133,40 @@ stage.register(sendMessageScene);
 bot.use(session());
 bot.use(stage.middleware());
 
-// Bank List with Names, Codes, and Aliases
+// Updated Bank List with Paycrest Institution Codes
 const bankList = [
-  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'] },
-  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'] },
-  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'] },
-  { name: 'First Bank', code: '011', aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'] },
-  { name: 'UBA', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'] },
-  { name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'] },
-  { name: 'Fidelity Bank', code: '070', aliases: ['fidelity', 'fidelity bank', 'fidelityb', 'fidelity bank nigeria'] },
-  { name: 'Ecobank', code: '050', aliases: ['ecobank', 'ecobank nigeria', 'eco bank'] },
-  { name: 'Union Bank', code: '032', aliases: ['union', 'union bank', 'unionb', 'union bank nigeria'] },
-  { name: 'Stanbic IBTC Bank', code: '221', aliases: ['stanbic', 'stanbic ibtc', 'stanbic bank', 'stanbic ibtc nigeria'] },
-  { name: 'Standard Chartered Bank', code: '068', aliases: ['standard chartered', 'standard bank', 'standard chartered nigeria'] },
-  { name: 'Sterling Bank', code: '232', aliases: ['sterling', 'sterling bank', 'sterlingb', 'sterling bank nigeria'] },
-  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'] },
-  { name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'] },
-  { name: 'Unity Bank', code: '215', aliases: ['unity', 'unity bank', 'unityb', 'unity bank nigeria'] },
-  { name: 'Heritage Bank', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'] },
-  { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'] },
-  { name: 'Jaiz Bank', code: '301', aliases: ['jaiz', 'jaiz bank', 'jaizb', 'jaiz bank nigeria'] },
-  { name: 'Parallex Bank', code: '104', aliases: ['parallex', 'parallex bank', 'parallexb', 'parallex bank nigeria'] },
-  { name: 'Kuda Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'] },
-  { name: 'Providus Bank', code: '101', aliases: ['providus', 'providus bank', 'providusb', 'providus bank nigeria'] },
-  { name: 'ALAT by WEMA', code: '035A', aliases: ['alat', 'alat by wema', 'alat nigeria'] },
-  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'] },
-  { name: 'Paycom', code: '999992', aliases: ['paycom', 'paycom nigeria'] }
+  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
+  { name: 'Diamond Bank', code: '054', aliases: ['diamond', 'diamond bank', 'diamondb', 'diamond bank nigeria'], paycrestInstitutionCode: 'DBLNNGLA' },
+  { name: 'Fidelity Bank', code: '070', aliases: ['fidelity', 'fidelity bank', 'fidelityb', 'fidelity bank nigeria'], paycrestInstitutionCode: 'FIDTNGLA' },
+  { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGLA' },
+  { name: 'First Bank Of Nigeria', code: '011', aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'], paycrestInstitutionCode: 'FBNINGLA' },
+  { name: 'Guaranty Trust Bank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'], paycrestInstitutionCode: 'GTBINGLA' },
+  { name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'], paycrestInstitutionCode: 'PRDTNGLA' },
+  { name: 'Union Bank', code: '032', aliases: ['union', 'union bank', 'unionb', 'union bank nigeria'], paycrestInstitutionCode: 'UBNINGLA' },
+  { name: 'United Bank for Africa', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'], paycrestInstitutionCode: 'UNAFNGLA' },
+  { name: 'Citibank', code: '023', aliases: ['citibank', 'citibank nigeria', 'citi', 'citibank'], paycrestInstitutionCode: 'CITINGLA' },
+  { name: 'Ecobank Bank', code: '050', aliases: ['ecobank', 'ecobank nigeria', 'eco bank'], paycrestInstitutionCode: 'ECOCNGLA' },
+  { name: 'Heritage', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'], paycrestInstitutionCode: 'HBCLNGLA' },
+  { name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'], paycrestInstitutionCode: 'PLNINGLA' },
+  { name: 'Stanbic IBTC Bank', code: '221', aliases: ['stanbic', 'stanbic ibtc', 'stanbic bank', 'stanbic ibtc nigeria'], paycrestInstitutionCode: 'SBICNGLA' },
+  { name: 'Standard Chartered Bank', code: '068', aliases: ['standard chartered', 'standard bank', 'standard chartered nigeria'], paycrestInstitutionCode: 'SCBLNGLA' },
+  { name: 'Sterling Bank', code: '232', aliases: ['sterling', 'sterling bank', 'sterlingb', 'sterling bank nigeria'], paycrestInstitutionCode: 'NAMENGLA' },
+  { name: 'Unity Bank', code: '215', aliases: ['unity', 'unity bank', 'unityb', 'unity bank nigeria'], paycrestInstitutionCode: 'ICITNGLA' },
+  { name: 'Suntrust Bank', code: '033A', aliases: ['suntrust', 'suntrust bank', 'suntrustb', 'suntrust bank nigeria'], paycrestInstitutionCode: 'SUTGNGLA' },
+  { name: 'Providus Bank', code: '101', aliases: ['providus', 'providus bank', 'providusb', 'providus bank nigeria'], paycrestInstitutionCode: 'PROVNGLA' },
+  { name: 'FBNQuest Merchant Bank', code: '401', aliases: ['fbnquest', 'fbnquest merchant bank', 'fbnquest bank'], paycrestInstitutionCode: 'KDHLNGLA' },
+  { name: 'Greenwich Merchant Bank', code: '402', aliases: ['greenwich', 'greenwich merchant bank', 'greenwich bank'], paycrestInstitutionCode: 'GMBLNGLA' },
+  { name: 'FSDH Merchant Bank', code: '403', aliases: ['fsdh', 'fsdh merchant bank', 'fsdh bank'], paycrestInstitutionCode: 'FSDHNGLA' },
+  { name: 'Rand Merchant Bank', code: '404', aliases: ['rand', 'rand merchant bank', 'rand bank'], paycrestInstitutionCode: 'FIRNNGLA' },
+  { name: 'Jaiz Bank', code: '301', aliases: ['jaiz', 'jaiz bank', 'jaizb', 'jaiz bank nigeria'], paycrestInstitutionCode: 'JAIZNGLA' },
+  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZEIBNGLA' },
+  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
+  { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
+  { name: 'OPay', code: '99999', aliases: ['opay', 'opay nigeria'], paycrestInstitutionCode: 'OPAYNGPC' },
+  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'], paycrestInstitutionCode: 'PALMNGPC' },
+  { name: 'Paystack-Titan MFB', code: '999992', aliases: ['paystack', 'paystack mfb', 'paystack-titan mfb'], paycrestInstitutionCode: 'PAYTNGPC' },
+  { name: 'Moniepoint MFB', code: '999993', aliases: ['moniepoint', 'moniepoint mfb', 'moniepoint nigeria'], paycrestInstitutionCode: 'MONINGPC' },
+  { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' }
 ];
 
 // Verify Bank Account with Paystack
@@ -321,15 +328,25 @@ async function generateWallet(chain) {
 // Create Paycrest Order Function
 async function createPaycrestOrder(wallet, ngnAmount, rate) {
   try {
-    // Map to Paycrest network and token, including paycrestCode
+    // Map to Paycrest network and token
     const paycrestMapping = mapToPaycrest(wallet.supportedAssets[0], wallet.chain);
     if (!paycrestMapping) {
       throw new Error('No Paycrest mapping for the selected asset/chain.');
     }
 
+    // Fetch the Paycrest Institution Code
+    const bank = bankList.find(b => b.name.toLowerCase() === wallet.bank.bankName.toLowerCase());
+    if (!bank || !bank.paycrestInstitutionCode) {
+      const errorMsg = `No Paycrest institution code found for bank: ${wallet.bank.bankName}`;
+      logger.error(errorMsg);
+      // Notify admin about the missing institution code
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ ${errorMsg} for user ${wallet.userId}.`);
+      throw new Error(errorMsg);
+    }
+
     // Construct the recipient object as per Paycrest API
     const recipient = {
-      institution: wallet.bank.bankName.replace(/\s+/g, ''), // Ensure it matches Paycrest institution code
+      institution: bank.paycrestInstitutionCode, // Use the mapped Paycrest institution code
       accountIdentifier: wallet.bank.accountNumber,
       accountName: wallet.bank.accountName,
       memo: `Payment from DirectPay`,
