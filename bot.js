@@ -63,9 +63,9 @@ let exchangeRates = {
 };
 
 // Function to fetch exchange rates from Paycrest
-async function fetchExchangeRates() {
+async function fetchExchangeRate(asset) {
   try {
-    const response = await axios.get(PAYCREST_RATE_API_URL, {
+    const response = await axios.get(`${PAYCREST_RATE_API_URL}/${asset}`, {
       headers: {
         'Authorization': `Bearer ${PAYCREST_API_KEY}`,
         'Content-Type': 'application/json'
@@ -74,24 +74,35 @@ async function fetchExchangeRates() {
 
     // Example response structure:
     // {
-    //   "rates": {
-    //     "USDC": 400,
-    //     "USDT": 395
-    //   }
+    //     "status": "success",
+    //     "message": "Rate fetched successfully",
+    //     "data": "1621.29"
     // }
 
-    const rates = response.data.rates;
-
-    // Validate and assign rates
-    if (rates.USDC && rates.USDT) {
-      exchangeRates = {
-        USDC: rates.USDC,
-        USDT: rates.USDT
-      };
-      logger.info('Exchange rates updated successfully from Paycrest.');
+    if (response.data.status === 'success' && response.data.data) {
+      const rate = parseFloat(response.data.data);
+      if (isNaN(rate)) {
+        throw new Error(`Invalid rate data for ${asset}: ${response.data.data}`);
+      }
+      return rate;
     } else {
-      throw new Error('Incomplete rate data received from Paycrest.');
+      throw new Error(`Failed to fetch rate for ${asset}: ${response.data.message || 'Unknown error'}`);
     }
+  } catch (error) {
+    logger.error(`Error fetching exchange rate for ${asset} from Paycrest: ${error.message}`);
+    throw error;
+  }
+}
+
+// Function to fetch exchange rates for all supported assets
+async function fetchExchangeRates() {
+  try {
+    const rates = {};
+    for (const asset of SUPPORTED_ASSETS) {
+      rates[asset] = await fetchExchangeRate(asset);
+    }
+    exchangeRates = rates;
+    logger.info('Exchange rates updated successfully from Paycrest.');
   } catch (error) {
     logger.error(`Error fetching exchange rates from Paycrest: ${error.message}`);
     // Optionally, retain previous rates or handle as needed
