@@ -86,7 +86,7 @@ let exchangeRates = {
 // -------- FUNCTION: FETCH SINGLE ASSET RATE FROM PAYCREST --------
 async function fetchSingleAssetRate(asset) {
   try {
-    const response = await axios.get(`${PAYCREST_RATE_API_URL}}`, {
+    const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
       headers: {
         Authorization: `Bearer ${PAYCREST_API_KEY}`,
         'Content-Type': 'application/json',
@@ -188,10 +188,10 @@ const bankList = [
   },
   // ... Add more banks as needed
   {
-    bankName: 'Safe Haven MFB',
-    paycrestCode: 'SAHVNGPC',
-    paystackCode: '999994',
-    aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'],
+    bankName: 'Palmpay',
+    paycrestCode: 'PALMNGPC',
+    paystackCode: '999991',
+    aliases: ['Palmpay', 'safe haven mfb', 'safe haven nigeria'],
   },
 ];
 
@@ -1072,97 +1072,6 @@ bot.action('back_to_support_menu', async (ctx) => {
       [Markup.button.callback('💬 Contact Support', 'support_contact')],
     ]));
   }
-});
-
-// -------- LEARN ABOUT BASE HANDLER --------
-const baseContent = [
-  {
-    title: 'Welcome to Base',
-    text: 'Base is a secure, low-cost blockchain solution that powers DirectPay’s multi-chain wallets. It ensures fast and reliable transactions for all your crypto needs.',
-  },
-  {
-    title: 'Why Choose Base?',
-    text: '- **Low Fees**: Save more with minimal transaction costs.\n- **Fast Transactions**: Experience near-instant transfers.\n- **Security**: Advanced security protocols to protect your assets.',
-  },
-  {
-    title: 'Getting Started',
-    text: 'To start using Base, simply generate a wallet on your preferred blockchain (Base, Polygon, or BNB Smart Chain), link your bank account, and begin transacting seamlessly.',
-  },
-  {
-    title: 'Learn More',
-    text: 'Visit the official documentation at [Base Docs](https://base-docs-link.com) for comprehensive guides and support.',
-  },
-];
-
-async function sendBaseContent(ctx, index, isNew = false) {
-  const content = baseContent[index];
-  const totalPages = baseContent.length;
-
-  const navigationButtons = [];
-  if (index > 0) {
-    navigationButtons.push(Markup.button.callback('⬅️ Previous', `base_page_${index - 1}`));
-  }
-  if (index < totalPages - 1) {
-    navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
-  }
-  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
-
-  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-  if (isNew) {
-    const sentMessage = await ctx.replyWithMarkdown(
-      `**${content.title}**\n\n${content.text}`,
-      inlineKeyboard
-    );
-    ctx.session.baseMessageId = sentMessage.message_id;
-  } else {
-    try {
-      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
-        parse_mode: 'Markdown',
-        reply_markup: inlineKeyboard.reply_markup,
-      });
-    } catch (error) {
-      // If the message can't be edited (e.g., too old), send a new one
-      const sentMessage = await ctx.replyWithMarkdown(
-        `**${content.title}**\n\n${content.text}`,
-        inlineKeyboard
-      );
-      ctx.session.baseMessageId = sentMessage.message_id;
-    }
-  }
-
-  // Optional: Delete the message after a certain time to keep chat clean
-  setTimeout(() => {
-    if (ctx.session.baseMessageId) {
-      ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-      ctx.session.baseMessageId = null;
-    }
-  }, 120000); // 2 minutes
-}
-
-bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
-  await sendBaseContent(ctx, 0, true);
-});
-
-// -------- ACTION HANDLER: LEARN ABOUT BASE PAGES --------
-bot.action(/base_page_(\d+)/, async (ctx) => {
-  const page = parseInt(ctx.match[1], 10);
-  if (isNaN(page) || page < 0 || page >= baseContent.length) {
-    await ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
-    return;
-  }
-  await sendBaseContent(ctx, page);
-  await ctx.answerCbQuery();
-});
-
-// -------- ACTION HANDLER: EXIT BASE LEARN MORE --------
-bot.action('exit_base', async (ctx) => {
-  await ctx.answerCbQuery();
-  if (ctx.session.baseMessageId) {
-    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-    ctx.session.baseMessageId = null;
-  }
-  await ctx.replyWithMarkdown('🔚 You have exited the "Learn About Base" section.', getMainMenu(true, true));
 });
 
 // -------- ADMIN PANEL HANDLERS --------
