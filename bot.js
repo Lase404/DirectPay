@@ -1,3 +1,4 @@
+
 // DIRECTPAY-TG-BOT
 // DEV: TOLUWALASE ADUNBI
 //-----------------------------------//
@@ -44,7 +45,7 @@ const PAYCREST_RETURN_ADDRESS = process.env.PAYCREST_RETURN_ADDRESS || "0xYourRe
 const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
 const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
 const MAX_WALLETS = 5;
-
+const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
 // Telegram Webhook Configuration
 const TELEGRAM_WEBHOOK_PATH = process.env.WEBHOOK_PATH || '/webhook/telegram'; // e.g., '/webhook/telegram'
 const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN; // e.g., 'https://your-domain.com'
@@ -207,16 +208,20 @@ const bankList = [
   // Add more banks as needed
 ];
 
-// Verify Bank Account with Paycrest
+// -------- PAYSTACK VERIFY BANK --------
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
-    const response = await axios.get(`https://api.paycrest.io/v1/bank/resolve`, { // Assuming Paycrest has a similar endpoint
-      params: { account_number: accountNumber, bank_code: bankCode },
-      headers: { Authorization: `Bearer ${PAYCREST_API_KEY}` },
-    });
+    const response = await axios.get(
+      `https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`,
+      {
+        headers: {
+          Authorization: `Bearer ${PAYSTACK_API_KEY}`,
+        },
+      }
+    );
     return response.data;
   } catch (error) {
-    logger.error(`Error verifying bank account (${accountNumber}, ${bankCode}): ${error.response ? error.response.data.message : error.message}`);
+    logger.error(`Error verifying bank account: ${error.message}`);
     throw new Error('Failed to verify bank account. Please try again later.');
   }
 }
@@ -484,6 +489,10 @@ async function withdrawFromBlockradar(chain, assetId, address, amount, reference
     throw error;
   }
 }
+
+// Wallet Generation Handler (Removed as we will handle via message handlers)
+
+// Add Message Handlers for '💼 Generate Wallet' and '💼 View Wallet'
 
 // Handler for '💼 Generate Wallet' Button
 bot.hears(/💼 Generate Wallet/i, async (ctx) => {
@@ -887,6 +896,60 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   ctx.scene.leave();
 });
 
+// Handle Editing Existing Bank Accounts
+bankLinkingScene.action('edit_existing_banks', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    ctx.scene.leave();
+    return;
+  }
+
+  const linkedWallets = userState.wallets
+    .map((wallet, index) => ({ wallet, index }))
+    .filter(item => item.wallet.bank);
+
+  if (linkedWallets.length === 0) {
+    await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
+    ctx.scene.leave();
+    return;
+  }
+
+  // Prompt User to Select a Wallet to Edit
+  let selectionMessage = '✏️ *Select a Wallet to Edit Its Bank Account*:\n\n';
+  linkedWallets.forEach((item) => {
+    const { wallet, index } = item;
+    selectionMessage += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
+  });
+
+  await ctx.replyWithMarkdown(selectionMessage, Markup.inlineKeyboard(
+    linkedWallets.map(item => [Markup.button.callback(`Wallet ${item.index + 1}`, `edit_existing_wallet_${item.index}`)])
+  ));
+});
+
+// Handler for Selecting a Wallet to Edit Existing Bank Account
+bankLinkingScene.action(/edit_existing_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  await ctx.replyWithMarkdown('🏦 Please enter your new bank name (e.g., Access Bank):');
+  ctx.answerCbQuery(); // Acknowledge the callback
+
+  // Clear any existing timeout and start a new one
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+  }
+  ctx.session.bankLinkingTimeout = setTimeout(() => {
+    if (ctx.session.isBankLinking) {
+      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
+      ctx.scene.leave();
+    }
+  }, 300000); // 5 minutes timeout
+});
+
 // Send Message Scene (Handles Text and Images)
 sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
@@ -1275,7 +1338,8 @@ bot.action(/admin_(.+)/, async (ctx) => {
           message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
           message += `*Status:* ${tx.status || 'Pending'}\n`;
           message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-          message += `*Transaction Hash:* \`${tx.transactionHash || 'N/A'}\`\n\n`;
+          message += `*Transaction Hash:* \`${tx.transactionHash || 'N/A'}\`\n`;
+          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
         });
 
         // Add a 'Back' button to return to the admin menu
@@ -1336,7 +1400,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
               `*Payout (NGN):* ₦${payout}\n\n` +
               `🔹 *Chain:* ${txData.chain}\n` +
-              `*Date:* ${txData.timestamp ? new Date(txData.timestamp).toLocaleString() : 'N/A'}\n\n` +
+              `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` +
               `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
               { parse_mode: 'Markdown' }
             );
@@ -1637,7 +1701,8 @@ app.post('/webhook/blockradar', async (req, res) => {
         `  - *Bank Name:* ${bankName}\n` +
         `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
         `*Chain:* ${chainRaw}\n` +
-        `*Transaction Hash:* \`${transactionHash}\`\n`;
+        `*Transaction Hash:* \`${transactionHash}\`\n` +
+        `*Reference ID:* ${referenceId}\n`;
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
 
       // Integrate Paycrest to off-ramp automatically
@@ -1756,7 +1821,7 @@ app.post('/webhook/paycrest', async (req, res) => {
         `*Rate:* ₦${txData.exchangeRate || 'N/A'} / ${txData.asset || 'N/A'}\n` +
         `*Network:* ${txData.chain || 'N/A'}\n` +
         `*Receiving Account:* ${txData.bankDetails.bankName || 'N/A'} ****${txData.bankDetails.accountNumber.slice(-4) || 'N/A'}\n` +
-        `*Date:* ${txData.timestamp ? new Date(txData.timestamp).toLocaleString() : 'N/A'}\n` +
+        `*Date:* ${new Date(txData.timestamp).toLocaleString() || 'N/A'}\n` +
         `*Reference:* ${txData.referenceId || 'N/A'}\n\n` +
         `If you have any questions or need further assistance, please contact us; we’d love to help.`, 
         { parse_mode: 'Markdown' }
