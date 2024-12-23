@@ -67,7 +67,7 @@ let exchangeRates = {
 // Function to fetch exchange rates from Paycrest
 async function fetchExchangeRate(asset) {
   try {
-    const response = await axios.get(`${PAYCREST_RATE_API_URL}/${asset}`, {
+    const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
       headers: {
         'Authorization': `Bearer ${PAYCREST_API_KEY}`,
         'Content-Type': 'application/json'
