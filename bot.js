@@ -180,12 +180,12 @@ const bankList = [
   { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' }
 ];
 
-// Verify Bank Account with Paystack
+// Verify Bank Account with Paycrest
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
-    const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
+    const response = await axios.get(`https://api.paycrest.io/v1/bank/resolve`, { // Assuming Paycrest has a similar endpoint
       params: { account_number: accountNumber, bank_code: bankCode },
-      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
+      headers: { Authorization: `Bearer ${PAYCREST_API_KEY}` },
     });
     return response.data;
   } catch (error) {
@@ -723,12 +723,12 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
       await ctx.replyWithMarkdown(ratesMessage, getMainMenu(true, true));
 
-      // Log to Admin
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} updated a bank account:\n\n` +
+      // Notify Admin about Bank Linking
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
         `*Account Name:* ${selectedWallet.bank.accountName}\n` +
         `*Bank Name:* ${selectedWallet.bank.bankName}\n` +
         `*Account Number:* ****${selectedWallet.bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
-      logger.info(`User ${userId} updated a bank account: ${JSON.stringify(selectedWallet.bank)}`);
+      logger.info(`User ${userId} linked a bank account: ${JSON.stringify(selectedWallet.bank)}`);
 
       // Note: If you store 'payout' during initial deposit, no need to store here. If not, adjust accordingly.
     }
@@ -1522,150 +1522,43 @@ app.post('/webhook/blockradar', async (req, res) => {
 
     const chain = chainKey;
 
-    if (eventType === 'deposit.success') {
-      if (walletAddress === 'N/A') {
-        logger.error('Webhook missing wallet address.');
-        return res.status(400).send('Missing wallet address.');
-      }
-
-      // Find user by wallet address
-      const usersSnapshot = await db.collection('users').where('walletAddresses', 'array-contains', walletAddress).get();
-      if (usersSnapshot.empty) {
-        logger.warn(`No user found for wallet ${walletAddress}`);
-        // Notify admin about the unmatched wallet
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No user found for wallet address: \`${walletAddress}\``);
-        return res.status(200).send('OK');
-      }
-
-      const userDoc = usersSnapshot.docs[0];
-      const userId = userDoc.id;
-      const userState = userDoc.data();
-      const wallet = userState.wallets.find((w) => w.address === walletAddress);
-
-      // Check if Wallet has Linked Bank
-      if (!wallet || !wallet.bank) {
-        await bot.telegram.sendMessage(userId, `💰 *Deposit Received:* ${amount} ${asset} on ${chainRaw}.\n\nPlease link a bank account to receive your payout securely.`, { parse_mode: 'Markdown' });
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} has received a deposit but hasn't linked a bank account.`, { parse_mode: 'Markdown' });
-        return res.status(200).send('OK');
-      }
-
-      // Only support USDC and USDT
-      if (!SUPPORTED_ASSETS.includes(asset)) {
-        await bot.telegram.sendMessage(userId, `⚠️ *Unsupported Asset Deposited:* ${asset}.\n\nCurrently, only *USDC* and *USDT* are supported. Please contact support if you believe this is an error.`, { parse_mode: 'Markdown' });
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} deposited unsupported asset: ${asset}.`, { parse_mode: 'Markdown' });
-        return res.status(200).send('OK');
-      }
-
-      // Get the latest exchange rate (ensure exchangeRates are updated dynamically)
-      const rate = exchangeRates[asset];
-      if (!rate) {
-        throw new Error(`Exchange rate for ${asset} not found.`);
-      }
-
-      // Calculate the NGN amount based on the current exchange rate
-      const ngnAmount = (amount * rate).toFixed(2);
-
-      const referenceId = generateReferenceId();
-      const bankName = wallet.bank.bankName || 'N/A';
-      const bankAccount = wallet.bank.accountNumber || 'N/A';
-      const accountName = wallet.bank.accountName || 'Valued User';
-
-      // Notify user with a detailed message
-      await bot.telegram.sendMessage(userId,
-        `🎉 *Deposit Received Successfully!*\n\n` +
-        `- *Amount:* ${amount} ${asset}\n` +
-        `- *Chain:* ${chainRaw}\n` +
-        `- *Wallet Address:* \`${walletAddress}\`\n\n` +
-        `Your deposit has been securely received. We are currently processing your withdrawal, which involves transferring the funds from Blockradar to Paycrest. Once the withdrawal is confirmed, the equivalent amount in NGN will be credited to your linked bank account.\n\n` +
-        `🔄 *Status:* Pending Withdrawal\n` +
-        `📅 *Estimated Time:* Within the next 30 minutes\n\n` +
-        `Thank you for choosing *DirectPay*. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
-        { parse_mode: 'Markdown' }
-      );
-
-      // Notify admin with detailed deposit information
-      const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
-        `*User ID:* ${userId}\n` +
-        `*Amount Deposited:* ${amount} ${asset}\n` +
-        `*Exchange Rate:* NGN ${rate} per ${asset}\n` +
-        `*Amount to be Paid:* NGN ${ngnAmount}\n` +
-        `*Time:* ${new Date().toLocaleString()}\n` +
-        `*Bank Details:*\n` +
-        `  - *Account Name:* ${accountName}\n` +
-        `  - *Bank Name:* ${bankName}\n` +
-        `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
-        `*Chain:* ${chainRaw}\n` +
-        `*Transaction Hash:* \`${transactionHash}\`\n` +
-        `*Reference ID:* ${referenceId}\n`;
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
-
-      // Integrate Paycrest to off-ramp automatically
-      const paycrestMapping = mapToPaycrest(asset, chainRaw);
-      if (!paycrestMapping) {
-        logger.error('No Paycrest mapping for this asset/chain.');
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No Paycrest mapping found for asset ${asset} on chain ${chainRaw}.`);
-        return res.status(200).send('OK');
-      }
-
-      // Create Paycrest order
-      let paycrestOrder;
-      try {
-        paycrestOrder = await createPaycrestOrder(wallet, ngnAmount, rate); // Pass ngnAmount instead of crypto amount
-      } catch (err) {
-        logger.error(`Error creating Paycrest order for user ${userId}: ${err.message}`);
-        // Notify admin about the failure
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error creating Paycrest order for user ${userId}: ${err.message}`);
-        return res.status(500).send('Paycrest order error');
-      }
-
-      const receiveAddress = paycrestOrder.receiveAddress;
-
-      // Withdraw from Blockradar to Paycrest receiveAddress
-      // Replace the placeholders with actual asset IDs from Blockradar
-      let blockradarAssetId;
-      switch (asset) {
-        case 'USDC':
-          blockradarAssetId = process.env.BLOCKRADAR_USDC_ASSET_ID || 'USDC_BLOCKRADAR_ASSET_ID'; // Replace with actual asset ID from Blockradar
-          break;
-        case 'USDT':
-          blockradarAssetId = process.env.BLOCKRADAR_USDT_ASSET_ID || 'USDT_BLOCKRADAR_ASSET_ID'; // Replace with actual asset ID from Blockradar
-          break;
-        default:
-          throw new Error(`Unsupported asset: ${asset}`);
-      }
+    if (eventType === 'deposit.swept.success') { // Updated event type
+      // This event indicates that the deposit has been swept to the master wallet
+      const orderId = event.data.id;
 
       try {
-        await withdrawFromBlockradar(chainRaw, blockradarAssetId, receiveAddress, amount, referenceId, { userId, originalTxHash: transactionHash });
-      } catch (err) {
-        logger.error(`Error withdrawing from Blockradar for user ${userId}: ${err.response ? err.response.data.message : err.message}`);
-        // Notify admin about this failure
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error withdrawing from Blockradar for user ${userId}: ${err.response ? err.response.data.message : err.message}`);
-        return res.status(500).send('Blockradar withdrawal error');
+        // Fetch transaction by paycrestOrderId
+        const txSnapshot = await db.collection('transactions').where('paycrestOrderId', '==', orderId).limit(1).get();
+        if (txSnapshot.empty) {
+          logger.error(`No transaction found for Paycrest orderId: ${orderId}`);
+          return res.status(200).send('OK');
+        }
+
+        const txDoc = txSnapshot.docs[0];
+        const txData = txDoc.data();
+        const userId = txData.userId;
+
+        // Update transaction to Paid
+        await db.collection('transactions').doc(txDoc.id).update({ status: 'Paid' });
+
+        // Notify user
+        await bot.telegram.sendMessage(userId, `🎉 *Your funds have been credited to your bank account!*\n\n*Reference ID:* ${txData.referenceId}`, { parse_mode: 'Markdown' });
+
+        res.status(200).send('OK');
+      } catch (error) {
+        logger.error(`Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
+        res.status(500).send('Error');
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
       }
-
-      // Store Transaction in Firestore
-      await db.collection('transactions').add({
-        userId,
-        walletAddress,
-        chain: chainRaw,
-        amount: amount,
-        asset: asset,
-        transactionHash: transactionHash,
-        referenceId,
-        bankDetails: wallet.bank,
-        payout: ngnAmount, // Store NGN payout
-        timestamp: new Date().toISOString(),
-        status: 'Pending',
-        paycrestOrderId: paycrestOrder.id
-      });
-
-      logger.info(`Transaction stored for user ${userId}: Reference ID ${referenceId}`);
-
-      return res.status(200).send('OK');
+    } else if (eventType === 'deposit.success') { // Optional: Handle deposit.success if needed
+      // If you still need to handle deposit.success events, you can process them here.
+      // Alternatively, you can ignore them if 'deposit.swept.success' covers your withdrawal logic.
+      logger.info(`Unhandled event type: ${eventType}`);
+      res.status(200).send('OK');
     } else {
       // Handle other event types if necessary
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `ℹ️ Unhandled event type: ${eventType}`);
-      return res.status(200).send('OK');
+      res.status(200).send('OK');
     }
   } catch (error) {
     logger.error(`Error processing webhook: ${error.message}`);
@@ -1674,7 +1567,7 @@ app.post('/webhook/blockradar', async (req, res) => {
   }
 });
 
-// PAYCREST WEBHOOK HANDLER
+// PAYCREST WEBHOOK HANDLER (Assuming you have one)
 app.post('/webhook/paycrest', async (req, res) => {
   const signature = req.headers['x-paycrest-signature'];
   const rawBody = JSON.stringify(req.body);
