@@ -117,6 +117,17 @@ const chains = {
   }
 };
 
+// Chain Mapping to Handle Variations in Chain Names
+const chainMapping = {
+  'base': 'Base',
+  'polygon': 'Polygon',
+  'bnb smart chain': 'BNB Smart Chain',
+  'bnb smartchain': 'BNB Smart Chain',
+  'bnb chain': 'BNB Smart Chain',
+  'bnb': 'BNB Smart Chain',
+  // Add more mappings if necessary
+};
+
 // Initialize Express App for Webhooks
 const app = express();
 app.use(express.json());
@@ -392,9 +403,14 @@ function mapToPaycrest(asset, chainName) {
 
   let token = asset.toUpperCase(); // 'USDC' or 'USDT'
   let network;
-  if (/polygon/i.test(chainName)) network = 'polygon';
-  else if (/base/i.test(chainName)) network = 'base';
-  else if (/bnb/i.test(chainName)) network = 'bnb-smart-chain';
+  const chainKey = chainMapping[chainName.toLowerCase()];
+  if (!chainKey) {
+    logger.error(`No mapping found for chain name: ${chainName}`);
+    return null;
+  }
+  if (/polygon/i.test(chainKey)) network = 'polygon';
+  else if (/base/i.test(chainKey)) network = 'base';
+  else if (/bnb-smart-chain/i.test(chainKey)) network = 'bnb-smart-chain';
   else return null;
   return { token, network };
 }
@@ -402,7 +418,18 @@ function mapToPaycrest(asset, chainName) {
 // Withdraw from Blockradar Function
 async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
   try {
-    const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${chains[chain].id}/withdraw`, {
+    // Ensure the chain exists in the mapping
+    const chainKey = chainMapping[chain.toLowerCase()];
+    if (!chainKey) {
+      throw new Error(`Unsupported or unknown chain: ${chain}`);
+    }
+
+    const chainData = chains[chainKey];
+    if (!chainData) {
+      throw new Error(`Chain data not found for: ${chainKey}`);
+    }
+
+    const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`, {
       address,
       amount: String(amount),
       assetId,
@@ -428,10 +455,11 @@ async function withdrawFromBlockradar(chain, assetId, address, amount, reference
 // Wallet Generation Handler
 bot.action(/generate_wallet_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  const selectedChainKey = ctx.match[1]; // 'Base', 'Polygon', 'BNB Smart Chain'
+  const selectedChainRaw = ctx.match[1]; // e.g., 'Base', 'Polygon', 'BNB Smart Chain'
 
-  // Validate Selected Chain
-  if (!chains[selectedChainKey]) {
+  // Normalize and map the selected chain
+  const selectedChainKey = chainMapping[selectedChainRaw.toLowerCase()];
+  if (!selectedChainKey) {
     await ctx.replyWithMarkdown('⚠️ Invalid network selection. Please try again.');
     return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
   }
@@ -499,263 +527,14 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   }
 });
 
-// Generate Wallet Button Handler
-bot.hears('💼 Generate Wallet', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (userState.wallets.length >= MAX_WALLETS) {
-    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
-  }
-
-  // Prompt User to Select a Network
-  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
-    [Markup.button.callback('Base', 'generate_wallet_Base')],
-    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
-});
-
-// View Wallet
-bot.hears(/💼\s*View Wallet/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (userState.wallets.length === 0) {
-    return await ctx.replyWithMarkdown('You have no wallets linked. Generate a wallet below.', getMainMenu(false, false));
-  }
-
-  // Display Wallet and Bank Details
-  let walletMessage = '💼 *Your Wallets and Linked Bank Accounts*:\n\n';
-  userState.wallets.forEach((wallet, index) => {
-    const bank = wallet.bank ? `
-🔗 *Linked Bank:* ${wallet.bank.bankName}
-🔢 *Account Number:* ****${wallet.bank.accountNumber.slice(-4)}
-👤 *Account Name:* ${wallet.bank.accountName}
-` : '❌ No bank linked\n';
-
-    walletMessage += `*#${index + 1} Wallet Address:* \`${wallet.address}\`\n${bank}\n`;
-  });
-
-  // **Add inline buttons: Create New Wallet**
-  const inlineButtons = Markup.inlineKeyboard([
-    [Markup.button.callback('➕ Create New Wallet', 'create_new_wallet')],
-  ]);
-
-  await ctx.replyWithMarkdown(walletMessage, inlineButtons);
-});
-
-// Handler for "Create New Wallet" Button
-bot.action('create_new_wallet', async (ctx) => {
-  // Check if a bank linking process is already in progress
-  if (ctx.session.isBankLinking) {
-    await ctx.replyWithMarkdown('⚠️ You are currently linking a bank account. Please complete that process before creating a new wallet.');
-    return ctx.answerCbQuery(); // Acknowledge the callback
-  }
-
-  // Prompt the user to select a network
-  await ctx.replyWithMarkdown('Please choose the network you want to generate a wallet for:', Markup.inlineKeyboard([
-    [Markup.button.callback('Base', 'generate_wallet_Base')],
-    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-  ]));
-  ctx.answerCbQuery(); // Acknowledge the callback
-});
-
-// Link Bank Account Handler
-bot.hears(/🏦\s*Link Bank Account/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (userState.wallets.length === 0) {
-    return await ctx.replyWithMarkdown('⚠️ You have no wallets linked. Please generate a wallet first.', getMainMenu(false, false));
-  }
-
-  // Check if a bank linking process is already in progress
-  if (ctx.session.isBankLinking) {
-    return await ctx.replyWithMarkdown('⚠️ You are already in the process of linking a bank account. Please complete the ongoing process before initiating a new one.');
-  }
-
-  // **Initiate the bank linking scene**
-  ctx.session.processType = 'linking';
-  await ctx.scene.enter('bank_linking_scene');
-});
-
-// Edit Bank Account Option Handler
-bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (userState.wallets.length === 0) {
-    return await ctx.replyWithMarkdown('❌ You have no wallets linked.', getMainMenu(true, false));
-  }
-
-  // Check if a bank linking process is already in progress
-  if (ctx.session.isBankLinking) {
-    return await ctx.replyWithMarkdown('⚠️ You are already in the process of linking a bank account. Please complete the ongoing process before initiating a new one.');
-  }
-
-  // **Initiate the edit bank linking scene**
-  ctx.session.processType = 'editing'; // Indicate that this is an editing process
-  await ctx.scene.enter('bank_linking_scene');
-});
-
-// Handle Selecting Wallets for Editing or Linking Bank Accounts
+// Bank Linking Scene
 bankLinkingScene.enter(async (ctx) => {
-  // Check if a bank linking process is already in progress
-  if (ctx.session.isBankLinking) {
-    await ctx.replyWithMarkdown('⚠️ You are already in the process of linking a bank account. Please complete the ongoing process before initiating a new one.');
-    return ctx.scene.leave();
-  }
-
-  // Set the bank linking flag to true
   ctx.session.isBankLinking = true;
-
   ctx.session.bankData = {};
-  ctx.session.processType = ctx.session.processType || 'linking'; // 'linking' or 'editing'
-  // ctx.session.walletIndex should already be set for auto-initiated linking
-  logger.info(`Entering bankLinkingScene for user ${ctx.from.id}. Process Type: ${ctx.session.processType}. Wallet Index: ${ctx.session.walletIndex}`);
+  ctx.session.bankData.step = 1;
+  ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
 
-  if (ctx.session.processType === 'linking' && ctx.session.walletIndex !== null && ctx.session.walletIndex !== undefined) {
-    // **Auto-initiated linking for a specific wallet**
-    await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
-
-    // Start the timeout for inactivity
-    ctx.session.bankLinkingTimeout = setTimeout(() => {
-      if (ctx.session.isBankLinking) {
-        ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
-        ctx.scene.leave();
-      }
-    }, 300000); // 5 minutes timeout
-  } else if (ctx.session.processType === 'editing') {
-    // **Editing bank account details for existing linked wallets or linking to unlinked wallets**
-
-    let userState;
-    try {
-      userState = await getUserState(ctx.from.id.toString());
-    } catch (error) {
-      logger.error(`Error fetching user state for ${ctx.from.id}: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-      ctx.scene.leave();
-      return;
-    }
-
-    const linkedWallets = userState.wallets
-      .map((wallet, index) => ({ wallet, index }))
-      .filter(item => item.wallet.bank);
-
-    const unlinkedWallets = userState.wallets
-      .map((wallet, index) => ({ wallet, index }))
-      .filter(item => !item.wallet.bank);
-
-    const hasLinked = linkedWallets.length > 0;
-    const hasUnlinked = unlinkedWallets.length > 0;
-
-    if (!hasLinked && !hasUnlinked) {
-      await ctx.replyWithMarkdown('✅ All your wallets have linked bank accounts.');
-      ctx.scene.leave();
-      return;
-    }
-
-    // Present Options Based on Available Wallets
-    const options = [];
-    if (hasLinked) {
-      options.push(Markup.button.callback('✏️ Edit Existing Bank Accounts', 'edit_existing_banks'));
-    }
-    if (hasUnlinked) {
-      options.push(Markup.button.callback('➕ Link Bank to Unlinked Wallets', 'link_unlinked_wallets'));
-    }
-    options.push(Markup.button.callback('🔙 Back to Main Menu', 'exit_bank_linking'));
-
-    await ctx.replyWithMarkdown('🔧 *Edit Bank Account Options*:', Markup.inlineKeyboard(options, { columns: 1 }));
-  } else {
-    // **User-initiated linking; prompt to select which wallet to link**
-    let userState;
-    try {
-      userState = await getUserState(ctx.from.id.toString());
-    } catch (error) {
-      logger.error(`Error fetching user state for ${ctx.from.id}: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-      ctx.scene.leave();
-      return;
-    }
-
-    const walletsPendingLink = userState.wallets
-      .map((wallet, index) => ({ wallet, index }))
-      .filter(item => !item.wallet.bank);
-
-    if (walletsPendingLink.length === 0) {
-      await ctx.replyWithMarkdown('✅ All your wallets have linked bank accounts.');
-      ctx.scene.leave();
-      return;
-    }
-
-    if (walletsPendingLink.length === 1) {
-      // **Only one wallet pending linking; set walletIndex automatically**
-      ctx.session.walletIndex = walletsPendingLink[0].index;
-      await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
-
-      // Start the timeout for inactivity
-      ctx.session.bankLinkingTimeout = setTimeout(() => {
-        if (ctx.session.isBankLinking) {
-          ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
-          ctx.scene.leave();
-        }
-      }, 300000); // 5 minutes timeout
-    } else {
-      // **Multiple wallets pending linking; prompt user to select**
-      let selectionMessage = '💼 *Select a Wallet to Link a Bank Account*:\n\n';
-      walletsPendingLink.forEach((item) => {
-        const { wallet, index } = item;
-        selectionMessage += `*Wallet ${index + 1}:* ${wallet.address.slice(0, 3)}...${wallet.address.slice(-4)}\n`;
-      });
-
-      await ctx.replyWithMarkdown(selectionMessage, Markup.inlineKeyboard(
-        walletsPendingLink.map(item => [Markup.button.callback(`Wallet ${item.index + 1}`, `select_wallet_${item.index}`)])
-      ));
-    }
-  }
-});
-
-// Handler for Selecting a Wallet to Link Bank Account
-bankLinkingScene.action(/select_wallet_(\d+)/, async (ctx) => {
-  const walletIndex = parseInt(ctx.match[1], 10);
-  ctx.session.walletIndex = walletIndex;
-  await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
-  ctx.answerCbQuery(); // Acknowledge the callback
-
-  // Clear any existing timeout and start a new one
-  if (ctx.session.bankLinkingTimeout) {
-    clearTimeout(ctx.session.bankLinkingTimeout);
-  }
+  // Start the inactivity timeout
   ctx.session.bankLinkingTimeout = setTimeout(() => {
     if (ctx.session.isBankLinking) {
       ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
@@ -1730,7 +1509,18 @@ app.post('/webhook/blockradar', async (req, res) => {
     const amount = parseFloat(event.data?.amount) || 0;
     const asset = event.data?.asset?.symbol || 'N/A';
     const transactionHash = event.data?.hash || 'N/A';
-    const chain = event.data?.blockchain?.name || 'N/A';
+    const chainRaw = event.data?.blockchain?.name || 'N/A';
+
+    // Normalize and map the chain name
+    const chainKey = chainMapping[chainRaw.toLowerCase()];
+    if (!chainKey) {
+      logger.error(`Unknown chain received in webhook: ${chainRaw}`);
+      // Notify admin about the unknown chain
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ Received deposit on unknown chain: ${chainRaw}`);
+      return res.status(400).send('Unknown chain.');
+    }
+
+    const chain = chainKey;
 
     if (eventType === 'deposit.success') {
       if (walletAddress === 'N/A') {
@@ -1754,7 +1544,7 @@ app.post('/webhook/blockradar', async (req, res) => {
 
       // Check if Wallet has Linked Bank
       if (!wallet || !wallet.bank) {
-        await bot.telegram.sendMessage(userId, `💰 *Deposit Received:* ${amount} ${asset} on ${chain}.\n\nPlease link a bank account to receive your payout securely.`, { parse_mode: 'Markdown' });
+        await bot.telegram.sendMessage(userId, `💰 *Deposit Received:* ${amount} ${asset} on ${chainRaw}.\n\nPlease link a bank account to receive your payout securely.`, { parse_mode: 'Markdown' });
         await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} has received a deposit but hasn't linked a bank account.`, { parse_mode: 'Markdown' });
         return res.status(200).send('OK');
       }
@@ -1784,7 +1574,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       await bot.telegram.sendMessage(userId,
         `🎉 *Deposit Received Successfully!*\n\n` +
         `- *Amount:* ${amount} ${asset}\n` +
-        `- *Chain:* ${chain}\n` +
+        `- *Chain:* ${chainRaw}\n` +
         `- *Wallet Address:* \`${walletAddress}\`\n\n` +
         `Your deposit has been securely received. We are currently processing your withdrawal, which involves transferring the funds from Blockradar to Paycrest. Once the withdrawal is confirmed, the equivalent amount in NGN will be credited to your linked bank account.\n\n` +
         `🔄 *Status:* Pending Withdrawal\n` +
@@ -1804,16 +1594,16 @@ app.post('/webhook/blockradar', async (req, res) => {
         `  - *Account Name:* ${accountName}\n` +
         `  - *Bank Name:* ${bankName}\n` +
         `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
-        `*Chain:* ${chain}\n` +
+        `*Chain:* ${chainRaw}\n` +
         `*Transaction Hash:* \`${transactionHash}\`\n` +
         `*Reference ID:* ${referenceId}\n`;
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, adminDepositMessage, { parse_mode: 'Markdown' });
 
       // Integrate Paycrest to off-ramp automatically
-      const paycrestMapping = mapToPaycrest(asset, chain);
+      const paycrestMapping = mapToPaycrest(asset, chainRaw);
       if (!paycrestMapping) {
         logger.error('No Paycrest mapping for this asset/chain.');
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No Paycrest mapping found for asset ${asset} on chain ${chain}.`);
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No Paycrest mapping found for asset ${asset} on chain ${chainRaw}.`);
         return res.status(200).send('OK');
       }
 
@@ -1845,9 +1635,9 @@ app.post('/webhook/blockradar', async (req, res) => {
       }
 
       try {
-        await withdrawFromBlockradar(chain, blockradarAssetId, receiveAddress, amount, referenceId, { userId, originalTxHash: transactionHash });
+        await withdrawFromBlockradar(chainRaw, blockradarAssetId, receiveAddress, amount, referenceId, { userId, originalTxHash: transactionHash });
       } catch (err) {
-        logger.error(`Blockradar withdrawal error for user ${userId}: ${err.response ? err.response.data.message : err.message}`);
+        logger.error(`Error withdrawing from Blockradar for user ${userId}: ${err.response ? err.response.data.message : err.message}`);
         // Notify admin about this failure
         await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error withdrawing from Blockradar for user ${userId}: ${err.response ? err.response.data.message : err.message}`);
         return res.status(500).send('Blockradar withdrawal error');
@@ -1857,7 +1647,7 @@ app.post('/webhook/blockradar', async (req, res) => {
       await db.collection('transactions').add({
         userId,
         walletAddress,
-        chain: chain,
+        chain: chainRaw,
         amount: amount,
         asset: asset,
         transactionHash: transactionHash,
