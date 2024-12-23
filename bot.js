@@ -13,6 +13,9 @@
  *   - Cancel and return buttons
  *   - Unified rates screen
  *   - Contextual FAQs after deposits
+ *   - Additional "bot.hears" handlers for missing buttons
+ *   - Generate new wallet directly from View Wallet
+ *   - Immediate bank linking after wallet generation
  ******************************************************/
 
 // -------- MODULES & CONFIGURATION --------
@@ -303,7 +306,7 @@ const stage = new Scenes.Stage([bankLinkingScene, sendMessageScene]);
 bot.use(session());
 bot.use(stage.middleware());
 
-// -------- Greet User /start Command --------
+// -------- GREET /start --------
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
   let userState;
@@ -318,8 +321,8 @@ async function greetUser(ctx) {
   const hasBankLinked = userState.wallets.some((wallet) => wallet.bank);
 
   const greeting = hasWallets
-    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.`
-    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together.`;
+    ? `👋 Hello, ${ctx.from.first_name}!\n\nWelcome back to **DirectPay**, your gateway to secure and seamless crypto transactions.`
+    : `👋 Welcome, ${ctx.from.first_name}!\n\nThank you for choosing **DirectPay**. We make it effortless to send and receive stablecoins. Use the menu below to begin.`;
 
   if (isAdmin(userId)) {
     const adminMsg = await ctx.replyWithMarkdown(
@@ -336,10 +339,122 @@ bot.start(async (ctx) => {
   await greetUser(ctx);
 });
 
+// -------- HEARS: EDIT BANK ACCOUNT --------
+bot.hears(/🏦\s*Edit Bank Account/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    return ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  }
+
+  if (userState.wallets.length === 0) {
+    return ctx.replyWithMarkdown('❌ You have no wallets to edit. Please generate a wallet first.');
+  }
+
+  // Prompt the user to choose which wallet to edit if multiple exist
+  let selectionText = '*Please select the wallet you want to edit the bank account for:*';
+  const walletButtons = userState.wallets.map((wallet, index) => [
+    Markup.button.callback(`Wallet ${index + 1} (${wallet.chain})`, `edit_bank_wallet_${index}`),
+  ]);
+
+  await ctx.replyWithMarkdown(selectionText, Markup.inlineKeyboard(walletButtons));
+});
+
+// -------- ACTION: EDIT BANK WALLET CHOICE --------
+bot.action(/edit_bank_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = 'editing'; // indicates we are editing an existing bank
+  await ctx.answerCbQuery('🔧 Editing bank details...');
+  await ctx.scene.enter('bank_linking_scene');
+});
+
+// -------- HEARS: LINK BANK ACCOUNT --------
+bot.hears(/🏦\s*Link Bank Account/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    return ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  }
+
+  if (userState.wallets.length === 0) {
+    return ctx.replyWithMarkdown('❌ You have no wallets to link. Please generate a wallet first.');
+  }
+
+  // Prompt user to select which wallet to link if multiple
+  let selectionText = '*Please select the wallet you want to link a bank account to:*';
+  const buttons = userState.wallets.map((wallet, index) => [
+    Markup.button.callback(`Wallet ${index + 1} (${wallet.chain})`, `link_bank_wallet_${index}`),
+  ]);
+
+  await ctx.replyWithMarkdown(selectionText, Markup.inlineKeyboard(buttons));
+});
+
+// -------- ACTION: LINK BANK WALLET CHOICE --------
+bot.action(/link_bank_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.walletIndex = walletIndex;
+  ctx.session.processType = 'linking';
+  await ctx.answerCbQuery('🏦 Linking bank account...');
+  await ctx.scene.enter('bank_linking_scene');
+});
+
+// -------- HEARS: VIEW WALLET (Add "Generate New Wallet" Option) --------
+bot.hears(/💼\s*View Wallet/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    return ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  }
+
+  if (userState.wallets.length === 0) {
+    return ctx.replyWithMarkdown(
+      '❌ You have no wallets. Use "💼 Generate Wallet" to create one.',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('➕ Generate Wallet', 'view_wallet_generate')],
+      ])
+    );
+  }
+
+  // Show current wallets with a button to generate a new one
+  await displayWallets(ctx, 1);
+  await ctx.replyWithMarkdown(
+    'Would you like to create another wallet?',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('➕ Generate Another Wallet', 'view_wallet_generate')],
+    ])
+  );
+});
+
+// -------- ACTION: Generate Another Wallet from "View Wallet" --------
+bot.action('view_wallet_generate', async (ctx) => {
+  await ctx.answerCbQuery();
+  await ctx.replyWithMarkdown(
+    'Please select the blockchain network for your new wallet:',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Base', 'generate_wallet_Base')],
+      [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+      [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+    ])
+  );
+});
+
 // -------- GENERATE WALLET HANDLER --------
 bot.hears(/💼\s*Generate Wallet/i, async (ctx) => {
   await ctx.replyWithMarkdown(
-    'Select a blockchain network to generate your wallet:',
+    '🔐 *Wallet Generation*\n\nPlease select the blockchain network where you want to generate your wallet:',
     Markup.inlineKeyboard([
       [Markup.button.callback('Base', 'generate_wallet_Base')],
       [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
@@ -359,7 +474,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     return;
   }
 
-  await ctx.answerCbQuery(`Generating wallet on ${chainKey}...`);
+  await ctx.answerCbQuery(`🔄 Generating wallet on ${chainKey}...`);
 
   // Indicate processing
   const processingMsg = await ctx.replyWithMarkdown(`🔄 Generating your wallet on *${chainKey}*...`);
@@ -391,13 +506,13 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
 
     const successMsg = `✅ *Wallet Created on ${chainKey}*\n\n• **Address:** \`${walletAddress}\`\n• **Supported Assets:** ${chains[chainKey].supportedAssets.join(
       ', '
-    )}\n\nNext Step:\n• *Link Your Bank Account*`;
+    )}\n\n*Next Step:*\n• *Link Your Bank Account*`;
 
     await ctx.replyWithMarkdown(successMsg, Markup.inlineKeyboard([
       [Markup.button.callback('🏦 Link Bank Now', 'link_bank_now')],
     ]));
 
-    // Optionally, auto-start bank linking scene
+    // Automatically start bank linking scene
     ctx.session.walletIndex = userState.wallets.length - 1;
     ctx.session.processType = 'linking';
     await ctx.scene.enter('bank_linking_scene');
@@ -440,6 +555,7 @@ async function generateWalletOnChain(chainKey) {
 bot.action('link_bank_now', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
+
   try {
     userState = await getUserState(userId);
   } catch (error) {
@@ -492,6 +608,7 @@ bot.action(/link_bank_wallet_(\d+)/, async (ctx) => {
 bankLinkingScene.enter(async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
+
   try {
     userState = await getUserState(userId);
   } catch (error) {
@@ -544,12 +661,13 @@ bankLinkingScene.on('text', async (ctx) => {
     if (!bankItem) {
       return ctx.replyWithMarkdown(
         '❌ Invalid bank name. Please enter a valid bank from our supported list:\n\n' +
-          bankList.map((b) => `• ${b.bankName}`).join('\n')
+        bankList.map((b) => `• ${b.bankName}`).join('\n')
       );
     }
 
     ctx.session.bankData.bankName = bankItem.bankName;
     ctx.session.bankData.paystackCode = bankItem.paystackCode;
+    ctx.session.bankData.paycrestCode = bankItem.paycrestCode;
     ctx.session.bankData.step = 2;
 
     // Proceed to Step 2
@@ -595,7 +713,7 @@ bankLinkingScene.on('text', async (ctx) => {
       await ctx.deleteMessage(verifyingMsg.message_id);
 
       // Proceed to Step 4: Confirmation
-      const confirmationMsg = `🏦 *Bank Linking - Step 3 of 3*\n\nPlease confirm your bank details:\n\n• **Bank Name:** ${ctx.session.bankData.bankName}\n• **Account Number:** ${ctx.session.bankData.accountNumber}\n• **Account Holder:** ${accountName}\n\nIs this information correct?`;
+      const confirmationMsg = `🏦 *Bank Linking - Step 3 of 3*\n\nPlease confirm your bank details:\n\n• **Bank Name:** ${ctx.session.bankData.bankName}\n• **Account Number:** \`${ctx.session.bankData.accountNumber}\`\n• **Account Holder:** ${accountName}\n\nIs this information correct?`;
       await ctx.replyWithMarkdown(confirmationMsg, Markup.inlineKeyboard([
         [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
         [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
@@ -641,7 +759,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   // Link bank details to the wallet
   wallet.bank = {
     bankName: ctx.session.bankData.bankName,
-    paycrestCode: bankList.find((b) => b.bankName === ctx.session.bankData.bankName).paycrestCode,
+    paycrestCode: ctx.session.bankData.paycrestCode,
     paystackCode: ctx.session.bankData.paystackCode,
     accountNumber: ctx.session.bankData.accountNumber,
     accountName: ctx.session.bankData.accountName,
@@ -651,7 +769,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     await updateUserState(userId, { wallets: userState.wallets });
 
     // Notify user of successful linking
-    const successMsg = `✅ *Bank Account Linked Successfully!*\n\n• **Bank Name:** ${wallet.bank.bankName}\n• **Account Number:** ${wallet.bank.accountNumber}\n• **Account Holder:** ${wallet.bank.accountName}\n\nYou can view your wallet details using the "💼 View Wallet" option.`;
+    const successMsg = `✅ *Bank Account Linked Successfully!*\n\n• **Bank Name:** ${wallet.bank.bankName}\n• **Account Number:** \`${wallet.bank.accountNumber}\`\n• **Account Holder:** ${wallet.bank.accountName}\n\nYou can view your wallet details using the "💼 View Wallet" option.`;
     await ctx.replyWithMarkdown(successMsg, getMainMenu(true, true));
 
     // Notify admin
@@ -694,7 +812,7 @@ bankLinkingScene.action('confirm_bank_no', async (ctx) => {
 // Handle cancelling bank linking
 bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   await ctx.replyWithMarkdown('❌ Bank linking process has been canceled.');
-  
+
   // Cleanup session variables
   delete ctx.session.bankData;
   delete ctx.session.isBankLinking;
@@ -722,11 +840,22 @@ bot.hears(/💼\s*View Wallet/i, async (ctx) => {
   }
 
   if (userState.wallets.length === 0) {
-    return ctx.replyWithMarkdown('❌ You have no wallets. Use "💼 Generate Wallet" to create one.');
+    return ctx.replyWithMarkdown(
+      '❌ You have no wallets. Use "💼 Generate Wallet" to create one.',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('➕ Generate Wallet', 'view_wallet_generate')],
+      ])
+    );
   }
 
   // Build wallet message with pagination if necessary
   await displayWallets(ctx, 1);
+  await ctx.replyWithMarkdown(
+    'Would you like to create another wallet?',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('➕ Generate Another Wallet', 'view_wallet_generate')],
+    ])
+  );
 });
 
 // -------- FUNCTION: DISPLAY WALLETS WITH PAGINATION --------
@@ -827,22 +956,6 @@ bot.action(/tx_page_(\d+)/, async (ctx) => {
   await showTransactions(ctx, newPage);
 });
 
-// -------- ACTION HANDLER: TRANSACTIONS MAIN MENU BACK --------
-bot.action('back_to_main_menu', async (ctx) => {
-  await ctx.answerCbQuery();
-  await greetUser(ctx);
-  try {
-    await ctx.deleteMessage();
-  } catch (error) {
-    // Message might have been deleted already
-  }
-});
-
-// -------- VIEW TRANSACTIONS HANDLER --------
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  await showTransactions(ctx, 1); // Show first page
-});
-
 // -------- VIEW CURRENT RATES HANDLER --------
 bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   const ratesMsg = `📈 *Current Paycrest Rates:*\n\n• **USDC:** ₦${exchangeRates.USDC}\n• **USDT:** ₦${exchangeRates.USDT}\n\n*(Rates update every 5 minutes)*`;
@@ -895,7 +1008,8 @@ bot.action('support_how_it_works', async (ctx) => {
         [Markup.button.callback('🔙 Support Menu', 'back_to_support_menu')],
       ]).reply_markup,
     });
-  } catch {
+  } catch (error) {
+    // If message can't be edited (e.g., too old), send a new one
     await ctx.replyWithMarkdown(howItWorksMsg, Markup.inlineKeyboard([
       [Markup.button.callback('🔙 Support Menu', 'back_to_support_menu')],
     ]));
@@ -913,7 +1027,7 @@ bot.action('support_tx_not_received', async (ctx) => {
         [Markup.button.callback('🔙 Support Menu', 'back_to_support_menu')],
       ]).reply_markup,
     });
-  } catch {
+  } catch (error) {
     await ctx.replyWithMarkdown(txIssueMsg, Markup.inlineKeyboard([
       [Markup.button.callback('🔙 Support Menu', 'back_to_support_menu')],
     ]));
@@ -931,7 +1045,7 @@ bot.action('support_contact', async (ctx) => {
         [Markup.button.callback('🔙 Support Menu', 'back_to_support_menu')],
       ]).reply_markup,
     });
-  } catch {
+  } catch (error) {
     await ctx.replyWithMarkdown(contactMsg, Markup.inlineKeyboard([
       [Markup.button.callback('🔙 Support Menu', 'back_to_support_menu')],
     ]));
@@ -951,7 +1065,7 @@ bot.action('back_to_support_menu', async (ctx) => {
         [Markup.button.callback('💬 Contact Support', 'support_contact')],
       ]).reply_markup,
     });
-  } catch {
+  } catch (error) {
     await ctx.replyWithMarkdown(supportMenuMsg, Markup.inlineKeyboard([
       [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
       [Markup.button.callback('⚠️ Transaction Not Received', 'support_tx_not_received')],
@@ -1051,15 +1165,54 @@ bot.action('exit_base', async (ctx) => {
   await ctx.replyWithMarkdown('🔚 You have exited the "Learn About Base" section.', getMainMenu(true, true));
 });
 
-// -------- ACTION HANDLER: OPEN ADMIN PANEL --------
-bot.action('open_admin_panel', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
+// -------- ADMIN PANEL HANDLERS --------
 
+// Example: View All Transactions (Admin)
+bot.action('admin_view_transactions', async (ctx) => {
   await ctx.answerCbQuery();
+  // Placeholder: Implement viewing all transactions
+  await ctx.replyWithMarkdown('📋 *View All Transactions*\n\nFeature under development.');
+});
 
+// Example: Send Message to User (Admin)
+bot.action('admin_send_message', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session.sendMessageMode = true;
+  await ctx.replyWithMarkdown('📩 *Send Message to User*\n\nPlease enter the User ID you want to message:');
+});
+
+// Example: Mark Transactions as Paid (Admin)
+bot.action('admin_mark_paid', async (ctx) => {
+  await ctx.answerCbQuery();
+  // Placeholder: Implement marking transactions as paid
+  await ctx.replyWithMarkdown('✅ *Mark Transactions as Paid*\n\nPlease enter the Reference ID of the transaction to mark as paid:');
+  ctx.session.markPaidMode = true;
+});
+
+// Example: View All Users (Admin)
+bot.action('admin_view_users', async (ctx) => {
+  await ctx.answerCbQuery();
+  // Placeholder: Implement viewing all users
+  await ctx.replyWithMarkdown('👥 *View All Users*\n\nFeature under development.');
+});
+
+// Example: Broadcast Message (Admin)
+bot.action('admin_broadcast_message', async (ctx) => {
+  await ctx.answerCbQuery();
+  ctx.session.broadcastMode = true;
+  await ctx.replyWithMarkdown('📢 *Broadcast Message*\n\nPlease enter the message you want to broadcast to all users:');
+});
+
+// Example: Manage Banks (Admin)
+bot.action('admin_manage_banks', async (ctx) => {
+  await ctx.answerCbQuery();
+  // Placeholder: Implement managing banks
+  await ctx.replyWithMarkdown('🏦 *Manage Banks*\n\nFeature under development.');
+});
+
+// Example: Back to Admin Menu
+bot.action('admin_back_to_main', async (ctx) => {
+  await ctx.answerCbQuery();
   const adminMsg = `👨‍💼 *Admin Panel*\n\nSelect an option below:`;
   await ctx.editMessageText(adminMsg, {
     parse_mode: 'Markdown',
@@ -1067,54 +1220,11 @@ bot.action('open_admin_panel', async (ctx) => {
   });
 });
 
-// -------- ADMIN ACTION HANDLERS (PLACEHOLDERS) --------
-// Implement these handlers based on your specific requirements
-
-bot.action('admin_view_transactions', async (ctx) => {
-  // Placeholder: Implement viewing all transactions
-  await ctx.answerCbQuery('📋 Feature under development.', { show_alert: true });
-});
-
-bot.action('admin_send_message', async (ctx) => {
-  // Placeholder: Enter send message scene
-  ctx.session.awaitingUserId = true;
-  await ctx.replyWithMarkdown('📩 Enter the User ID you want to message:');
-});
-
-bot.action('admin_mark_paid', async (ctx) => {
-  // Placeholder: Implement marking transactions as paid
-  await ctx.answerCbQuery('✅ Feature under development.', { show_alert: true });
-});
-
-bot.action('admin_view_users', async (ctx) => {
-  // Placeholder: Implement viewing all users
-  await ctx.answerCbQuery('👥 Feature under development.', { show_alert: true });
-});
-
-bot.action('admin_broadcast_message', async (ctx) => {
-  // Placeholder: Implement broadcasting messages
-  ctx.session.awaitingBroadcast = true;
-  await ctx.replyWithMarkdown('📢 Enter the message you want to broadcast to all users:');
-});
-
-bot.action('admin_manage_banks', async (ctx) => {
-  // Placeholder: Implement managing banks
-  await ctx.answerCbQuery('🏦 Feature under development.', { show_alert: true });
-});
-
-bot.action('admin_back_to_main', async (ctx) => {
-  await ctx.answerCbQuery();
-  await ctx.editMessageText('👨‍💼 *Admin Panel*\n\nSelect an option below:', {
-    parse_mode: 'Markdown',
-    reply_markup: getAdminMenu().reply_markup,
-  });
-});
-
-// -------- SEND MESSAGE SCENE (ADMIN) --------
+// -------- SEND MESSAGE SCENE HANDLER --------
 sendMessageScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
 
-  if (ctx.session.awaitingUserId) {
+  if (ctx.session.sendMessageMode) {
     const targetUserId = ctx.message.text.trim();
     if (!/^\d+$/.test(targetUserId)) {
       return ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a numeric User ID:');
@@ -1127,10 +1237,16 @@ sendMessageScene.on('text', async (ctx) => {
     }
 
     ctx.session.targetUserId = targetUserId;
-    ctx.session.awaitingUserId = false;
-    await ctx.replyWithMarkdown('📝 Enter the message you want to send:');
-  } else if (ctx.session.awaitingBroadcast) {
+    ctx.session.sendMessageMode = false;
+    ctx.session.awaitingMessage = true;
+
+    await ctx.replyWithMarkdown('📝 Enter the message you want to send to the user:');
+  } else if (ctx.session.broadcastMode) {
     const broadcastMsg = ctx.message.text.trim();
+    if (!broadcastMsg) {
+      return ctx.replyWithMarkdown('❌ Message cannot be empty. Please enter a valid message:');
+    }
+
     // Fetch all user IDs
     const usersSnapshot = await db.collection('users').get();
     const allUserIds = usersSnapshot.docs.map((doc) => doc.id);
@@ -1138,7 +1254,7 @@ sendMessageScene.on('text', async (ctx) => {
     // Send message to each user
     for (const uid of allUserIds) {
       try {
-        await bot.telegram.sendMessage(uid, `📢 *Broadcast Message*\n\n${broadcastMsg}`, {
+        await bot.telegram.sendMessage(uid, `📢 *Broadcast Message from Admin:*\n\n${broadcastMsg}`, {
           parse_mode: 'Markdown',
         });
       } catch (error) {
@@ -1147,11 +1263,8 @@ sendMessageScene.on('text', async (ctx) => {
     }
 
     await ctx.replyWithMarkdown('📢 Broadcast message sent to all users.');
-    ctx.session.awaitingBroadcast = false;
+    ctx.session.broadcastMode = false;
     await ctx.replyWithMarkdown('👨‍💼 *Admin Panel*\n\nSelect an option below:', getAdminMenu());
-  } else {
-    // Handle other text messages if needed
-    await ctx.replyWithMarkdown('🤖 I did not understand that command. Please use the menu buttons.');
   }
 });
 
@@ -1159,6 +1272,7 @@ sendMessageScene.leave((ctx) => {
   delete ctx.session.targetUserId;
   delete ctx.session.awaitingUserId;
   delete ctx.session.awaitingBroadcast;
+  delete ctx.session.awaitingMessage;
 });
 
 // -------- SEND MESSAGE AFTER ADMIN SENDS TEXT --------
@@ -1187,66 +1301,197 @@ bot.on('message', async (ctx) => {
     ctx.scene.leave();
   }
 
+  if (ctx.session.markPaidMode) {
+    const referenceId = ctx.message.text.trim();
+    if (!referenceId) {
+      return ctx.replyWithMarkdown('❌ Reference ID cannot be empty. Please enter a valid Reference ID:');
+    }
+
+    try {
+      await markTransactionAsPaid(referenceId);
+      await ctx.replyWithMarkdown(`✅ Transaction \`${referenceId}\` has been marked as *Paid*.`);
+    } catch (error) {
+      await ctx.replyWithMarkdown(`⚠️ Failed to mark transaction as paid: ${error.message}`);
+    }
+
+    // Cleanup
+    delete ctx.session.markPaidMode;
+  }
+
   // Add additional handlers if necessary
 });
 
-// -------- VIEW WALLET ACTION HANDLER WITH PAGINATION --------
-bot.action(/wallet_page_(\d+)/, async (ctx) => {
-  const newPage = parseInt(ctx.match[1], 10);
-  await ctx.answerCbQuery();
-  await displayWallets(ctx, newPage);
-});
-
-// -------- FUNCTION: DISPLAY WALLETS WITH PAGINATION --------
-async function displayWallets(ctx, page = 1) {
-  const userId = ctx.from.id.toString();
-  let userState;
-  
+// -------- FUNCTION: SEND MESSAGE TO USER --------
+async function sendMessageToUser(ctx, messageContent) {
+  const targetUserId = ctx.session.targetUserId;
   try {
-    userState = await getUserState(userId);
+    await bot.telegram.sendMessage(
+      targetUserId,
+      `📩 *Message from Admin:*\n\n${messageContent}`,
+      { parse_mode: 'Markdown' }
+    );
+    await ctx.replyWithMarkdown('✅ Message sent successfully.');
   } catch (error) {
-    logger.error(`Error in displayWallets: ${error.message}`);
-    return ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    logger.error(`Error sending message to ${targetUserId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Failed to send the message. The user might have blocked the bot.');
   }
 
-  const wallets = userState.wallets;
-  const itemsPerPage = 5;
-  const totalPages = Math.ceil(wallets.length / itemsPerPage);
-
-  if (page < 1) page = 1;
-  if (page > totalPages) page = totalPages;
-
-  const startIdx = (page - 1) * itemsPerPage;
-  const endIdx = page * itemsPerPage;
-  const walletsPage = wallets.slice(startIdx, endIdx);
-
-  let walletMsg = `💼 *Your Wallets (Page ${page} of ${totalPages})*\n\n`;
-  walletsPage.forEach((wallet, index) => {
-    walletMsg += `• *Wallet ${startIdx + index + 1}:*\n  • *Chain:* ${wallet.chain}\n  • *Address:* \`${wallet.address}\`\n  • *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n\n`;
-  });
-
-  const navigationButtons = [];
-  if (page > 1) navigationButtons.push(Markup.button.callback('⏮ Previous', `wallet_page_${page - 1}`));
-  if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ⏭', `wallet_page_${page + 1}`));
-  navigationButtons.push(Markup.button.callback('🔙 Main Menu', 'back_to_main_menu'));
-
-  await ctx.replyWithMarkdown(walletMsg, Markup.inlineKeyboard([navigationButtons]));
+  // Cleanup
+  delete ctx.session.targetUserId;
 }
 
-// -------- VIEW TRANSACTIONS HANDLER WITH PAGINATION --------
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  await showTransactions(ctx, 1); // Show first page
-});
+// -------- FUNCTION: MARK TRANSACTION AS PAID --------
+async function markTransactionAsPaid(referenceId) {
+  try {
+    const txDoc = await db.collection('transactions').doc(referenceId).get();
+    if (!txDoc.exists) {
+      throw new Error('Transaction not found.');
+    }
 
-// -------- FUNCTION: SHOW TRANSACTIONS WITH PAGINATION --------
-async function showTransactions(ctx, page = 1) {
+    await db.collection('transactions').doc(referenceId).update({
+      status: 'Paid',
+      paidAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Notify user
+    const txData = txDoc.data();
+    await bot.telegram.sendMessage(
+      txData.userId,
+      `✅ *Your transaction with Reference ID \`${referenceId}\` has been marked as Paid.*\n\nThank you for using DirectPay!`,
+      { parse_mode: 'Markdown' }
+    );
+  } catch (error) {
+    logger.error(`Error marking transaction as paid: ${error.message}`);
+    throw error;
+  }
+}
+
+// -------- FUNCTION: CREATE PAYCREST ORDER --------
+/**
+ * Creates a Paycrest order to off-ramp crypto.
+ * @param {string} userId        - The user's Telegram ID or unique identifier.
+ * @param {number} amount        - The amount of the crypto token to off-ramp (crypto amount).
+ * @param {string} token         - The token being off-ramped (e.g., "USDC" or "USDT").
+ * @param {string} network       - The blockchain network name (e.g., "Base", "Polygon", "BNB Smart Chain").
+ * @param {object} bankDetails   - Contains user’s bank info: { bankName, accountNumber, accountName, ... }.
+ * @returns {object}             - The Paycrest order object, including an `id` and a `receiveAddress`.
+ */
+async function createPaycrestOrder(userId, amount, token, network, bankDetails) {
+  try {
+    // 1) Ensure the user’s bank exists in our bank list.
+    const bankItem = bankList.find((b) => b.bankName.toLowerCase() === bankDetails.bankName.toLowerCase());
+    if (!bankItem || !bankItem.paycrestCode) {
+      throw new Error(`No Paycrest institution code found for bank: ${bankDetails.bankName}`);
+    }
+
+    // 2) Construct the recipient object using Paycrest’s required fields.
+    const recipient = {
+      institution: bankItem.paycrestCode,       // Paycrest institution code from your bank list
+      accountIdentifier: bankDetails.accountNumber,
+      accountName: bankDetails.accountName,
+      memo: `Payment from DirectPay`,           // A custom note/memo
+      providerId: ""                            // If you need a specific liquidity provider, otherwise empty
+    };
+
+    // 3) Get the appropriate exchange rate for this token from your global `exchangeRates` object.
+    const rate = exchangeRates[token];
+    if (!rate) {
+      throw new Error(`Exchange rate for ${token} not found or zero.`);
+    }
+
+    // 4) Construct your Paycrest order payload. 
+    const orderPayload = {
+      amount: String(amount),                   // The amount of token to be off-ramped, in string format
+      rate: String(rate),                       // The rate from token to NGN
+      network: mapToPaycrestNetwork(network),    // Map "BNB Smart Chain" -> "bnb-smart-chain", etc.
+      token: token.toUpperCase(),               // e.g., "USDC" or "USDT"
+      recipient: recipient,
+      returnAddress: PAYCREST_RETURN_ADDRESS,   // Return address if transaction fails
+      feePercent: 2,                            // Example fee (2%)
+      // feeAddress: '0x123...',                // Optionally specify a fee address if needed
+    };
+
+    // 5) Call Paycrest’s API to create the order.
+    const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
+      headers: {
+        'API-Key': PAYCREST_API_KEY,      // Your Paycrest Client ID / API key
+        'Content-Type': 'application/json'
+      }
+    });
+
+    // 6) Validate the response from Paycrest.
+    if (orderResp.data.status !== 'success') {
+      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
+    }
+
+    // 7) The returned `data` object should contain details like `id`, `amount`, `token`, `network`, `receiveAddress`, etc.
+    return orderResp.data.data; 
+  } catch (err) {
+    logger.error(`Error creating Paycrest order for user ${userId}: ${err.message}`);
+    throw new Error(`Failed to create Paycrest order. Details: ${err.message}`);
+  }
+}
+
+/**
+ * A helper function to map your internal chain/network naming (e.g., "BNB Smart Chain")
+ * to what Paycrest expects (e.g., "bnb-smart-chain").
+ */
+function mapToPaycrestNetwork(chainName) {
+  const lower = chainName.toLowerCase().trim();
+  if (lower.includes('base')) return 'base';
+  if (lower.includes('polygon')) return 'polygon';
+  if (lower.includes('bnb')) return 'bnb-smart-chain';
+  // Add more mappings if needed
+  throw new Error(`Unsupported or unknown chain for Paycrest: ${chainName}`);
+}
+
+// -------- FUNCTION: WITHDRAW FROM BLOCKRADAR --------
+async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
+  try {
+    const chainData = chains[chain];
+    if (!chainData) {
+      throw new Error(`Unsupported chain: ${chain}`);
+    }
+
+    const response = await axios.post(
+      `https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`,
+      {
+        address,
+        amount: String(amount),
+        assetId,
+        reference,
+        metadata,
+      },
+      {
+        headers: {
+          'x-api-key': BLOCKRADAR_API_KEY,
+          'Content-Type': 'application/json',
+        },
+      }
+    );
+
+    if (response.data.statusCode !== 200) {
+      throw new Error(`Blockradar withdrawal error: ${JSON.stringify(response.data)}`);
+    }
+
+    return response.data;
+  } catch (error) {
+    logger.error(
+      `Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`
+    );
+    throw error;
+  }
+}
+
+// -------- FUNCTION: DISPLAY TRANSACTIONS WITH PAGINATION (EDIT EXISTING MESSAGE) --------
+async function displayTransactions(ctx, page = 1) {
   const userId = ctx.from.id.toString();
   let userState;
 
   try {
     userState = await getUserState(userId);
   } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    logger.error(`Error in displayTransactions: ${error.message}`);
     return ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
   }
 
@@ -1283,43 +1528,52 @@ async function showTransactions(ctx, page = 1) {
   if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ⏭', `tx_page_${page + 1}`));
   navigationButtons.push(Markup.button.callback('🔙 Main Menu', 'back_to_main_menu'));
 
-  await ctx.replyWithMarkdown(txMsg, Markup.inlineKeyboard([navigationButtons]));
+  try {
+    await ctx.editMessageText(txMsg, {
+      parse_mode: 'Markdown',
+      reply_markup: Markup.inlineKeyboard([navigationButtons]).reply_markup,
+    });
+  } catch (error) {
+    // If message can't be edited (e.g., too old), send a new one
+    await ctx.replyWithMarkdown(txMsg, Markup.inlineKeyboard([navigationButtons]));
+  }
 }
 
-// -------- ACTION HANDLER: TRANSACTION PAGINATION --------
-bot.action(/tx_page_(\d+)/, async (ctx) => {
-  const newPage = parseInt(ctx.match[1], 10);
-  await ctx.answerCbQuery();
-  await showTransactions(ctx, newPage);
-});
-
-// -------- VIEW CURRENT RATES HANDLER --------
-bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
-  const ratesMsg = `📈 *Current Paycrest Rates:*\n\n• **USDC:** ₦${exchangeRates.USDC}\n• **USDT:** ₦${exchangeRates.USDT}\n\n*(Rates update every 5 minutes)*`;
-  await ctx.replyWithMarkdown(ratesMsg, Markup.inlineKeyboard([
-    [Markup.button.callback('🔄 Refresh Rates', 'refresh_rates')],
-    [Markup.button.callback('🔙 Main Menu', 'back_to_main_menu')],
-  ]));
-});
-
-// -------- ACTION HANDLER: REFRESH RATES --------
-bot.action('refresh_rates', async (ctx) => {
-  await ctx.answerCbQuery('🔄 Refreshing rates...');
+// -------- FUNCTION: DISPLAY WALLETS WITH PAGINATION --------
+async function displayWallets(ctx, page = 1) {
+  const userId = ctx.from.id.toString();
+  let userState;
+  
   try {
-    await fetchExchangeRates();
+    userState = await getUserState(userId);
   } catch (error) {
-    // Handle error if needed
+    logger.error(`Error in displayWallets: ${error.message}`);
+    return ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
   }
 
-  const updatedRatesMsg = `📈 *Updated Rates:*\n\n• **USDC:** ₦${exchangeRates.USDC}\n• **USDT:** ₦${exchangeRates.USDT}\n\n*(Rates update every 5 minutes)*`;
-  await ctx.editMessageText(updatedRatesMsg, {
-    parse_mode: 'Markdown',
-    reply_markup: Markup.inlineKeyboard([
-      [Markup.button.callback('🔄 Refresh Rates', 'refresh_rates')],
-      [Markup.button.callback('🔙 Main Menu', 'back_to_main_menu')],
-    ]).reply_markup,
+  const wallets = userState.wallets;
+  const itemsPerPage = 5;
+  const totalPages = Math.ceil(wallets.length / itemsPerPage);
+
+  if (page < 1) page = 1;
+  if (page > totalPages) page = totalPages;
+
+  const startIdx = (page - 1) * itemsPerPage;
+  const endIdx = page * itemsPerPage;
+  const walletsPage = wallets.slice(startIdx, endIdx);
+
+  let walletMsg = `💼 *Your Wallets (Page ${page} of ${totalPages})*\n\n`;
+  walletsPage.forEach((wallet, index) => {
+    walletMsg += `• *Wallet ${startIdx + index + 1}:*\n  • *Chain:* ${wallet.chain}\n  • *Address:* \`${wallet.address}\`\n  • *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n\n`;
   });
-});
+
+  const navigationButtons = [];
+  if (page > 1) navigationButtons.push(Markup.button.callback('⏮ Previous', `wallet_page_${page - 1}`));
+  if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ⏭', `wallet_page_${page + 1}`));
+  navigationButtons.push(Markup.button.callback('🔙 Main Menu', 'back_to_main_menu'));
+
+  await ctx.replyWithMarkdown(walletMsg, Markup.inlineKeyboard([navigationButtons]));
+}
 
 // -------- SUPPORT HANDLER --------
 bot.hears(/ℹ️\s*Support/i, async (ctx) => {
@@ -1411,6 +1665,97 @@ bot.action('back_to_support_menu', async (ctx) => {
   }
 });
 
+// -------- LEARN ABOUT BASE HANDLER --------
+const baseContent = [
+  {
+    title: 'Welcome to Base',
+    text: 'Base is a secure, low-cost blockchain solution that powers DirectPay’s multi-chain wallets. It ensures fast and reliable transactions for all your crypto needs.',
+  },
+  {
+    title: 'Why Choose Base?',
+    text: '- **Low Fees**: Save more with minimal transaction costs.\n- **Fast Transactions**: Experience near-instant transfers.\n- **Security**: Advanced security protocols to protect your assets.',
+  },
+  {
+    title: 'Getting Started',
+    text: 'To start using Base, simply generate a wallet on your preferred blockchain (Base, Polygon, or BNB Smart Chain), link your bank account, and begin transacting seamlessly.',
+  },
+  {
+    title: 'Learn More',
+    text: 'Visit the official documentation at [Base Docs](https://base-docs-link.com) for comprehensive guides and support.',
+  },
+];
+
+async function sendBaseContent(ctx, index, isNew = false) {
+  const content = baseContent[index];
+  const totalPages = baseContent.length;
+
+  const navigationButtons = [];
+  if (index > 0) {
+    navigationButtons.push(Markup.button.callback('⬅️ Previous', `base_page_${index - 1}`));
+  }
+  if (index < totalPages - 1) {
+    navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
+  }
+  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
+
+  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
+
+  if (isNew) {
+    const sentMessage = await ctx.replyWithMarkdown(
+      `**${content.title}**\n\n${content.text}`,
+      inlineKeyboard
+    );
+    ctx.session.baseMessageId = sentMessage.message_id;
+  } else {
+    try {
+      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
+        parse_mode: 'Markdown',
+        reply_markup: inlineKeyboard.reply_markup,
+      });
+    } catch (error) {
+      // If the message can't be edited (e.g., too old), send a new one
+      const sentMessage = await ctx.replyWithMarkdown(
+        `**${content.title}**\n\n${content.text}`,
+        inlineKeyboard
+      );
+      ctx.session.baseMessageId = sentMessage.message_id;
+    }
+  }
+
+  // Optional: Delete the message after a certain time to keep chat clean
+  setTimeout(() => {
+    if (ctx.session.baseMessageId) {
+      ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
+      ctx.session.baseMessageId = null;
+    }
+  }, 120000); // 2 minutes
+}
+
+bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
+  await sendBaseContent(ctx, 0, true);
+});
+
+// -------- ACTION HANDLER: LEARN ABOUT BASE PAGES --------
+bot.action(/base_page_(\d+)/, async (ctx) => {
+  const page = parseInt(ctx.match[1], 10);
+  if (isNaN(page) || page < 0 || page >= baseContent.length) {
+    await ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
+    return;
+  }
+  await sendBaseContent(ctx, page);
+  await ctx.answerCbQuery();
+});
+
+// -------- ACTION HANDLER: EXIT BASE LEARN MORE --------
+bot.action('exit_base', async (ctx) => {
+  await ctx.answerCbQuery();
+  if (ctx.session.baseMessageId) {
+    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
+    ctx.session.baseMessageId = null;
+  }
+  await ctx.replyWithMarkdown('🔚 You have exited the "Learn About Base" section.', getMainMenu(true, true));
+});
+
 // -------- ACTION HANDLER: BACK TO MAIN MENU --------
 bot.action('back_to_main_menu', async (ctx) => {
   await ctx.answerCbQuery();
@@ -1422,52 +1767,46 @@ bot.action('back_to_main_menu', async (ctx) => {
   }
 });
 
-// -------- ADMIN PANEL HANDLERS --------
-
-// Example: View All Transactions (Admin)
+// -------- ADMIN PANEL HANDLERS (PLACEHOLDERS) --------
 bot.action('admin_view_transactions', async (ctx) => {
   await ctx.answerCbQuery();
   // Placeholder: Implement viewing all transactions
   await ctx.replyWithMarkdown('📋 *View All Transactions*\n\nFeature under development.');
 });
 
-// Example: Send Message to User (Admin)
 bot.action('admin_send_message', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session.sendMessageMode = true;
   await ctx.replyWithMarkdown('📩 *Send Message to User*\n\nPlease enter the User ID you want to message:');
 });
 
-// Example: Mark Transactions as Paid (Admin)
 bot.action('admin_mark_paid', async (ctx) => {
   await ctx.answerCbQuery();
   // Placeholder: Implement marking transactions as paid
-  await ctx.replyWithMarkdown('✅ *Mark Transactions as Paid*\n\nFeature under development.');
+  await ctx.replyWithMarkdown('✅ *Mark Transactions as Paid*\n\nPlease enter the Reference ID of the transaction to mark as paid:');
+  ctx.session.markPaidMode = true;
 });
 
-// Example: View All Users (Admin)
 bot.action('admin_view_users', async (ctx) => {
   await ctx.answerCbQuery();
   // Placeholder: Implement viewing all users
   await ctx.replyWithMarkdown('👥 *View All Users*\n\nFeature under development.');
 });
 
-// Example: Broadcast Message (Admin)
 bot.action('admin_broadcast_message', async (ctx) => {
   await ctx.answerCbQuery();
   ctx.session.broadcastMode = true;
   await ctx.replyWithMarkdown('📢 *Broadcast Message*\n\nPlease enter the message you want to broadcast to all users:');
 });
 
-// Example: Manage Banks (Admin)
 bot.action('admin_manage_banks', async (ctx) => {
   await ctx.answerCbQuery();
   // Placeholder: Implement managing banks
   await ctx.replyWithMarkdown('🏦 *Manage Banks*\n\nFeature under development.');
 });
 
-// -------- SEND MESSAGE SCENE HANDLER --------
-bot.on('text', async (ctx) => {
+// -------- SEND MESSAGE SCENE --------
+sendMessageScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
 
   if (ctx.session.sendMessageMode) {
@@ -1484,6 +1823,7 @@ bot.on('text', async (ctx) => {
 
     ctx.session.targetUserId = targetUserId;
     ctx.session.sendMessageMode = false;
+    ctx.session.awaitingMessage = true;
 
     await ctx.replyWithMarkdown('📝 Enter the message you want to send to the user:');
   } else if (ctx.session.broadcastMode) {
@@ -1513,45 +1853,70 @@ bot.on('text', async (ctx) => {
   }
 });
 
-// -------- FUNCTION: SEND MESSAGE TO USER --------
-async function sendMessageToUser(ctx, messageContent) {
-  const targetUserId = ctx.session.targetUserId;
-  try {
-    await bot.telegram.sendMessage(
-      targetUserId,
-      `📩 *Message from Admin:*\n\n${messageContent}`,
-      { parse_mode: 'Markdown' }
-    );
-    await ctx.replyWithMarkdown('✅ Message sent successfully.');
-  } catch (error) {
-    logger.error(`Error sending message to ${targetUserId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Failed to send the message. The user might have blocked the bot.');
-  }
-
-  // Cleanup
+sendMessageScene.leave((ctx) => {
   delete ctx.session.targetUserId;
-}
+  delete ctx.session.awaitingUserId;
+  delete ctx.session.awaitingBroadcast;
+  delete ctx.session.awaitingMessage;
+});
 
-// -------- SEND MESSAGE TO USER HANDLER --------
+// -------- SEND MESSAGE AFTER ADMIN SENDS TEXT --------
 bot.on('message', async (ctx) => {
+  const userId = ctx.from.id.toString();
+
   if (ctx.session.targetUserId && ctx.session.awaitingMessage) {
     const messageContent = ctx.message.text.trim();
-    await sendMessageToUser(ctx, messageContent);
+    const targetUserId = ctx.session.targetUserId;
+
+    try {
+      await bot.telegram.sendMessage(
+        targetUserId,
+        `📩 *Message from Admin:*\n\n${messageContent}`,
+        { parse_mode: 'Markdown' }
+      );
+      await ctx.replyWithMarkdown('✅ Message sent successfully.');
+    } catch (error) {
+      logger.error(`Error sending message to ${targetUserId}: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ Failed to send the message. The user might have blocked the bot.');
+    }
+
+    // Cleanup
+    delete ctx.session.targetUserId;
     delete ctx.session.awaitingMessage;
     ctx.scene.leave();
   }
-});
 
-// -------- ADMIN SEND MESSAGE FLOW --------
-bot.action('send_message_to_user', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
+  if (ctx.session.markPaidMode) {
+    const referenceId = ctx.message.text.trim();
+    if (!referenceId) {
+      return ctx.replyWithMarkdown('❌ Reference ID cannot be empty. Please enter a valid Reference ID:');
+    }
+
+    try {
+      await markTransactionAsPaid(referenceId);
+      await ctx.replyWithMarkdown(`✅ Transaction \`${referenceId}\` has been marked as *Paid*.`);
+    } catch (error) {
+      await ctx.replyWithMarkdown(`⚠️ Failed to mark transaction as paid: ${error.message}`);
+    }
+
+    // Cleanup
+    delete ctx.session.markPaidMode;
   }
 
+  // Add additional handlers if necessary
+});
+
+// -------- ACTION HANDLER: GENERATE WALLET FROM VIEW WALLET --------
+bot.action('view_wallet_generate', async (ctx) => {
   await ctx.answerCbQuery();
-  ctx.session.sendMessageMode = true;
-  await ctx.replyWithMarkdown('📩 *Send Message to User*\n\nPlease enter the User ID you want to message:');
+  await ctx.replyWithMarkdown(
+    '🔐 *Wallet Generation*\n\nPlease select the blockchain network where you want to generate your wallet:',
+    Markup.inlineKeyboard([
+      [Markup.button.callback('Base', 'generate_wallet_Base')],
+      [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+      [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+    ])
+  );
 });
 
 // -------- FUNCTION: MARK TRANSACTION AS PAID --------
@@ -1571,253 +1936,12 @@ async function markTransactionAsPaid(referenceId) {
     const txData = txDoc.data();
     await bot.telegram.sendMessage(
       txData.userId,
-      `✅ Your transaction with Reference ID \`${referenceId}\` has been marked as *Paid*.\n\nThank you for using DirectPay!`,
+      `✅ *Your transaction with Reference ID \`${referenceId}\` has been marked as Paid.*\n\nThank you for using DirectPay!`,
       { parse_mode: 'Markdown' }
     );
   } catch (error) {
     logger.error(`Error marking transaction as paid: ${error.message}`);
     throw error;
-  }
-}
-
-// -------- ADMIN MARK TRANSACTION AS PAID HANDLER --------
-bot.action('admin_mark_paid', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  await ctx.answerCbQuery();
-  await ctx.replyWithMarkdown('✅ *Mark Transaction as Paid*\n\nPlease enter the Reference ID of the transaction:');
-  
-  // Set a flag or session variable to handle next message as reference ID
-  ctx.session.markPaidMode = true;
-});
-
-// -------- HANDLE MARK PAID --------
-bot.on('text', async (ctx) => {
-  const userId = ctx.from.id.toString();
-
-  if (ctx.session.markPaidMode) {
-    const referenceId = ctx.message.text.trim();
-    if (!referenceId) {
-      return ctx.replyWithMarkdown('❌ Reference ID cannot be empty. Please enter a valid Reference ID:');
-    }
-
-    try {
-      await markTransactionAsPaid(referenceId);
-      await ctx.replyWithMarkdown(`✅ Transaction \`${referenceId}\` has been marked as *Paid*.`);
-    } catch (error) {
-      await ctx.replyWithMarkdown(`⚠️ Failed to mark transaction as paid: ${error.message}`);
-    }
-
-    // Cleanup
-    delete ctx.session.markPaidMode;
-  }
-});
-
-// -------- FUNCTION: CREATE PAYCREST ORDER --------
-/**
- * Creates a Paycrest order to off-ramp crypto.
- * @param {string} userId        - The user's Telegram ID or unique identifier.
- * @param {number} amount        - The amount of the crypto token to off-ramp (crypto amount).
- * @param {string} token         - The token being off-ramped (e.g., "USDC" or "USDT").
- * @param {string} network       - The blockchain network name (e.g., "Base", "Polygon", "BNB Smart Chain").
- * @param {object} bankDetails   - Contains user’s bank info: { bankName, accountNumber, accountName, ... }.
- * @returns {object}             - The Paycrest order object, including an `id` and a `receiveAddress`.
- */
-async function createPaycrestOrder(userId, amount, token, network, bankDetails) {
-  try {
-    // 1) Ensure the user’s bank exists in our bank list.
-    const bankItem = bankList.find((b) => b.bankName.toLowerCase() === bankDetails.bankName.toLowerCase());
-    if (!bankItem || !bankItem.paycrestCode) {
-      throw new Error(`No Paycrest institution code found for bank: ${bankDetails.bankName}`);
-    }
-
-    // 2) Construct the recipient object using Paycrest’s required fields.
-    //    NOTE: The naming below follows Paycrest’s property format ("accountIdentifier" vs "account_identifier").
-    //          Adjust if your Paycrest docs require exact field naming.
-    const recipient = {
-      institution: bankItem.paycrestCode,       // Paycrest institution code from your bank list
-      accountIdentifier: bankDetails.accountNumber,
-      accountName: bankDetails.accountName,
-      memo: `Payment from DirectPay`,           // A custom note/memo
-      providerId: ""                            // If you need a specific liquidity provider, otherwise empty
-    };
-
-    // 3) Get the appropriate exchange rate for this token from your global `exchangeRates` object.
-    //    (This rate is per token in NGN, e.g., 1 USDC = 770 NGN)
-    const rate = exchangeRates[token];
-    if (!rate) {
-      throw new Error(`Exchange rate for ${token} not found or zero.`);
-    }
-
-    // 4) Construct your Paycrest order payload. 
-    //    This follows Paycrest’s Offramp API specification.
-    //    The `amount` here should be the CRYPTO amount, not NGN, unless your Paycrest endpoint specifically expects the NGN amount.
-    const orderPayload = {
-      amount: String(amount),               // The amount of token to be off-ramped, in string format
-      rate: String(rate),                   // The rate from token to NGN
-      network: mapToPaycrestNetwork(network), // Map "BNB Smart Chain" -> "bnb-smart-chain", etc.
-      token: token.toUpperCase(),           // e.g., "USDC" or "USDT"
-      recipient: recipient,
-      returnAddress: PAYCREST_RETURN_ADDRESS, // Return address if transaction fails
-      feePercent: 2,                       // Example fee (2%)
-      // feeAddress: '0x123...',           // Optionally specify a fee address if needed
-    };
-
-    // 5) Call Paycrest’s API to create the order.
-    const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
-      headers: {
-        'API-Key': PAYCREST_API_KEY,      // Your Paycrest Client ID / API key
-        'Content-Type': 'application/json'
-      }
-    });
-
-    // 6) Validate the response from Paycrest.
-    if (orderResp.data.status !== 'success') {
-      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
-    }
-
-    // 7) The returned `data` object should contain details like `id`, `amount`, `token`, `network`, `receiveAddress`, etc.
-    return orderResp.data.data; 
-  } catch (err) {
-    logger.error(`Error creating Paycrest order for user ${userId}: ${err.message}`);
-    throw new Error(`Failed to create Paycrest order. Details: ${err.message}`);
-  }
-}
-
-/**
- * A helper function to map your internal chain/network naming (e.g., "BNB Smart Chain")
- * to what Paycrest expects (e.g., "bnb-smart-chain").
- */
-function mapToPaycrestNetwork(chainName) {
-  const lower = chainName.toLowerCase().trim();
-  if (lower.includes('base')) return 'base';
-  if (lower.includes('polygon')) return 'polygon';
-  if (lower.includes('bnb')) return 'bnb-smart-chain';
-  // Add more mappings if needed
-  throw new Error(`Unsupported or unknown chain for Paycrest: ${chainName}`);
-}
-
-
-// -------- FUNCTION: WITHDRAW FROM BLOCKRADAR --------
-async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
-  try {
-    const chainData = chains[chain];
-    if (!chainData) {
-      throw new Error(`Unsupported chain: ${chain}`);
-    }
-
-    const response = await axios.post(
-      `https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`,
-      {
-        address,
-        amount: String(amount),
-        assetId,
-        reference,
-        metadata,
-      },
-      {
-        headers: {
-          'x-api-key': BLOCKRADAR_API_KEY,
-          'Content-Type': 'application/json',
-        },
-      }
-    );
-
-    if (response.data.statusCode !== 200) {
-      throw new Error(`Blockradar withdrawal error: ${JSON.stringify(response.data)}`);
-    }
-
-    return response.data;
-  } catch (error) {
-    logger.error(
-      `Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`
-    );
-    throw error;
-  }
-}
-
-// -------- ACTION HANDLER: EXIT ADMIN PANEL --------
-bot.action('admin_back_to_main', async (ctx) => {
-  await ctx.answerCbQuery();
-  const adminMsg = `👨‍💼 *Admin Panel*\n\nSelect an option below:`;
-  await ctx.editMessageText(adminMsg, {
-    parse_mode: 'Markdown',
-    reply_markup: getAdminMenu().reply_markup,
-  });
-});
-
-// -------- ACTION HANDLER: OPEN ADMIN PANEL --------
-bot.action('open_admin_panel', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  await ctx.answerCbQuery();
-
-  const adminMsg = `👨‍💼 *Admin Panel*\n\nSelect an option below:`;
-  await ctx.editMessageText(adminMsg, {
-    parse_mode: 'Markdown',
-    reply_markup: getAdminMenu().reply_markup,
-  });
-});
-
-// -------- FUNCTION: DISPLAY TRANSACTIONS WITH PAGINATION (EDIT EXISTING MESSAGE) --------
-async function displayTransactions(ctx, page = 1) {
-  const userId = ctx.from.id.toString();
-  let userState;
-
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error in displayTransactions: ${error.message}`);
-    return ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-  }
-
-  const snapshot = await db
-    .collection('transactions')
-    .where('userId', '==', userId)
-    .orderBy('timestamp', 'desc')
-    .get();
-
-  if (snapshot.empty) {
-    return ctx.replyWithMarkdown('💰 You have no transactions yet.');
-  }
-
-  const allTransactions = snapshot.docs.map((doc) => doc.data());
-  const itemsPerPage = 5;
-  const totalPages = Math.ceil(allTransactions.length / itemsPerPage);
-
-  if (page < 1) page = 1;
-  if (page > totalPages) page = totalPages;
-
-  const startIdx = (page - 1) * itemsPerPage;
-  const endIdx = page * itemsPerPage;
-  const transactionsPage = allTransactions.slice(startIdx, endIdx);
-
-  let txMsg = `💰 *Your Transactions (Page ${page} of ${totalPages})*\n\n`;
-  transactionsPage.forEach((tx) => {
-    txMsg += `• *Reference ID:* \`${tx.referenceId || 'N/A'}\`\n  • *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n  • *Status:* ${tx.status || 'Pending'}\n  • *Date:* ${
-      tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'
-    }\n\n`;
-  });
-
-  const navigationButtons = [];
-  if (page > 1) navigationButtons.push(Markup.button.callback('⏮ Previous', `tx_page_${page - 1}`));
-  if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ⏭', `tx_page_${page + 1}`));
-  navigationButtons.push(Markup.button.callback('🔙 Main Menu', 'back_to_main_menu'));
-
-  try {
-    await ctx.editMessageText(txMsg, {
-      parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard([navigationButtons]).reply_markup,
-    });
-  } catch (error) {
-    // If message can't be edited (e.g., too old), send a new one
-    await ctx.replyWithMarkdown(txMsg, Markup.inlineKeyboard([navigationButtons]));
   }
 }
 
@@ -1963,19 +2087,6 @@ app.post('/webhook/paycrest', async (req, res) => {
     res.status(500).send('Error');
   }
 });
-
-// -------- FUNCTION: CREATE PAYCREST ORDER (PLACEHOLDER) --------
-async function createPaycrestOrder(userId, amount, token, network, bankDetails) {
-  // Implement the logic to create a Paycrest order
-  // This is a placeholder function
-  return {
-    id: generateReferenceId(),
-    receiveAddress: PAYCREST_RETURN_ADDRESS,
-  };
-}
-
-// -------- FUNCTION: WITHDRAW FROM BLOCKRADAR (REPEATED) --------
-// Already defined above
 
 // -------- TELEGRAM WEBHOOK SETUP --------
 (async () => {
