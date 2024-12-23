@@ -485,21 +485,58 @@ async function withdrawFromBlockradar(chain, assetId, address, amount, reference
   }
 }
 
-// Wallet Generation Handler
-bot.action(/generate_wallet_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const selectedChainRaw = ctx.match[1]; // e.g., 'Base', 'Polygon', 'BNB Smart Chain'
+// Wallet Generation Handler (Removed as we will handle via message handlers)
 
-  // Normalize and map the selected chain
-  const selectedChainKey = chainMapping[selectedChainRaw.toLowerCase()];
-  if (!selectedChainKey) {
-    await ctx.replyWithMarkdown('⚠️ Invalid network selection. Please try again.');
-    return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
+// Add Message Handlers for '💼 Generate Wallet' and '💼 View Wallet'
+
+// Handler for '💼 Generate Wallet' Button
+bot.hears(/💼 Generate Wallet/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    return;
   }
 
-  const chain = selectedChainKey;
+  if (userState.wallets.length >= MAX_WALLETS) {
+    return await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
+  }
 
-  // Acknowledge the Callback to Remove Loading State
+  // Prompt User to Select a Network
+  await ctx.replyWithMarkdown('🔄 Please select the network for which you want to generate a wallet:', Markup.inlineKeyboard([
+    [Markup.button.callback('Base', 'generate_wallet_Base')],
+    [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+    [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB_Smart_Chain')],
+    [Markup.button.callback('Cancel', 'cancel_generate_wallet')]
+  ]));
+
+  // Acknowledge the message to remove the 'typing' state
+  await ctx.answerCbQuery();
+});
+
+// Handler for 'Cancel' in Wallet Generation
+bot.action('cancel_generate_wallet', async (ctx) => {
+  await ctx.replyWithMarkdown('❌ Wallet generation has been canceled.');
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Handler for 'Generate Wallet' Callback
+bot.action(/generate_wallet_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const selectedChainRaw = ctx.match[1]; // e.g., 'Base', 'Polygon', 'BNB_Smart_Chain'
+
+  // Normalize and map the selected chain
+  const selectedChainKey = selectedChainRaw.replace(/_/g, ' '); // Replace underscores with spaces
+  const chain = chainMapping[selectedChainKey.toLowerCase()];
+  if (!chain) {
+    await ctx.replyWithMarkdown('⚠️ Invalid network selection. Please try again.');
+    return ctx.answerCbQuery(); // Acknowledge the callback to prevent hanging
+  }
+
+  // Acknowledge the callback to remove loading state
   await ctx.answerCbQuery();
 
   // Inform User That Wallet Generation Has Started
@@ -557,6 +594,30 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
+  }
+});
+
+// Handler for '💼 View Wallet' Button
+bot.hears(/💼 View Wallet/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const userState = await getUserState(userId);
+    if (!userState.wallets || userState.wallets.length === 0) {
+      return await ctx.replyWithMarkdown('❌ No wallets found. Please generate a wallet first.');
+    }
+
+    let message = '💼 *Your Wallets*:\n\n';
+    userState.wallets.forEach((wallet, index) => {
+      message += `*Wallet ${index + 1}:*\n`;
+      message += `- *Address:* \`${wallet.address}\`\n`;
+      message += `- *Chain:* ${wallet.chain}\n`;
+      message += `- *Supported Tokens:* ${wallet.supportedAssets.join(', ')}\n\n`;
+    });
+
+    await ctx.replyWithMarkdown(message);
+  } catch (error) {
+    logger.error(`Error fetching wallets for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch wallets. Please try again later.');
   }
 });
 
@@ -1608,16 +1669,17 @@ app.post('/webhook/blockradar', async (req, res) => {
 
       // Notify user with a detailed message
       await bot.telegram.sendMessage(userId,
-        `🎉 *Deposit Received Successfully!*\n\n` +
-        `• *Reference ID:* \`${referenceId}\`\n` +
-        `• *Amount:* ${amount} ${asset}\n` +
-        `• *Chain:* ${chainRaw}\n` +
-        `• *Wallet Address:* \`${walletAddress}\`\n` +
-        `• *Transaction Hash:* \`${transactionHash}\`\n\n` +
-        `Your deposit of ${amount} ${asset} has been securely received on the ${chainRaw} network. We are currently processing your withdrawal, which involves transferring the funds from Blockradar to Paycrest. Once the withdrawal is confirmed, the equivalent amount of ₦${ngnAmount} will be credited to your linked bank account.\n\n` +
-        `🔄 *Status:* Pending Withdrawal\n` +
-        `📅 *Estimated Time:* Within the next 5 minutes\n\n` +
-        `Thank you for choosing *DirectPay*. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
+        `Hello ${accountName},\n\n` +
+        `We’ve successfully processed your deposit of **${amount} ${asset}**, and **NGN ${ngnAmount}** has been credited to your linked bank account.\n\n` +
+        `**Transaction Details:**\n` +
+        `*Crypto Amount:* ${amount} ${asset}\n` +
+        `*Cash Amount:* ₦${ngnAmount}\n` +
+        `*Rate:* ₦${rate} / ${asset}\n` +
+        `*Network:* ${chainRaw}\n` +
+        `*Receiving Account:* ${bankName} ****${bankAccount.slice(-4)}\n` +
+        `*Date:* ${new Date().toLocaleString()}\n` +
+        `*Reference:* ${referenceId}\n\n` +
+        `If you have any questions or need further assistance, please contact us; we’d love to help.`, 
         { parse_mode: 'Markdown' }
       );
 
@@ -1745,20 +1807,20 @@ app.post('/webhook/paycrest', async (req, res) => {
       await db.collection('transactions').doc(txDoc.id).update({ status: 'Paid' });
 
       // Notify user with detailed message
-await bot.telegram.sendMessage(userId, 
-  `Hello ${txData.userName},\n\n` +
-  `We’ve successfully processed your deposit of ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}, and NGN ${txData.payout || 'N/A'} has been credited to your linked bank account.\n\n` +
-  `Transaction Details:\n` +
-  `*Crypto Amount:* ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}\n` +
-  `*Cash Amount:* ₦${txData.payout || 'N/A'}\n` +
-  `*Rate:* ₦${txData.exchangeRate || 'N/A'} / ${txData.asset || 'N/A'}\n` +
-  `*Network:* ${txData.chain || 'N/A'}\n` +
-  `*Receiving Account:* ${txData.bankDetails.bankName || 'N/A'} ****${txData.bankDetails.accountNumber.slice(-4) || 'N/A'}\n` +
-  `*Date:* ${new Date(txData.timestamp).toLocaleString() || 'N/A'}\n` +
-  `*Reference:* ${txData.referenceId || 'N/A'}\n\n` +
-  `If you have any questions or need further assistance, please contact us; we’d love to help.`, 
-  { parse_mode: 'Markdown' }
-);
+      await bot.telegram.sendMessage(userId, 
+        `Hello ${txData.bankDetails.accountName || 'Valued User'},\n\n` +
+        `We’ve successfully processed your deposit of **${txData.amount || 'N/A'} ${txData.asset || 'N/A'}**, and **NGN ${txData.payout || 'N/A'}** has been credited to your linked bank account.\n\n` +
+        `**Transaction Details:**\n` +
+        `*Crypto Amount:* ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}\n` +
+        `*Cash Amount:* ₦${txData.payout || 'N/A'}\n` +
+        `*Rate:* ₦${txData.exchangeRate || 'N/A'} / ${txData.asset || 'N/A'}\n` +
+        `*Network:* ${txData.chain || 'N/A'}\n` +
+        `*Receiving Account:* ${txData.bankDetails.bankName || 'N/A'} ****${txData.bankDetails.accountNumber.slice(-4) || 'N/A'}\n` +
+        `*Date:* ${new Date(txData.timestamp).toLocaleString() || 'N/A'}\n` +
+        `*Reference:* ${txData.referenceId || 'N/A'}\n\n` +
+        `If you have any questions or need further assistance, please contact us; we’d love to help.`, 
+        { parse_mode: 'Markdown' }
+      );
 
       res.status(200).send('OK');
     } catch (error) {
