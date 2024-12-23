@@ -86,7 +86,7 @@ let exchangeRates = {
 // -------- FUNCTION: FETCH SINGLE ASSET RATE FROM PAYCREST --------
 async function fetchSingleAssetRate(asset) {
   try {
-    const response = await axios.get(`${PAYCREST_RATE_API_URL}/${asset}`, {
+    const response = await axios.get(`${PAYCREST_RATE_API_URL}}`, {
       headers: {
         Authorization: `Bearer ${PAYCREST_API_KEY}`,
         'Content-Type': 'application/json',
