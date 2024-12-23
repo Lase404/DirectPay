@@ -211,7 +211,7 @@ const bankList = [
 // Verify Bank Account with Paycrest
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
-    const response = await axios.get(`api.paystack.co/bank/resolve,`, { // Assuming Paycrest has a similar endpoint
+    const response = await axios.get(`https://api.paystack.co/bank/resolve,`, { // Assuming Paycrest has a similar endpoint
       params: { account_number: accountNumber, bank_code: bankCode },
       headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
     });
