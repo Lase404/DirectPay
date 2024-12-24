@@ -679,23 +679,20 @@ bankLinkingScene.on('text', async (ctx) => {
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const bankData = ctx.session.bankData;
-  const walletIndex = ctx.session.walletIndex;
-
-  logger.info(`User ${userId} confirmed bank linking/editing. Wallet Index: ${walletIndex}`);
 
   try {
     let userState = await getUserState(userId);
 
     if (ctx.session.processType === 'editing') {
       // Editing Bank Account Details
-      if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
+      if (ctx.session.walletIndex === undefined || ctx.session.walletIndex === null || !userState.wallets[ctx.session.walletIndex]) {
         await ctx.replyWithMarkdown('⚠️ No wallet selected for editing. Please try again.', getMainMenu(true, false));
         ctx.scene.leave();
         return;
       }
 
       // Update Bank Details for the Selected Wallet
-      userState.wallets[walletIndex].bank = {
+      userState.wallets[ctx.session.walletIndex].bank = {
         bankName: bankData.bankName,
         bankCode: bankData.bankCode,
         accountNumber: bankData.accountNumber,
@@ -718,20 +715,20 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
       // Log to Admin
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} edited a bank account:\n\n` +
-        `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
-        `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
-        `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
-      logger.info(`User ${userId} edited a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
+        `*Account Name:* ${userState.wallets[ctx.session.walletIndex].bank.accountName}\n` +
+        `*Bank Name:* ${userState.wallets[ctx.session.walletIndex].bank.bankName}\n` +
+        `*Account Number:* ****${userState.wallets[ctx.session.walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+      logger.info(`User ${userId} edited a bank account: ${JSON.stringify(userState.wallets[ctx.session.walletIndex].bank)}`);
     } else {
       // Linking Process
-      if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
+      if (ctx.session.walletIndex === undefined || ctx.session.walletIndex === null || !userState.wallets[ctx.session.walletIndex]) {
         await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please try again.', getMainMenu(true, false));
         ctx.scene.leave();
         return;
       }
 
       // Retrieve the selected wallet
-      const selectedWallet = userState.wallets[walletIndex];
+      const selectedWallet = userState.wallets[ctx.session.walletIndex];
 
       // Update Bank Details for the Selected Wallet
       selectedWallet.bank = {
@@ -1502,14 +1499,80 @@ bot.on('message', async (ctx, next) => {
   await next(); // Pass control to the next handler
 });
 
-// Function to Send Detailed Tutorials in Support Section
-// (Already defined above)
+// PAYCREST WEBHOOK HANDLER
+app.post('/webhook/paycrest', async (req, res) => {
+  const signature = req.headers['x-paycrest-signature'];
+  const rawBody = JSON.stringify(req.body);
 
-// Learn About Base Handlers
-// (Already defined above)
+  if (!verifyPaycrestSignature(rawBody, signature, PAYCREST_CLIENT_SECRET)) {
+    logger.error('Invalid Paycrest signature');
+    return res.status(401).send('Invalid signature');
+  }
 
-// Settings Handlers
-// (Already defined above)
+  const event = req.body.event;
+  const data = req.body.data;
+
+  if (event === 'payment_order.settled') {
+    const orderId = data.id;
+
+    try {
+      // Fetch transaction by paycrestOrderId
+      const txSnapshot = await db.collection('transactions').where('paycrestOrderId', '==', orderId).limit(1).get();
+      if (txSnapshot.empty) {
+        logger.error(`No transaction found for Paycrest orderId: ${orderId}`);
+        return res.status(200).send('OK');
+      }
+
+      const txDoc = txSnapshot.docs[0];
+      const txData = txDoc.data();
+      const userId = txData.userId;
+      const messageId = txData.messageId;
+
+      // Update transaction to Paid
+      await db.collection('transactions').doc(txDoc.id).update({ status: 'Paid' });
+
+      // Notify user
+      await bot.telegram.sendMessage(userId, `🎉 *Funds Credited Successfully!*\n\n` +
+        `Hello ${txData.firstName || 'Valued User'},\n\n` +
+        `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
+        `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
+        `*Cash amount:* NGN ${txData.payout}\n` +
+        `*Network:* ${txData.chain}\n` +
+        `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
+        `To help us keep improving our services, please rate your experience with us.`,
+        { parse_mode: 'Markdown' }
+      );
+
+      // Optionally, edit the pending message to indicate completion
+      if (messageId) {
+        try {
+          await bot.telegram.editMessageText(userId, messageId, null, `🎉 *Funds Credited Successfully!*\n\n` +
+            `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
+            `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
+            `*Cash amount:* NGN ${txData.payout}\n` +
+            `*Network:* ${txData.chain}\n` +
+            `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
+            `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
+            { parse_mode: 'Markdown' }
+          );
+        } catch (error) {
+          logger.error(`Error editing message for user ${userId}: ${error.message}`);
+          // Optionally, notify admin about the failure to edit message
+          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Failed to edit message for user ${userId}: ${error.message}`);
+        }
+      }
+
+      res.status(200).send('OK');
+    } catch (error) {
+      logger.error(`Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
+      res.status(500).send('Error');
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
+    }
+  } else {
+    logger.info(`Unhandled Paycrest event: ${event}`);
+    res.status(200).send('OK');
+  }
+});
 
 // Function to Verify Paycrest Webhook Signature
 function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
@@ -1744,439 +1807,20 @@ app.post('/webhook/blockradar', async (req, res) => {
         clearTimeout(ctx.session.bankLinkingTimeout);
         delete ctx.session.bankLinkingTimeout;
       }
-
-      ctx.scene.leave();
-  } catch (error) {
-    logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ An error occurred while confirming your bank details. Please try again later.');
-    ctx.scene.leave();
-  }
-});
-
-// Support Functionality
-bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  await ctx.replyWithMarkdown('How can we assist you today?', Markup.inlineKeyboard([
-    [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-  ]));
-});
-
-// Support Actions
-bot.action('support_how_it_works', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-});
-
-bot.action('support_not_received', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-});
-
-bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
-});
-
-// View Transactions for Users
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
-
-    if (transactionsSnapshot.empty) {
-      return await ctx.replyWithMarkdown('You have no transactions at the moment.');
-    }
-
-    let message = '💰 *Your Transactions*:\n\n';
-
-    transactionsSnapshot.forEach((doc) => {
-      const tx = doc.data();
-      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-      message += `*Status:* ${tx.status || 'Pending'}\n`;
-      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
-    });
-
-    await ctx.replyWithMarkdown(message);
-  } catch (error) {
-    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
-  }
-});
-
-// Admin Functions
-
-// Entry point for Admin Panel
-bot.action('open_admin_panel', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  // Reset session variables if necessary
-  ctx.session.adminMessageId = null;
-
-  const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
-  ctx.session.adminMessageId = sentMessage.message_id;
-  ctx.answerCbQuery(); // Acknowledge the callback
-
-  // Set a timeout to delete the admin panel message after 5 minutes
-  setTimeout(() => {
-    if (ctx.session.adminMessageId) {
-      ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-      ctx.session.adminMessageId = null;
-    }
-  }, 300000); // Delete after 5 minutes
-});
-
-// Handle Admin Menu Actions
-bot.action(/admin_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  const action = ctx.match[1];
-
-  switch (action) {
-    case 'view_transactions':
-      // Handle viewing transactions
-      try {
-        const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(10).get();
-
-        if (transactionsSnapshot.empty) {
-          await ctx.answerCbQuery('No transactions found.', { show_alert: true });
-          return;
-        }
-
-        let message = '📋 **Recent Transactions**:\n\n';
-
-        transactionsSnapshot.forEach((doc) => {
-          const tx = doc.data();
-          message += `*User ID:* ${tx.userId || 'N/A'}\n`;
-          message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-          message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-          message += `*Status:* ${tx.status || 'Pending'}\n`;
-          message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all transactions: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch transactions.', { show_alert: true });
-      }
-      break;
-
-    case 'send_message':
-      // Handle sending messages
-      if (ctx.session.adminMessageId) {
-        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-        ctx.session.adminMessageId = null;
-      }
-      await ctx.scene.enter('send_message_scene');
-      ctx.answerCbQuery();
-      break;
-
-    case 'mark_paid':
-      // Handle marking transactions as paid as a backup
-      try {
-        const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
-        if (pendingTransactions.empty) {
-          await ctx.answerCbQuery('No pending transactions found.', { show_alert: true });
-          return;
-        }
-
-        const batch = db.batch();
-        pendingTransactions.forEach((transaction) => {
-          const docRef = db.collection('transactions').doc(transaction.id);
-          batch.update(docRef, { status: 'Paid' });
-        });
-
-        await batch.commit();
-
-        // Notify users about their transactions being marked as paid
-        pendingTransactions.forEach(async (transaction) => {
-          const txData = transaction.data();
-          try {
-            const payout = txData.payout || 'N/A';
-            const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
-
-            await bot.telegram.sendMessage(
-              txData.userId,
-              `🎉 *Transaction Successful!*\n\n` +
-              `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n` +
-              `*Amount Paid:* ${txData.amount} ${txData.asset}\n` +
-              `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
-              `*Account Name:* ${accountName}\n` +
-              `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
-              `*Payout (NGN):* ₦${payout}\n\n` +
-              `🔹 *Chain:* ${txData.chain}\n` +
-              `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` +
-              `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
-              { parse_mode: 'Markdown' }
-            );
-            logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
-          } catch (error) {
-            logger.error(`Error notifying user ${txData.userId}: ${error.message}`);
-          }
-        });
-
-        // Edit the admin panel message to confirm
-        await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error marking transactions as paid: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
-      }
-      break;
-
-    case 'view_users':
-      // Handle viewing all users
-      try {
-        const usersSnapshot = await db.collection('users').get();
-
-        if (usersSnapshot.empty) {
-          await ctx.answerCbQuery('No users found.', { show_alert: true });
-          return;
-        }
-
-        let message = '👥 **All Users**:\n\n';
-
-        usersSnapshot.forEach((doc) => {
-          const user = doc.data();
-          message += `*User ID:* ${doc.id}\n`;
-          message += `*First Name:* ${user.firstName || 'N/A'}\n`;
-          message += `*Number of Wallets:* ${user.wallets.length}\n`;
-          message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all users: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch users.', { show_alert: true });
-      }
-      break;
-
-    case 'broadcast_message':
-      // Handle broadcasting messages
-      await ctx.reply('📢 Please enter the message you want to broadcast to all users. You can also attach an image (receipt) with your message:');
-      // Set state to indicate awaiting broadcast message
-      await updateUserState(userId, { awaitingBroadcastMessage: true });
-      // Delete the admin panel message to keep chat clean
-      if (ctx.session.adminMessageId) {
-        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-        ctx.session.adminMessageId = null;
-      }
-      ctx.answerCbQuery();
-      break;
-
-    case 'manage_banks':
-      // Implement bank management functionalities here
-      await ctx.replyWithMarkdown('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
-      ctx.answerCbQuery();
-      break;
-
-    case 'admin_back_to_main':
-      // Return to the main menu
-      await greetUser(ctx);
-      // Delete the admin panel message
-      if (ctx.session.adminMessageId) {
-        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-        ctx.session.adminMessageId = null;
-      }
-      ctx.answerCbQuery();
-      break;
-
-    default:
-      await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
-  }
-});
-
-// Handle Broadcast Message Input
-bot.on('message', async (ctx, next) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (userState.awaitingBroadcastMessage) {
-    const message = ctx.message;
-
-    if (message.photo) {
-      // Broadcast with Photo
-      const photoArray = message.photo;
-      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
-      const fileId = highestResolutionPhoto.file_id;
-      const caption = message.caption || '';
-
-      try {
-        // Send the photo with caption to the target users
-        let successCount = 0;
-        let failureCount = 0;
-
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          await ctx.reply('No users to broadcast to.', getAdminMenu());
-          await updateUserState(userId, { awaitingBroadcastMessage: false });
-          return;
-        }
-
-        // Initialize rate limiter to prevent hitting Telegram's rate limits
-        const limiter = new Bottleneck({
-          minTime: 200, // 200ms between requests
-          maxConcurrent: 5, // Maximum 5 concurrent requests
-        });
-
-        // Wrap the sendPhoto function with the limiter
-        const limitedSendPhoto = limiter.wrap(bot.telegram.sendPhoto.bind(bot.telegram));
-
-        for (const doc of usersSnapshot.docs) {
-          const targetUserId = doc.id;
-          try {
-            await limitedSendPhoto(targetUserId, fileId, { caption: caption, parse_mode: 'Markdown' });
-            successCount++;
-          } catch (error) {
-            logger.error(`Error sending broadcast photo to user ${targetUserId}: ${error.message}`);
-            failureCount++;
-          }
-        }
-
-        await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
-        logger.info(`Admin ${userId} broadcasted photo message. Success: ${successCount}, Failed: ${failureCount}`);
-      } catch (error) {
-        logger.error(`Broadcast Photo Error: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ An error occurred while broadcasting the photo. Please try again later.', getAdminMenu());
-      }
-    } else if (message.text) {
-      // Broadcast with Text
-      const broadcastMessage = message.text.trim();
-      if (!broadcastMessage) {
-        return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
-      }
-
-      try {
-        let successCount = 0;
-        let failureCount = 0;
-
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          await ctx.reply('No users to broadcast to.', getAdminMenu());
-          await updateUserState(userId, { awaitingBroadcastMessage: false });
-          return;
-        }
-
-        // Initialize rate limiter to prevent hitting Telegram's rate limits
-        const limiter = new Bottleneck({
-          minTime: 200, // 200ms between requests
-          maxConcurrent: 5, // Maximum 5 concurrent requests
-        });
-
-        // Wrap the sendMessage function with the limiter
-        const limitedSendMessage = limiter.wrap(bot.telegram.sendMessage.bind(bot.telegram));
-
-        for (const doc of usersSnapshot.docs) {
-          const targetUserId = doc.id;
-          try {
-            await limitedSendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
-            successCount++;
-          } catch (error) {
-            logger.error(`Error sending broadcast message to user ${targetUserId}: ${error.message}`);
-            failureCount++;
-          }
-        }
-
-        await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
-        logger.info(`Admin ${userId} broadcasted message. Success: ${successCount}, Failed: ${failureCount}`);
-      } catch (error) {
-        logger.error(`Broadcast Text Error: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ An error occurred while broadcasting the message. Please try again later.', getAdminMenu());
-      }
-    } else {
-      // Unsupported message type
-      await ctx.reply('❌ Unsupported message type. Please send text or a photo (receipt).', getAdminMenu());
-    }
-
-    // Reset broadcast message state
-    await updateUserState(userId, { awaitingBroadcastMessage: false });
-  }
-
-  await next(); // Pass control to the next handler
-});
-
-// PAYCREST WEBHOOK HANDLER
-app.post('/webhook/paycrest', async (req, res) => {
-  const signature = req.headers['x-paycrest-signature'];
-  const rawBody = JSON.stringify(req.body);
-
-  if (!verifyPaycrestSignature(rawBody, signature, PAYCREST_CLIENT_SECRET)) {
-    logger.error('Invalid Paycrest signature');
-    return res.status(401).send('Invalid signature');
-  }
-
-  const event = req.body.event;
-  const data = req.body.data;
-
-  if (event === 'payment_order.settled') {
-    const orderId = data.id;
-
-    try {
-      // Fetch transaction by paycrestOrderId
-      const txSnapshot = await db.collection('transactions').where('paycrestOrderId', '==', orderId).limit(1).get();
-      if (txSnapshot.empty) {
-        logger.error(`No transaction found for Paycrest orderId: ${orderId}`);
-        return res.status(200).send('OK');
-      }
-
-      const txDoc = txSnapshot.docs[0];
-      const txData = txDoc.data();
-      const userId = txData.userId;
-
-      // Update transaction to Paid
-      await db.collection('transactions').doc(txDoc.id).update({ status: 'Paid' });
-
-      // Notify user
-      await bot.telegram.sendMessage(userId, `🎉 *Funds Credited Successfully!*\n\n` +
-        `Hello ${txData.firstName || 'Valued User'},\n\n` +
-        `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
-        `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
-        `*Cash amount:* NGN ${txData.payout}\n` +
-        `*Network:* ${txData.chain}\n` +
-        `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
-        `To help us keep improving our services, please rate your experience with us.`,
-        { parse_mode: 'Markdown' }
-      );
-
-      res.status(200).send('OK');
     } catch (error) {
-      logger.error(`Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
-      res.status(500).send('Error');
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
+      logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown('❌ An error occurred while confirming your bank details. Please try again later.');
+      ctx.scene.leave();
     }
-  } else {
-    logger.info(`Unhandled Paycrest event: ${event}`);
-    res.status(200).send('OK');
-  }
 });
+
+// Support Functionality (Already defined above)
+
+// Learn About Base Handlers (Already defined above)
+
+// Settings Handlers (Already defined above)
+
+// Function to Verify Paycrest Webhook Signature (Already defined above)
 
 // Telegram Webhook Setup
 
