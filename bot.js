@@ -1593,7 +1593,7 @@ If you haven't received your transaction, follow these steps to troubleshoot:
 
         const chain = chainKey;
 
-        if (eventType === 'deposit.success') { // Handle 'deposit.success' event
+        if (eventType === 'deposit.swept.success') { // Handle 'deposit.success' event
           if (walletAddress === 'N/A') {
             logger.error('Webhook missing wallet address.');
             return res.status(400).send('Missing wallet address.');
