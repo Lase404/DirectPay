@@ -65,7 +65,7 @@ let exchangeRates = {
 // Function to fetch exchange rates from Paycrest
 async function fetchExchangeRate(asset) {
   try {
-    const response = await axios.get(`${PAYCREST_RATE_API_URL}/${asset}`, {
+    const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
       headers: {
         'Authorization': `Bearer ${PAYCREST_API_KEY}`,
         'Content-Type': 'application/json'
@@ -206,13 +206,13 @@ const bankList = [
   { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' }
   // Add more banks as needed
 ];
-const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
+
 // Verify Bank Account with Paycrest
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
-    const response = await axios.get(`https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode`, { // Assuming Paycrest has a similar endpoint
+    const response = await axios.get(`https://api.paycrest.io/v1/bank/resolve`, { // Assuming Paycrest has a similar endpoint
       params: { account_number: accountNumber, bank_code: bankCode },
-      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
+      headers: { Authorization: `Bearer ${PAYCREST_API_KEY}` },
     });
     return response.data;
   } catch (error) {
