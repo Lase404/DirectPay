@@ -8,6 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const winston = require('winston');
 const Bottleneck = require('bottleneck');
+require('dotenv').config(); // Ensure to install dotenv and create a .env file
 
 // Logger Setup
 const logger = winston.createLogger({
@@ -33,7 +34,6 @@ admin.initializeApp({
 const db = admin.firestore();
 
 // Configuration & API Keys
-require('dotenv').config(); // Ensure to install dotenv and create a .env file
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY; // Client ID
 const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secret
@@ -1783,7 +1783,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         `*Crypto amount:* ${amount} ${asset}\n` +
         `*Cash amount:* NGN ${ngnAmount}\n` +
         `*Network:* ${chainRaw}\n` +
-        `*Date:* ${new Date().toISOString()}\n\n` +
+        `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
         `To help us keep improving our services, please rate your experience with us.`;
 
       try {
