@@ -810,43 +810,6 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   ctx.scene.leave();
 });
 
-// Handle Editing Existing Bank Accounts
-bankLinkingScene.action(/edit_existing_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    ctx.scene.leave();
-    return;
-  }
-
-  if (isNaN(walletIndex) || walletIndex < 0 || walletIndex >= userState.wallets.length) {
-    await ctx.replyWithMarkdown('❌ Invalid wallet selection. Please try again.');
-    ctx.scene.leave();
-    return;
-  }
-
-  const selectedWallet = userState.wallets[walletIndex];
-
-  if (!selectedWallet.bank) {
-    await ctx.replyWithMarkdown('❌ This wallet has no linked bank account to edit.');
-    ctx.scene.leave();
-    return;
-  }
-
-  // Set session variables for editing
-  ctx.session.walletIndex = walletIndex;
-  ctx.session.processType = 'editing';
-
-  // Re-enter the bank linking scene to edit bank details
-  await ctx.scene.enter('bank_linking_scene');
-});
-
 // Send Message Scene (Handles Text and Images)
 sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
