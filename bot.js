@@ -1807,13 +1807,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         delete ctx.session.bankLinkingTimeout;
       }
 
-      ctx.scene.leave();
-    } catch (error) {
-      logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ An error occurred while confirming your bank details. Please try again later.');
-      ctx.scene.leave();
-    }
-});
+      
 
 // Decline Bank Account Confirmation
 bankLinkingScene.action('confirm_bank_no', async (ctx) => {
