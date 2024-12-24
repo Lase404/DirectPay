@@ -1551,7 +1551,9 @@ function calculateHmacSignature(data, secretKey) {
   return hash.digest('hex');
 }
 
-// Webhook Handler for Deposits and Paycrest Integration
+// Remove the duplicate webhook handler for '/webhook/blockradar'
+
+// Retain only one definition of the '/webhook/blockradar' endpoint
 app.post('/webhook/blockradar', async (req, res) => {
   try {
     const event = req.body;
@@ -1771,11 +1773,14 @@ app.post('/webhook/blockradar', async (req, res) => {
         clearTimeout(ctx.session.bankLinkingTimeout);
         delete ctx.session.bankLinkingTimeout;
       }
-    } catch (error) {
-      logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ An error occurred while confirming your bank details. Please try again later.');
-      ctx.scene.leave();
+
+      res.status(200).send('OK');
     }
+  } catch (error) {
+    logger.error(`Error processing Blockradar webhook: ${error.message}`);
+    res.status(500).send('Error processing webhook');
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing Blockradar webhook: ${error.message}`);
+  }
 });
 
 // Support Functionality (Already defined above)
