@@ -198,6 +198,78 @@ const bankList = [
   // Add more banks as needed
 ];
 
+
+// Handle "💼 Generate Wallet" button
+bot.hears('💼 Generate Wallet', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const userState = await getUserState(userId);
+    
+    if (userState.wallets.length >= MAX_WALLETS) {
+      return ctx.replyWithMarkdown(`⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets before adding new ones.`);
+    }
+    
+    await ctx.reply('📂 *Select the network for which you want to generate a wallet:*', Markup.inlineKeyboard([
+      [Markup.button.callback('Base', 'generate_wallet_Base')],
+      [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+      [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+    ]));
+  } catch (error) {
+    logger.error(`Error handling Generate Wallet for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while generating your wallet. Please try again later.');
+  }
+});
+
+// Handle "💼 View Wallet" button
+bot.hears('💼 View Wallet', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const userState = await getUserState(userId);
+    
+    if (userState.wallets.length === 0) {
+      return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+    }
+    
+    let message = '💼 *Your Wallets*:\n\n';
+    userState.wallets.forEach((wallet, index) => {
+      message += `*Wallet ${index + 1}:*\n`;
+      message += `• *Chain:* ${wallet.chain}\n`;
+      message += `• *Address:* \`${wallet.address}\`\n`;
+      message += `• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n\n`;
+    });
+    
+    await ctx.replyWithMarkdown(message);
+  } catch (error) {
+    logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while fetching your wallets. Please try again later.');
+  }
+});
+
+// Handle "⚙️ Settings" button
+bot.hears('⚙️ Settings', async (ctx) => {
+  await ctx.reply('⚙️ *Settings Menu*', getSettingsMenu());
+});
+
+// Handle "🏦 Link Bank Account" button
+bot.hears('🏦 Link Bank Account', async (ctx) => {
+  await ctx.scene.enter('bank_linking_scene');
+});
+
+// Handle "📈 View Current Rates" button
+bot.hears('📈 View Current Rates', async (ctx) => {
+  try {
+    let message = '📈 *Current Exchange Rates*:\n\n';
+    for (const [asset, rate] of Object.entries(exchangeRates)) {
+      message += `• *${asset}*: ₦${rate}\n`;
+    }
+    await ctx.replyWithMarkdown(message);
+  } catch (error) {
+    logger.error(`Error fetching exchange rates for user ${ctx.from.id}: ${error.message}`);
+    await ctx.reply('⚠️ Unable to fetch exchange rates at the moment. Please try again later.');
+  }
+});
+
+ 
 const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY;
 
 // Verify Bank Account with Paycrest
