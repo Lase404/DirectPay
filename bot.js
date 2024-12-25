@@ -685,7 +685,7 @@ bankLinkingScene.enter(async (ctx) => {
       ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
       ctx.scene.leave();
     }
-  }, 300000); // 5 minutes timeout
+  }, 30000000000000000); // 5 minutes timeout
 });
 
 // Handle Text Inputs in Bank Linking Scene
