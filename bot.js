@@ -3,33 +3,13 @@ const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const Bottleneck = require('bottleneck'); 
+const Bottleneck = require('bottleneck'); // For rate limiting
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
 const admin = require('firebase-admin');
-const Queue = require('bull');
+const Queue = require('bull'); // For background jobs
 require('dotenv').config();
-
-// =================== Logger Setup ==================
-const logger = winston.createLogger({
-  level: 'info',
-  format: winston.format.combine(
-    winston.format.timestamp(),
-    winston.format.json()
-  ),
-  transports: [
-    new winston.transports.File({ filename: 'bot-error.log', level: 'error' }),
-    new winston.transports.File({ filename: 'bot-combined.log' }),
-  ],
-});
-
-// If not in production, also log to the console
-if (process.env.NODE_ENV !== 'production') {
-  logger.add(new winston.transports.Console({
-    format: winston.format.simple(),
-  }));
-}
 
 // =================== Environment Variables ===================
 const {
@@ -43,12 +23,15 @@ const {
   BLOCKRADAR_API_KEY,
   PERSONAL_CHAT_ID, // Admin Telegram ID
   ADMIN_IDS, // Comma-separated list of Admin IDs
-  MAX_WALLETS = 5, // Default max wallets per user
+  BLOCKRADAR_USDC_ASSET_ID, // Blockradar USDC Asset ID
+  BLOCKRADAR_USDT_ASSET_ID, // Blockradar USDT Asset ID
+  REDIS_HOST = '127.0.0.1',
+  REDIS_PORT = 6379,
 } = process.env;
 
 // Validate essential environment variables
 if (!BOT_TOKEN || !TELEGRAM_WEBHOOK_URL || !PAYSTACK_API_KEY || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !PAYCREST_RETURN_ADDRESS || !BLOCKRADAR_API_KEY || !PERSONAL_CHAT_ID || !ADMIN_IDS) {
-  logger.error('One or more essential environment variables are missing. Please check your .env file.');
+  console.error('❌ One or more essential environment variables are missing. Please check your .env file.');
   process.exit(1);
 }
 
@@ -70,19 +53,42 @@ admin.initializeApp({
 
 const db = admin.firestore();
 
+// =================== Logger Setup ===================
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.json()
+  ),
+  transports: [
+    new winston.transports.File({ filename: 'bot-error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'bot-combined.log' }),
+  ],
+});
+
+// If not in production, also log to the console
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.simple(),
+  }));
+}
+
 // =================== Background Job Queue Setup ===================
 const webhookQueue = new Queue('webhook-processing', {
-  redis: { host: '127.0.0.1', port: 6379 }, // Adjust as per your Redis setup
+  redis: { host: REDIS_HOST, port: REDIS_PORT },
 });
 
 const withdrawalQueue = new Queue('withdrawals', {
-  redis: { host: '127.0.0.1', port: 6379 }, // Adjust as per your Redis setup
+  redis: { host: REDIS_HOST, port: REDIS_PORT },
 });
 
 // Process webhook jobs
 webhookQueue.process(async (job) => {
   const { event } = job.data;
   // Implement your webhook processing logic here
+  // Example:
+  logger.info(`Processing webhook event: ${JSON.stringify(event)}`);
+  // Add actual processing logic as needed
 });
 
 // Process withdrawal jobs
@@ -100,10 +106,10 @@ withdrawalQueue.process(async (job) => {
     let blockradarAssetId;
     switch (asset) {
       case 'USDC':
-        blockradarAssetId = process.env.BLOCKRADAR_USDC_ASSET_ID || 'YOUR_BLOCKRADAR_USDC_ASSET_ID'; // Ensure this environment variable is set
+        blockradarAssetId = BLOCKRADAR_USDC_ASSET_ID;
         break;
       case 'USDT':
-        blockradarAssetId = process.env.BLOCKRADAR_USDT_ASSET_ID || 'YOUR_BLOCKRADAR_USDT_ASSET_ID'; // Ensure this environment variable is set
+        blockradarAssetId = BLOCKRADAR_USDT_ASSET_ID;
         break;
       default:
         throw new Error(`Unsupported asset: ${asset}`);
@@ -129,14 +135,14 @@ withdrawalQueue.process(async (job) => {
   } catch (error) {
     logger.error(`Error processing withdrawal job for transactionHash ${job.data.originalTxHash}: ${error.message}`);
     // Update the deposit record with failure status
-    await db.collection('deposits').doc(originalTxHash).update({
+    await db.collection('deposits').doc(job.data.originalTxHash).update({
       withdrawalStatus: 'failed',
       withdrawalError: error.message,
       status: 'failed',
       sweptAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     // Notify admin about the failure
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Failed to initiate withdrawal for user associated with transactionHash ${originalTxHash}: ${error.message}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Failed to initiate withdrawal for user associated with transactionHash ${job.data.originalTxHash}: ${error.message}`);
     return Promise.reject(error);
   }
 });
@@ -152,7 +158,7 @@ const bankList = [
   { name: 'First Bank of Nigeria', code: '011', aliases: ['first bank', 'first bank nigeria', 'first bank of nigeria', 'firstb'], paycrestInstitutionCode: 'FBNNGNGLA' },
   { name: 'First City Monument Bank', code: '214', aliases: ['fcmb', 'first city monument bank', 'first city bank', 'fcmbnigeria'], paycrestInstitutionCode: 'FCMGNGGLA' },
   { name: 'Guaranty Trust Bank', code: '058', aliases: ['gtbank', 'guaranty trust bank', 'gtb', 'gtbank nigeria'], paycrestInstitutionCode: 'GTBNGNGLA' },
-  { name: 'Heritage Bank', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'], paycrestInstitutionCode: 'HTBNGNGLA' },
+  { name: 'Heritage Bank', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'], paycrestInstitutionCode: 'HTBNNGGLA' },
   { name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'], paycrestInstitutionCode: 'KSTNGNGLA' },
   { name: 'Providus Bank', code: '101', aliases: ['providus', 'providus bank', 'providusb', 'providus bank nigeria'], paycrestInstitutionCode: 'PRVDNGGLA' },
   { name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'], paycrestInstitutionCode: 'PLRSNGGLA' },
@@ -309,21 +315,37 @@ function mapToBlockradar(chain, asset) {
   };
 }
 
+// Function to calculate payout (Placeholder: Implement actual calculation based on rates)
+function calculatePayout(asset, amount) {
+  const rate = exchangeRates[asset];
+  if (!rate) {
+    throw new Error(`Exchange rate for ${asset} not available.`);
+  }
+  return rate * amount;
+}
+
 // =================== Scenes Definition ===================
+
+// Define all scenes first
+const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
+const supportScene = new Scenes.BaseScene('support_scene');
+const sendMessageScene = new Scenes.BaseScene('send_message_scene');
+const searchTransactionScene = new Scenes.BaseScene('search_transaction_scene');
+const broadcastMessageScene = new Scenes.BaseScene('broadcast_message_scene');
+
+// Initialize Stage with defined scenes
 const stage = new Scenes.Stage([
-  // Define all scenes here
-  // Ensure each scene is defined only once
   bankLinkingScene,
   supportScene,
   sendMessageScene,
   searchTransactionScene,
-  broadcastMessageScene, // Ensure this scene is defined
+  broadcastMessageScene,
   // Add other scenes as needed
 ]);
 
-// =================== Bank Linking Scene ===================
-const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
+// =================== Register Scenes ===================
 
+// =================== Bank Linking Scene ===================
 bankLinkingScene.enter(async (ctx) => {
   const userId = ctx.from.id.toString();
   const walletIndex = ctx.session.walletIndex;
@@ -551,12 +573,7 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   ctx.scene.leave();
 });
 
-// Register the bank linking scene
-stage.register(bankLinkingScene);
-
 // =================== Support Scene ===================
-const supportScene = new Scenes.BaseScene('support_scene');
-
 supportScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('💬 *Support*\n\nPlease enter the message you want to send to our support team:', Markup.inlineKeyboard([
     [Markup.button.callback('❌ Cancel', 'support_cancel')]
@@ -598,12 +615,7 @@ supportScene.action('support_cancel', async (ctx) => {
   ctx.scene.leave();
 });
 
-// Register the support scene
-stage.register(supportScene);
-
 // =================== Send Message Scene ===================
-const sendMessageScene = new Scenes.BaseScene('send_message_scene');
-
 sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 *Send Message to User*\n\nPlease enter the User ID you want to message:', Markup.inlineKeyboard([
     [Markup.button.callback('❌ Cancel', 'send_message_cancel')]
@@ -660,6 +672,7 @@ sendMessageScene.on('message', async (ctx) => {
       await ctx.replyWithMarkdown('✅ Text message sent successfully.');
       logger.info(`Admin ${adminId} sent a text message to user ${userIdToMessage}: ${messageText}`);
     } else {
+      // Unsupported message type
       await ctx.reply('❌ Unsupported message type. Please send text or a photo (receipt).');
       return;
     }
@@ -685,12 +698,7 @@ sendMessageScene.action('send_message_cancel', async (ctx) => {
   ctx.scene.leave();
 });
 
-// Register the send message scene
-stage.register(sendMessageScene);
-
 // =================== Search Transaction Scene ===================
-const searchTransactionScene = new Scenes.BaseScene('search_transaction_scene');
-
 searchTransactionScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('🔍 *Search Transaction*\n\nPlease enter the *Reference ID* of the transaction you want to search for:', Markup.inlineKeyboard([
     [Markup.button.callback('❌ Cancel', 'search_transaction_cancel')]
@@ -719,11 +727,11 @@ searchTransactionScene.on('text', async (ctx) => {
     // Display transaction details with inline buttons for status updates
     let message = `🔍 *Transaction Details*\n\n`;
     message += `• *Reference ID:* \`${transactionData.referenceId || 'N/A'}\`\n`;
-    message += `• *User ID:* ${transactionData.userId || 'N/A'}\n`;
-    message += `• *Amount:* ${transactionData.amount || 'N/A'} ${transactionData.asset || 'N/A'}\n`;
-    message += `• *Status:* ${transactionData.status || 'Pending'}\n`;
-    message += `• *Transaction Hash:* \`${transactionData.transactionHash || 'N/A'}\`\n`;
-    message += `• *Date:* ${transactionData.timestamp ? new Date(transactionData.timestamp.toDate()).toLocaleString() : 'N/A'}\n`;
+    message += `  • *User ID:* ${transactionData.userId || 'N/A'}\n`;
+    message += `  • *Amount:* ${transactionData.amount || 'N/A'} ${transactionData.asset || 'N/A'}\n`;
+    message += `  • *Status:* ${transactionData.status || 'Pending'}\n`;
+    message += `  • *Transaction Hash:* \`${transactionData.transactionHash || 'N/A'}\`\n`;
+    message += `  • *Date:* ${transactionData.timestamp ? new Date(transactionData.timestamp.toDate()).toLocaleString() : 'N/A'}\n`;
     message += `• *Chain:* ${transactionData.chain || 'N/A'}\n`;
     // Add more fields as necessary
     
@@ -767,295 +775,7 @@ searchTransactionScene.action('search_transaction_back', async (ctx) => {
 // Register the search transaction scene
 stage.register(searchTransactionScene);
 
-// =================== Handle Status Update Actions ===================
-bot.action(/update_status_(.+)_(.+)/, async (ctx) => {
-  const adminId = ctx.from.id.toString();
-  const referenceId = ctx.match[1];
-  const newStatus = ctx.match[2];
-  
-  try {
-    // Fetch the transaction
-    const transactionSnapshot = await db.collection('transactions').where('referenceId', '==', referenceId).limit(1).get();
-    
-    if (transactionSnapshot.empty) {
-      await ctx.replyWithMarkdown(`❌ No transaction found with Reference ID: \`${referenceId}\`.`);
-      return ctx.answerCbQuery();
-    }
-    
-    const transactionDoc = transactionSnapshot.docs[0];
-    const transactionData = transactionDoc.data();
-    
-    // Update the status
-    await db.collection('transactions').doc(transactionDoc.id).update({
-      status: newStatus,
-      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-    });
-    
-    // Notify the admin of the successful update
-    await ctx.replyWithMarkdown(`✅ Transaction \`${referenceId}\` has been updated to *${newStatus}*.`);
-    
-    // Notify the user about the status update
-    await bot.telegram.sendMessage(transactionData.userId, `🔄 *Transaction Update*\n\nYour transaction with Reference ID \`${referenceId}\` has been updated to *${newStatus}*.`);
-    
-    // Log the status update
-    logger.info(`Admin ${adminId} updated transaction ${referenceId} to ${newStatus}`);
-    
-    // Acknowledge the callback to remove the loading state
-    await ctx.answerCbQuery();
-    
-    // Optionally, edit the original transaction details message to reflect the new status
-    // This requires tracking the message ID where the transaction details were sent
-    // If you have stored the message ID in Firestore or elsewhere, you can implement this
-  } catch (error) {
-    logger.error(`Error updating status for transaction ${referenceId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while updating the transaction status. Please try again later.');
-    await ctx.answerCbQuery();
-  }
-});
-
-// =================== Admin Panel Actions ===================
-
-// Entry point for Admin Panel
-bot.action('open_admin_panel', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  // Reset session variables if necessary
-  ctx.session.adminMessageId = null;
-
-  const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
-  ctx.session.adminMessageId = sentMessage.message_id;
-
-  // Set a timeout to delete the admin panel message after 5 minutes
-  setTimeout(() => {
-    if (ctx.session.adminMessageId) {
-      ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-      ctx.session.adminMessageId = null;
-    }
-  }, 300000); // Delete after 5 minutes
-});
-
-// Handle Admin Menu Actions
-bot.action(/admin_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  const action = ctx.match[1];
-
-  switch (action) {
-    case 'admin_view_transactions':
-      // Handle viewing transactions
-      try {
-        const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(10).get();
-
-        if (transactionsSnapshot.empty) {
-          await ctx.answerCbQuery('No transactions found.', { show_alert: true });
-          return;
-        }
-
-        let message = '📋 **Recent Transactions**:\n\n';
-
-        transactionsSnapshot.forEach((doc) => {
-          const tx = doc.data();
-          message += `• *Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-          message += `*User ID:* ${tx.userId || 'N/A'}\n`;
-          message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-          message += `*Status:* ${tx.status || 'Pending'}\n`;
-          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp.toDate()).toLocaleString() : 'N/A'}\n`;
-          message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all transactions: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch transactions.', { show_alert: true });
-      }
-      break;
-
-    case 'admin_user_statistics':
-      // Handle viewing user statistics
-      try {
-        const usersSnapshot = await db.collection('users').get();
-        const transactionsSnapshot = await db.collection('transactions').where('status', '==', 'Completed').get();
-
-        const totalUsers = usersSnapshot.size;
-        const activeUsers = usersSnapshot.docs.filter(doc => doc.data().isActive).length;
-        const successfulTransactions = transactionsSnapshot.size;
-
-        let message = `👥 **User Statistics**:\n\n`;
-        message += `• *Total Users:* ${totalUsers}\n`;
-        message += `• *Active Users:* ${activeUsers}\n`;
-        message += `• *Successful Transactions:* ${successfulTransactions}\n\n`;
-        message += `📋 *User Details*:\n`;
-
-        usersSnapshot.forEach(doc => {
-          const user = doc.data();
-          const username = user.username || 'N/A';
-          const dateJoined = user.dateJoined ? user.dateJoined.toDate().toLocaleString() : 'N/A';
-          const userTxCount = user.transactionCount || 0; // Assuming you track this
-          message += `• *Username:* ${username}\n`;
-          message += `  • *User ID:* ${doc.id}\n`;
-          message += `  • *Date Joined:* ${dateJoined}\n`;
-          message += `  • *Successful Transactions:* ${userTxCount}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching user statistics: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch user statistics.', { show_alert: true });
-      }
-      break;
-
-    case 'admin_search_transaction':
-      // Handle searching for a transaction
-      await ctx.scene.enter('search_transaction_scene');
-      ctx.answerCbQuery();
-      break;
-
-    case 'admin_send_message':
-      // Handle sending messages
-      await ctx.scene.enter('send_message_scene');
-      ctx.answerCbQuery();
-      break;
-
-    case 'admin_mark_paid':
-      // Handle marking transactions as paid
-      try {
-        const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
-        if (pendingTransactions.empty) {
-          await ctx.answerCbQuery('No pending transactions found.', { show_alert: true });
-          return;
-        }
-
-        const batch = db.batch();
-        pendingTransactions.forEach((transaction) => {
-          const docRef = db.collection('transactions').doc(transaction.id);
-          batch.update(docRef, { status: 'Paid' });
-        });
-
-        await batch.commit();
-
-        // Notify users about their transactions being marked as paid
-        pendingTransactions.forEach(async (transaction) => {
-          const txData = transaction.data();
-          try {
-            const payout = txData.payout || 'N/A';
-            const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
-
-            await bot.telegram.sendMessage(
-              txData.userId,
-              `🎉 *Transaction Successful!*\n\n` +
-              `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n` +
-              `*Amount Paid:* ${txData.amount} ${txData.asset}\n` +
-              `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
-              `*Account Name:* ${accountName}\n` +
-              `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
-              `*Payout (NGN):* ₦${payout}\n\n` +
-              `🔹 *Chain:* ${txData.chain}\n` +
-              `*Date:* ${new Date(txData.timestamp.toDate()).toLocaleString()}\n\n` +
-              `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
-              { parse_mode: 'Markdown' }
-            );
-            logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
-          } catch (error) {
-            logger.error(`Error notifying user ${txData.userId}: ${error.message}`);
-          }
-        });
-
-        // Edit the admin panel message to confirm
-        await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error marking transactions as paid: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
-      }
-      break;
-
-    case 'admin_view_users':
-      // Handle viewing all users
-      try {
-        const usersSnapshot = await db.collection('users').get();
-
-        if (usersSnapshot.empty) {
-          await ctx.answerCbQuery('No users found.', { show_alert: true });
-          return;
-        }
-
-        let message = '👥 **All Users**:\n\n';
-
-        usersSnapshot.forEach((doc) => {
-          const user = doc.data();
-          message += `• *User ID:* ${doc.id}\n`;
-          message += `  • *Username:* ${user.username || 'N/A'}\n`;
-          message += `  • *Number of Wallets:* ${user.wallets.length}\n`;
-          message += `  • *Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? '✅ Yes' : '❌ No'}\n`;
-          message += `  • *Date Joined:* ${user.dateJoined ? user.dateJoined.toDate().toLocaleString() : 'N/A'}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all users: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch users.', { show_alert: true });
-      }
-      break;
-
-    case 'admin_broadcast_message':
-      // Handle broadcasting messages (assuming you have a broadcast_message_scene implemented)
-      await ctx.scene.enter('broadcast_message_scene'); // Implement this scene as needed
-      ctx.answerCbQuery();
-      break;
-
-    case 'admin_manage_banks':
-      // Implement bank management functionalities here
-      await ctx.replyWithMarkdown('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
-      ctx.answerCbQuery();
-      break;
-
-    case 'admin_back_to_main':
-      // Return to the main menu
-      await greetUser(ctx); // Implement greetUser to send the admin menu to the admin
-      // Delete the admin panel message
-      if (ctx.session.adminMessageId) {
-        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-        ctx.session.adminMessageId = null;
-      }
-      ctx.answerCbQuery();
-      break;
-
-    default:
-      await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
-  }
-});
-
 // =================== Broadcast Message Scene ===================
-const broadcastMessageScene = new Scenes.BaseScene('broadcast_message_scene');
-
 broadcastMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📢 *Broadcast Message*\n\nPlease enter the message you want to broadcast to all users. You can also attach a photo (receipt) with your message:', Markup.inlineKeyboard([
     [Markup.button.callback('❌ Cancel', 'broadcast_cancel')]
@@ -1086,7 +806,7 @@ broadcastMessageScene.on('message', async (ctx) => {
     if (ctx.message.photo) {
       // Handle photo broadcast
       const photoArray = ctx.message.photo;
-      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
+      const highestResolutionPhoto = photoArray[photoArray.length - 1];
       const fileId = highestResolutionPhoto.file_id;
       const caption = ctx.message.caption || '';
 
@@ -1155,7 +875,6 @@ bot.use(session());
 bot.use(stage.middleware());
 
 // =================== Greet User Function ===================
-// Note: Ensure this function is defined only once.
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
   let userState;
@@ -1380,12 +1099,292 @@ bot.action(/settings_(.+)/, async (ctx) => {
 });
 
 // =================== Transaction Search and Update Actions ===================
+bot.action(/update_status_(.+)_(.+)/, async (ctx) => {
+  const adminId = ctx.from.id.toString();
+  const referenceId = ctx.match[1];
+  const newStatus = ctx.match[2];
+  
+  try {
+    // Fetch the transaction
+    const transactionSnapshot = await db.collection('transactions').where('referenceId', '==', referenceId).limit(1).get();
+    
+    if (transactionSnapshot.empty) {
+      await ctx.replyWithMarkdown(`❌ No transaction found with Reference ID: \`${referenceId}\`.`);
+      await ctx.answerCbQuery();
+      return;
+    }
+    
+    const transactionDoc = transactionSnapshot.docs[0];
+    const transactionData = transactionDoc.data();
+    
+    // Update the status
+    await db.collection('transactions').doc(transactionDoc.id).update({
+      status: newStatus,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    
+    // Notify the admin of the successful update
+    await ctx.replyWithMarkdown(`✅ Transaction \`${referenceId}\` has been updated to *${newStatus}*.`);
+    
+    // Notify the user about the status update
+    await bot.telegram.sendMessage(transactionData.userId, `🔄 *Transaction Update*\n\nYour transaction with Reference ID \`${referenceId}\` has been updated to *${newStatus}*.`);
+    
+    // Log the status update
+    logger.info(`Admin ${adminId} updated transaction ${referenceId} to ${newStatus}`);
+    
+    // Acknowledge the callback to remove the loading state
+    await ctx.answerCbQuery();
+    
+    // Optionally, edit the original transaction details message to reflect the new status
+    // This requires tracking the message ID where the transaction details were sent
+    // If you have stored the message ID in Firestore or elsewhere, you can implement this
+  } catch (error) {
+    logger.error(`Error updating status for transaction ${referenceId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while updating the transaction status. Please try again later.');
+    await ctx.answerCbQuery();
+  }
+});
 
-// (Already handled above)
+// =================== Admin Panel Actions ===================
+bot.action('open_admin_panel', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
+  }
+
+  // Reset session variables if necessary
+  ctx.session.adminMessageId = null;
+
+  const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
+  ctx.session.adminMessageId = sentMessage.message_id;
+
+  // Set a timeout to delete the admin panel message after 5 minutes
+  setTimeout(() => {
+    if (ctx.session.adminMessageId) {
+      ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
+      ctx.session.adminMessageId = null;
+    }
+  }, 300000); // Delete after 5 minutes
+});
+
+// Handle Admin Menu Actions
+bot.action(/admin_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
+  }
+
+  const action = ctx.match[1];
+
+  switch (action) {
+    case 'admin_view_transactions':
+      // Handle viewing transactions
+      try {
+        const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(10).get();
+
+        if (transactionsSnapshot.empty) {
+          await ctx.answerCbQuery('No transactions found.', { show_alert: true });
+          return;
+        }
+
+        let message = '📋 **Recent Transactions**:\n\n';
+
+        transactionsSnapshot.forEach((doc) => {
+          const tx = doc.data();
+          message += `• *Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+          message += `*User ID:* ${tx.userId || 'N/A'}\n`;
+          message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+          message += `*Status:* ${tx.status || 'Pending'}\n`;
+          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp.toDate()).toLocaleString() : 'N/A'}\n`;
+          message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
+        });
+
+        // Add a 'Back' button to return to the admin menu
+        const inlineKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
+        ]);
+
+        // Edit the admin panel message
+        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+        ctx.answerCbQuery();
+      } catch (error) {
+        logger.error(`Error fetching all transactions: ${error.message}`);
+        await ctx.answerCbQuery('⚠️ Unable to fetch transactions.', { show_alert: true });
+      }
+      break;
+
+    case 'admin_user_statistics':
+      // Handle viewing user statistics
+      try {
+        const usersSnapshot = await db.collection('users').get();
+        const transactionsSnapshot = await db.collection('transactions').where('status', '==', 'Completed').get();
+
+        const totalUsers = usersSnapshot.size;
+        const activeUsers = usersSnapshot.docs.filter(doc => doc.data().isActive).length;
+        const successfulTransactions = transactionsSnapshot.size;
+
+        let message = `👥 **User Statistics**:\n\n`;
+        message += `• *Total Users:* ${totalUsers}\n`;
+        message += `• *Active Users:* ${activeUsers}\n`;
+        message += `• *Successful Transactions:* ${successfulTransactions}\n\n`;
+        message += `📋 *User Details*:\n`;
+
+        usersSnapshot.forEach(doc => {
+          const user = doc.data();
+          const username = user.username || 'N/A';
+          const dateJoined = user.dateJoined ? user.dateJoined.toDate().toLocaleString() : 'N/A';
+          const userTxCount = user.transactionCount || 0; // Assuming you track this
+          message += `• *Username:* ${username}\n`;
+          message += `  • *User ID:* ${doc.id}\n`;
+          message += `  • *Date Joined:* ${dateJoined}\n`;
+          message += `  • *Successful Transactions:* ${userTxCount}\n\n`;
+        });
+
+        // Add a 'Back' button to return to the admin menu
+        const inlineKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
+        ]);
+
+        // Edit the admin panel message
+        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+        ctx.answerCbQuery();
+      } catch (error) {
+        logger.error(`Error fetching user statistics: ${error.message}`);
+        await ctx.answerCbQuery('⚠️ Unable to fetch user statistics.', { show_alert: true });
+      }
+      break;
+
+    case 'admin_search_transaction':
+      // Handle searching for a transaction
+      await ctx.scene.enter('search_transaction_scene');
+      ctx.answerCbQuery();
+      break;
+
+    case 'admin_send_message':
+      // Handle sending messages
+      await ctx.scene.enter('send_message_scene');
+      ctx.answerCbQuery();
+      break;
+
+    case 'admin_mark_paid':
+      // Handle marking transactions as paid
+      try {
+        const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
+        if (pendingTransactions.empty) {
+          await ctx.answerCbQuery('No pending transactions found.', { show_alert: true });
+          return;
+        }
+
+        const batch = db.batch();
+        pendingTransactions.forEach((transaction) => {
+          const docRef = db.collection('transactions').doc(transaction.id);
+          batch.update(docRef, { status: 'Paid' });
+        });
+
+        await batch.commit();
+
+        // Notify users about their transactions being marked as paid
+        pendingTransactions.forEach(async (transaction) => {
+          const txData = transaction.data();
+          try {
+            const payout = txData.payout || 'N/A';
+            const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
+
+            await bot.telegram.sendMessage(
+              txData.userId,
+              `🎉 *Transaction Successful!*\n\n` +
+              `*Reference ID:* \`${txData.referenceId}\`\n` +
+              `*Amount Paid:* ${txData.amount} ${txData.asset}\n` +
+              `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
+              `*Account Name:* ${accountName}\n` +
+              `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
+              `*Payout (NGN):* ₦${payout}\n\n` +
+              `🔹 *Chain:* ${txData.chain}\n` +
+              `*Date:* ${new Date(txData.timestamp.toDate()).toLocaleString()}\n\n` +
+              `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
+              { parse_mode: 'Markdown' }
+            );
+            logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
+          } catch (error) {
+            logger.error(`Error notifying user ${txData.userId}: ${error.message}`);
+          }
+        });
+
+        // Edit the admin panel message to confirm
+        await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
+        ctx.answerCbQuery();
+      } catch (error) {
+        logger.error(`Error marking transactions as paid: ${error.message}`);
+        await ctx.answerCbQuery('⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
+      }
+      break;
+
+    case 'admin_view_users':
+      // Handle viewing all users
+      try {
+        const usersSnapshot = await db.collection('users').get();
+
+        if (usersSnapshot.empty) {
+          await ctx.answerCbQuery('No users found.', { show_alert: true });
+          return;
+        }
+
+        let message = '👥 **All Users**:\n\n';
+
+        usersSnapshot.forEach((doc) => {
+          const user = doc.data();
+          message += `• *User ID:* ${doc.id}\n`;
+          message += `  • *Username:* ${user.username || 'N/A'}\n`;
+          message += `  • *Number of Wallets:* ${user.wallets.length}\n`;
+          message += `  • *Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? '✅ Yes' : '❌ No'}\n`;
+          message += `  • *Date Joined:* ${user.dateJoined ? user.dateJoined.toDate().toLocaleString() : 'N/A'}\n\n`;
+        });
+
+        // Add a 'Back' button to return to the admin menu
+        const inlineKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
+        ]);
+
+        // Edit the admin panel message
+        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+        ctx.answerCbQuery();
+      } catch (error) {
+        logger.error(`Error fetching all users: ${error.message}`);
+        await ctx.answerCbQuery('⚠️ Unable to fetch users.', { show_alert: true });
+      }
+      break;
+
+    case 'admin_broadcast_message':
+      // Handle broadcasting messages (assuming you have a broadcast_message_scene implemented)
+      await ctx.scene.enter('broadcast_message_scene'); // Implement this scene as needed
+      ctx.answerCbQuery();
+      break;
+
+    case 'admin_manage_banks':
+      // Implement bank management functionalities here
+      await ctx.replyWithMarkdown('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
+      ctx.answerCbQuery();
+      break;
+
+    case 'admin_back_to_main':
+      // Return to the main menu
+      await greetUser(ctx); // Implement greetUser to send the admin menu to the admin
+      // Delete the admin panel message
+      if (ctx.session.adminMessageId) {
+        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
+        ctx.session.adminMessageId = null;
+      }
+      ctx.answerCbQuery();
+      break;
+
+    default:
+      await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
+  }
+});
 
 // =================== Admin Actions for Messaging ===================
-
-// (Already handled above)
+// Already handled within sendMessageScene above
 
 // =================== Webhook Handlers ===================
 
@@ -1470,7 +1469,7 @@ app.post('/webhook/paycrest', async (req, res) => {
             `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
             `*Cash amount:* NGN ${txData.payout}\n` +
             `*Network:* ${txData.chain}\n` +
-            `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
+            `*Date:* ${new Date(txData.timestamp.toDate()).toISOString()}\n\n` +
             `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
             { parse_mode: 'Markdown' }
           );
@@ -1717,7 +1716,6 @@ app.post('/webhook/blockradar', async (req, res) => {
 });
 
 // =================== Paycrest Order Function ===================
-// Note: Removed duplicate function definition
 async function createPaycrestOrder(userId, amount, token, network, recipientDetails) {
   try {
     // Map to Paycrest network and token
@@ -1784,7 +1782,6 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
 }
 
 // =================== Withdraw from Blockradar Function ===================
-// Note: Removed duplicate function definition
 async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
   try {
     // Ensure the chain exists in the mapping
@@ -1850,20 +1847,37 @@ process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
 
 // =================== Additional Admin Broadcast Handler ===================
-
 // (Handled within broadcast_message_scene above)
 
 // =================== Handle Settings Actions ===================
-
 // (Handled above)
 
 // =================== Admin Actions for Messaging ===================
-
 // (Handled above)
 
 // =================== Greet User Function ===================
+// Note: Ensure this function is defined only once.
+async function greetUser(ctx) {
+  const userId = ctx.from.id.toString();
+  let userState;
+  try {
+    userState = await getUserState(userId);
+  } catch (error) {
+    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred. Please try again later.');
+    return;
+  }
 
-// (Already defined once above)
+  // If user is new, send a welcome message
+  if (!userState.dateJoined) {
+    await ctx.reply('👋 Welcome to DirectPay! I am here to help you manage your crypto transactions securely.');
+    // Update dateJoined
+    await updateUserState(userId, { dateJoined: admin.firestore.FieldValue.serverTimestamp() });
+  }
+
+  // Provide the main menu
+  await ctx.reply('📋 Here is your main menu:', getMainMenu(userState.wallets.length > 0, userState.wallets.some(wallet => wallet.bank)));
+}
 
 // =================== Handle Unsupported Messages ===================
 bot.on('message', async (ctx) => {
@@ -1872,3 +1886,134 @@ bot.on('message', async (ctx) => {
     await ctx.reply('⚠️ I did not understand that command. Please select an option from the menu.');
   }
 });
+
+// =================== Helper Menu Functions ===================
+
+// Function to get Main Menu
+function getMainMenu(hasWallets, hasBank) {
+  return Markup.keyboard([
+    ['💼 Generate Wallet', '💼 View Wallet'],
+    ['💰 Transactions', '📈 View Current Rates'],
+    ['⚙️ Settings', 'ℹ️ Support']
+  ]).resize().oneTime();
+}
+
+// Function to get Settings Menu
+function getSettingsMenu() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('🔗 Edit Linked Bank', 'settings_edit_bank')],
+    [Markup.button.callback('🔄 Refresh Rates', 'refresh_rates')],
+    [Markup.button.callback('❌ Cancel', 'settings_cancel')]
+  ]);
+}
+
+// Function to get Admin Menu
+function getAdminMenu() {
+  return Markup.inlineKeyboard([
+    [Markup.button.callback('📋 View Transactions', 'admin_admin_view_transactions')],
+    [Markup.button.callback('👥 User Statistics', 'admin_admin_user_statistics')],
+    [Markup.button.callback('🔍 Search Transaction', 'admin_admin_search_transaction')],
+    [Markup.button.callback('💬 Send Message', 'admin_admin_send_message')],
+    [Markup.button.callback('✅ Mark Transactions as Paid', 'admin_admin_mark_paid')],
+    [Markup.button.callback('👥 View All Users', 'admin_admin_view_users')],
+    [Markup.button.callback('📢 Broadcast Message', 'admin_admin_broadcast_message')],
+    [Markup.button.callback('🏦 Manage Banks', 'admin_admin_manage_banks')],
+    [Markup.button.callback('🔙 Back to Main Menu', 'admin_admin_back_to_main')]
+  ]);
+}
+
+// =================== Handle Inline Button Actions ===================
+
+// Example: Handle Generate Wallet Inline Buttons
+bot.action(/generate_wallet_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const chainSelected = ctx.match[1];
+
+  try {
+    let userState = await getUserState(userId);
+    if (userState.wallets.length >= MAX_WALLETS) {
+      await ctx.reply(`❌ You have reached the maximum number of wallets (${MAX_WALLETS}). Please delete an existing wallet before creating a new one.`);
+      await ctx.answerCbQuery();
+      return;
+    }
+
+    // Generate wallet address (Placeholder: Implement actual wallet generation)
+    const walletAddress = await generateWallet(chainSelected);
+
+    // Add the new wallet to the user's wallets
+    userState.wallets.push({
+      chain: chainSelected,
+      address: walletAddress,
+      bank: null, // Initially no bank linked
+    });
+
+    // Update User State in Firestore
+    await updateUserState(userId, {
+      wallets: userState.wallets,
+    });
+
+    // Inform the user
+    await ctx.replyWithMarkdown(`✅ Wallet generated successfully!\n\n*Chain:* ${chainSelected}\n*Address:* \`${walletAddress}\``, getMainMenu(true, userState.wallets.some(wallet => wallet.bank)));
+
+    // Acknowledge the callback to remove the loading state
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error generating wallet for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while generating your wallet. Please try again later.');
+    await ctx.answerCbQuery();
+  }
+});
+
+// Handle Cancel Generate Wallet
+bot.action('generate_wallet_cancel', async (ctx) => {
+  await ctx.reply('❌ Wallet generation has been canceled.');
+  await ctx.answerCbQuery();
+});
+
+// Handle Refresh Rates Button
+bot.action('refresh_rates', async (ctx) => {
+  try {
+    await fetchExchangeRates();
+    await ctx.reply('✅ Exchange rates have been refreshed successfully.');
+    await ctx.answerCbQuery(); // Acknowledge the callback to remove the loading state
+  } catch (error) {
+    logger.error(`Error refreshing exchange rates: ${error.message}`);
+    await ctx.reply('⚠️ Failed to refresh exchange rates. Please try again later.');
+    await ctx.answerCbQuery(); // Acknowledge the callback
+  }
+});
+
+// =================== Function to Initiate Withdrawals ===================
+async function initiateWithdrawal(userId, amount, asset, chain, bankDetails, transactionHash) {
+  try {
+    // Enqueue a withdrawal job
+    withdrawalQueue.add({
+      userId,
+      amount,
+      asset,
+      chain,
+      bankDetails,
+      originalTxHash: transactionHash
+    });
+  } catch (error) {
+    logger.error(`Error initiating withdrawal for user ${userId}: ${error.message}`);
+    throw new Error('Failed to initiate withdrawal.');
+  }
+}
+
+// =================== Webhook Processing Logic ===================
+// Implement your webhook processing logic here if needed
+
+// =================== Run the Bot ===================
+bot.launch()
+  .then(() => {
+    logger.info('✅ Bot started successfully.');
+  })
+  .catch((error) => {
+    logger.error(`❌ Failed to launch bot: ${error.message}`);
+    process.exit(1);
+  });
+
+// Enable graceful stop
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
