@@ -7,8 +7,8 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const winston = require('winston');
-const PDFDocument = require('pdfkit'); // Added for PDF generation
-const blobStream = require('blob-stream'); // Added for handling PDF streams
+const PDFDocument = require('pdfkit'); // For PDF generation
+const blobStream = require('blob-stream'); // For handling PDF streams
 require('dotenv').config(); // Ensure to install dotenv and create a .env file
 
 // =================== Logger Setup ===================
@@ -158,245 +158,6 @@ app.use(express.json());
 
 // =================== Initialize Telegraf Bot ===================
 const bot = new Telegraf(BOT_TOKEN);
-
-// =================== Scenes Definitions ===================
-
-// 1. Bank Linking Scene
-const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
-
-bankLinkingScene.enter(async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = ctx.session.walletIndex;
-
-  try {
-    const userState = await getUserState(userId);
-    const wallet = userState.wallets[walletIndex];
-
-    if (!wallet) {
-      await ctx.reply('⚠️ Invalid wallet selected.');
-      return ctx.scene.leave();
-    }
-
-    await ctx.reply('🏦 *Link Your Bank Account*\n\nPlease enter your bank account number (10 digits):');
-    ctx.session.processType = 'link_bank';
-    // Set a timeout for user to respond within 2 minutes
-    ctx.session.bankLinkingTimeout = setTimeout(() => {
-      ctx.reply('⌛️ Bank linking timed out. Please try again.');
-      ctx.scene.leave();
-    }, 120000); // 2 minutes
-  } catch (error) {
-    logger.error(`Error entering bank linking scene for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred. Please try again later.');
-    ctx.scene.leave();
-  }
-});
-
-bankLinkingScene.on('text', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = ctx.session.walletIndex;
-  const processType = ctx.session.processType;
-
-  if (processType === 'link_bank') {
-    const accountNumber = ctx.message.text.trim();
-
-    // Validate account number (simple regex for 10 digits)
-    if (!/^\d{10}$/.test(accountNumber)) {
-      await ctx.reply('❌ Invalid account number. Please enter a valid 10-digit bank account number:');
-      return;
-    }
-
-    try {
-      const userState = await getUserState(userId);
-      const wallet = userState.wallets[walletIndex];
-
-      if (!wallet) {
-        await ctx.reply('⚠️ Invalid wallet selected.');
-        return ctx.scene.leave();
-      }
-
-      // Prompt for bank selection
-      const availableBanks = bankList.map(bank => bank.name);
-      await ctx.reply('🏦 *Select Your Bank:*', Markup.inlineKeyboard([
-        availableBanks.map(bank => Markup.button.callback(bank, `select_bank_${bank.replace(/\s+/g, '_')}`))
-      ]));
-      ctx.session.accountNumber = accountNumber;
-      ctx.session.processType = 'select_bank';
-      // Reset the timeout
-      clearTimeout(ctx.session.bankLinkingTimeout);
-      ctx.session.bankLinkingTimeout = setTimeout(() => {
-        ctx.reply('⌛️ Bank linking timed out. Please try again.');
-        ctx.scene.leave();
-      }, 120000); // 2 minutes
-    } catch (error) {
-      logger.error(`Error processing bank account number for user ${userId}: ${error.message}`);
-      await ctx.reply('⚠️ An error occurred. Please try again later.');
-      ctx.scene.leave();
-    }
-  }
-});
-
-// Handle Bank Selection
-bankLinkingScene.action(/select_bank_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = ctx.session.walletIndex;
-  const selectedBankName = ctx.match[1].replace(/_/g, ' ');
-
-  try {
-    const userState = await getUserState(userId);
-    const wallet = userState.wallets[walletIndex];
-
-    if (!wallet) {
-      await ctx.reply('⚠️ Invalid wallet selected.');
-      return ctx.scene.leave();
-    }
-
-    const bank = bankList.find(b => b.name.toLowerCase() === selectedBankName.toLowerCase());
-
-    if (!bank) {
-      await ctx.reply('⚠️ Invalid bank selected.');
-      return ctx.scene.leave();
-    }
-
-    // Verify the bank account using Paystack
-    const verificationResult = await verifyBankAccount(ctx.session.accountNumber, bank.code);
-
-    if (!verificationResult || !verificationResult.data || verificationResult.data.account_name === null) {
-      await ctx.reply('⚠️ Unable to verify your bank account. Please ensure the details are correct and try again.');
-      return ctx.scene.leave();
-    }
-
-    const accountName = verificationResult.data.account_name;
-
-    // Update the wallet with bank details
-    wallet.bank = {
-      bankName: bank.name,
-      accountNumber: ctx.session.accountNumber,
-      accountName: accountName
-    };
-
-    // Update Firestore with the new bank details
-    await updateUserState(userId, {
-      wallets: userState.wallets
-    });
-
-    await ctx.replyWithMarkdown(`✅ *Bank Account Linked Successfully!*\n\n*Bank:* ${bank.name}\n*Account Number:* ****${ctx.session.accountNumber.slice(-4)}\n*Account Name:* ${accountName}`);
-
-    ctx.scene.leave();
-  } catch (error) {
-    logger.error(`Error linking bank for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while linking your bank account. Please try again later.');
-    ctx.scene.leave();
-  }
-});
-
-// 2. Send Message Scene
-const sendMessageScene = new Scenes.BaseScene('send_message_scene');
-
-sendMessageScene.enter(async (ctx) => {
-  await ctx.reply('📩 *Send a Message to a User*\n\nPlease enter the User ID of the recipient:');
-});
-
-sendMessageScene.on('text', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const recipientId = ctx.message.text.trim();
-
-  if (!/^\d+$/.test(recipientId)) {
-    await ctx.reply('❌ Invalid User ID. Please enter a numeric User ID:');
-    return;
-  }
-
-  ctx.session.recipientId = recipientId;
-  await ctx.reply('💬 Please enter the message you want to send:');
-  ctx.session.processType = 'awaiting_message_text';
-});
-
-sendMessageScene.on('text', async (ctx) => {
-  if (ctx.session.processType === 'awaiting_message_text') {
-    const userId = ctx.from.id.toString();
-    const recipientId = ctx.session.recipientId;
-    const messageText = ctx.message.text.trim();
-
-    try {
-      // Send the message to the recipient
-      await bot.telegram.sendMessage(recipientId, `📩 *Message from Admin:* ${messageText}`, { parse_mode: 'Markdown' });
-      await ctx.reply('✅ Message sent successfully!');
-      ctx.scene.leave();
-    } catch (error) {
-      logger.error(`Error sending message from admin ${userId} to user ${recipientId}: ${error.message}`);
-      await ctx.reply('⚠️ Failed to send the message. Please ensure the User ID is correct and try again.');
-      ctx.scene.leave();
-    }
-  }
-});
-
-// Handle Scene Timeout
-sendMessageScene.on('message', async (ctx) => {
-  if (ctx.scene.state.timeout) {
-    return;
-  }
-});
-
-// 3. Receipt Generation Scene
-const receiptGenerationScene = new Scenes.BaseScene('receipt_generation_scene');
-
-receiptGenerationScene.enter(async (ctx) => {
-  await ctx.reply('🧾 *Generate Transaction Receipt*\n\nChoose an option:', Markup.inlineKeyboard([
-    [Markup.button.callback('📄 All Transactions', 'receipt_all')],
-    [Markup.button.callback('🔍 Specific Transaction', 'receipt_specific')],
-    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
-  ]));
-});
-
-receiptGenerationScene.leave(() => {
-  delete ctx.session.transactions;
-});
-
-// =================== Scenes and Middleware Setup ===================
-const stage = new Scenes.Stage([
-  bankLinkingScene,
-  sendMessageScene,
-  receiptGenerationScene
-]);
-
-bot.use(session());
-bot.use(stage.middleware());
-
-// =================== Bank List with Paycrest Institution Codes ===================
-const bankList = [
-  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
-  { name: 'Diamond Bank', code: '054', aliases: ['diamond', 'diamond bank', 'diamondb', 'diamond bank nigeria'], paycrestInstitutionCode: 'DBLNNGLA' },
-  { name: 'Fidelity Bank', code: '070', aliases: ['fidelity', 'fidelity bank', 'fidelityb', 'fidelity bank nigeria'], paycrestInstitutionCode: 'FIDTNGLA' },
-  { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGLA' },
-  { name: 'First Bank Of Nigeria', code: '011', aliases: ['first bank', 'firstbank', 'fbank', 'first bank nigeria'], paycrestInstitutionCode: 'FBNINGLA' },
-  { name: 'Guaranty Trust Bank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'guaranty trust bank'], paycrestInstitutionCode: 'GTBINGLA' },
-  { name: 'Polaris Bank', code: '076', aliases: ['polaris', 'polaris bank', 'polarisb', 'polaris bank nigeria'], paycrestInstitutionCode: 'PRDTNGLA' },
-  { name: 'Union Bank', code: '032', aliases: ['union', 'union bank', 'unionb', 'union bank nigeria'], paycrestInstitutionCode: 'UBNINGLA' },
-  { name: 'United Bank for Africa', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'], paycrestInstitutionCode: 'UNAFNGLA' },
-  { name: 'Citibank', code: '023', aliases: ['citibank', 'citibank nigeria', 'citi', 'citibank'], paycrestInstitutionCode: 'CITINGLA' },
-  { name: 'Ecobank Bank', code: '050', aliases: ['ecobank', 'ecobank nigeria', 'eco bank'], paycrestInstitutionCode: 'ECOCNGLA' },
-  { name: 'Heritage', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'], paycrestInstitutionCode: 'HBCLNGLA' },
-  { name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'], paycrestInstitutionCode: 'PLNINGLA' },
-  { name: 'Stanbic IBTC Bank', code: '221', aliases: ['stanbic', 'stanbic ibtc', 'stanbic bank', 'stanbic ibtc nigeria'], paycrestInstitutionCode: 'SBICNGLA' },
-  { name: 'Standard Chartered Bank', code: '068', aliases: ['standard chartered', 'standard bank', 'standard chartered nigeria'], paycrestInstitutionCode: 'SCBLNGLA' },
-  { name: 'Sterling Bank', code: '232', aliases: ['sterling', 'sterling bank', 'sterlingb', 'sterling bank nigeria'], paycrestInstitutionCode: 'NAMENGLA' },
-  { name: 'Unity Bank', code: '215', aliases: ['unity', 'unity bank', 'unityb', 'unity bank nigeria'], paycrestInstitutionCode: 'ICITNGLA' },
-  { name: 'Suntrust Bank', code: '033A', aliases: ['suntrust', 'suntrust bank', 'suntrustb', 'suntrust bank nigeria'], paycrestInstitutionCode: 'SUTGNGLA' },
-  { name: 'Providus Bank', code: '101', aliases: ['providus', 'providus bank', 'providusb', 'providus bank nigeria'], paycrestInstitutionCode: 'PROVNGLA' },
-  { name: 'FBNQuest Merchant Bank', code: '401', aliases: ['fbnquest', 'fbnquest merchant bank', 'fbnquest bank'], paycrestInstitutionCode: 'KDHLNGLA' },
-  { name: 'Greenwich Merchant Bank', code: '402', aliases: ['greenwich', 'greenwich merchant bank', 'greenwich bank'], paycrestInstitutionCode: 'GMBLNGLA' },
-  { name: 'FSDH Merchant Bank', code: '403', aliases: ['fsdh', 'fsdh merchant bank', 'fsdh bank'], paycrestInstitutionCode: 'FSDHNGLA' },
-  { name: 'Rand Merchant Bank', code: '404', aliases: ['rand', 'rand merchant bank', 'rand bank'], paycrestInstitutionCode: 'FIRNNGLA' },
-  { name: 'Jaiz Bank', code: '301', aliases: ['jaiz', 'jaiz bank', 'jaizb', 'jaiz bank nigeria'], paycrestInstitutionCode: 'JAIZNGLA' },
-  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZEIBNGLA' },
-  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
-  { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
-  { name: 'OPay', code: '99999', aliases: ['opay', 'opay nigeria'], paycrestInstitutionCode: 'OPAYNGPC' },
-  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'], paycrestInstitutionCode: 'PALMNGPC' },
-  { name: 'Paystack-Titan MFB', code: '999992', aliases: ['paystack', 'paystack mfb', 'paystack-titan mfb'], paycrestInstitutionCode: 'PAYTNGPC' },
-  { name: 'Moniepoint MFB', code: '999993', aliases: ['moniepoint', 'moniepoint mfb', 'moniepoint nigeria'], paycrestInstitutionCode: 'MONINGPC' },
-  { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' }
-  // Add more banks as needed
-];
 
 // =================== Helper Functions ===================
 
@@ -1042,8 +803,8 @@ async function handleAdminViewTransactions(ctx) {
     transactionsSnapshot.forEach((doc) => {
       const tx = doc.data();
       message += `*User ID:* ${tx.userId || 'N/A'}\n`;
-      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+      message += `*Reference ID:* \`${tx.referenceId}\`\n`;
+      message += `*Amount:* ${tx.amount} ${tx.asset}\n`;
       message += `*Status:* ${tx.status || 'Pending'}\n`;
       message += `*Chain:* ${tx.chain || 'N/A'}\n`;
       message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
@@ -1177,132 +938,8 @@ async function handleAdminSendMessage(ctx) {
   await ctx.scene.enter('send_message_scene');
 }
 
-// =================== Handle Receipt Generation Callbacks ===================
-bot.action('receipt_all', async (ctx) => {
-  await handleReceiptAll(ctx);
-});
-
-bot.action('receipt_specific', async (ctx) => {
-  await handleReceiptSpecific(ctx);
-});
-
-// =================== Handle Select Specific Transaction ===================
-bot.action(/select_tx_(.+)/, async (ctx) => {
-  const transactionId = ctx.match[1];
-  await handleSelectTransaction(ctx, transactionId);
-});
-
-// =================== Handle "📘 Learn About Base" Button ===================
-bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
-  await sendBaseContent(ctx, 0, true);
-});
-
-// Function to Send Base Content with Pagination and Inline Updates
-async function sendBaseContent(ctx, index, isNew = false) {
-  const content = baseContent[index];
-  const totalPages = baseContent.length;
-
-  const navigationButtons = [];
-
-  if (index > 0) {
-    navigationButtons.push(Markup.button.callback('⬅️ Back', `base_page_${index - 1}`));
-  }
-
-  if (index < totalPages - 1) {
-    navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
-  }
-
-  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
-
-  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-  if (isNew) {
-    const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-    // Store the message ID in session
-    ctx.session.baseMessageId = sentMessage.message_id;
-  } else {
-    try {
-      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
-        parse_mode: 'Markdown',
-        reply_markup: inlineKeyboard.reply_markup,
-      });
-    } catch (error) {
-      // If editing message fails, send a new message and update session
-      const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-      ctx.session.baseMessageId = sentMessage.message_id;
-    }
-  }
-
-  // Set a timeout to delete the message after 2 minutes
-  setTimeout(() => {
-    if (ctx.session.baseMessageId) {
-      ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-      ctx.session.baseMessageId = null;
-    }
-  }, 120000); // Delete after 2 minutes
-}
-
-// =================== Support Functionality ===================
-bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
-    [Markup.button.callback('📘 How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
-  ]));
-});
-
-// =================== Handle Support Actions ===================
-bot.action('support_how_it_works', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_not_received', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@maxcswap](https://t.me/maxcswap).');
-  ctx.answerCbQuery();
-});
-
-// =================== Handle "💰 Transactions" Button ===================
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
-
-    if (transactionsSnapshot.empty) {
-      return await ctx.replyWithMarkdown('You have no transactions at the moment.');
-    }
-
-    let message = '💰 *Your Transactions*:\n\n';
-
-    transactionsSnapshot.forEach((doc) => {
-      const tx = doc.data();
-      message += `*Reference ID:* \`${tx.referenceId}\`\n`;
-      message += `*Amount:* ${tx.amount} ${tx.asset}\n`;
-      message += `*Status:* ${tx.status}\n`;
-      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `*Chain:* ${tx.chain}\n\n`;
-    });
-
-    await ctx.replyWithMarkdown(message);
-  } catch (error) {
-    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
-  }
-});
-
-// =================== Admin Panel Functionality ===================
-
-// Handled above with Admin Menu Handlers
-
 // =================== Receipt Generation Scene ===================
-
-// Handled above with Receipt Generation Scene Definition
+// Already defined in the Scenes Definitions section
 
 // =================== Webhook Handlers ===================
 
@@ -1840,17 +1477,65 @@ bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
   await sendBaseContent(ctx, 0, true);
 });
 
+// =================== Support Functionality ===================
+bot.hears(/ℹ️\s*Support/i, async (ctx) => {
+  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
+    [Markup.button.callback('📘 How It Works', 'support_how_it_works')],
+    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+    [Markup.button.callback('💬 Contact Support', 'support_contact')],
+    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
+  ]));
+});
+
 // =================== Handle Support Actions ===================
-// Already handled above
+bot.action('support_how_it_works', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
+  ctx.answerCbQuery();
+});
+
+bot.action('support_not_received', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
+  ctx.answerCbQuery();
+});
+
+bot.action('support_contact', async (ctx) => {
+  await ctx.replyWithMarkdown('You can contact our support team at [@maxcswap](https://t.me/maxcswap).');
+  ctx.answerCbQuery();
+});
 
 // =================== Handle "💰 Transactions" Button ===================
-// Already handled above
+bot.hears(/💰\s*Transactions/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+
+    if (transactionsSnapshot.empty) {
+      return await ctx.replyWithMarkdown('You have no transactions at the moment.');
+    }
+
+    let message = '💰 *Your Transactions*:\n\n';
+
+    transactionsSnapshot.forEach((doc) => {
+      const tx = doc.data();
+      message += `*Reference ID:* \`${tx.referenceId}\`\n`;
+      message += `*Amount:* ${tx.amount} ${tx.asset}\n`;
+      message += `*Status:* ${tx.status}\n`;
+      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
+      message += `*Chain:* ${tx.chain}\n\n`;
+    });
+
+    await ctx.replyWithMarkdown(message);
+  } catch (error) {
+    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
+  }
+});
 
 // =================== Admin Panel Functionality ===================
-// Already handled above
+// Handled above with Admin Menu Handlers
 
 // =================== Receipt Generation Scene ===================
-// Already handled above
+// Handled above with Receipt Generation Scene Definition
 
 // =================== Graceful Shutdown ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
@@ -2007,6 +1692,35 @@ async function handleSettingsSupport(ctx) {
 
 // Handle Admin Broadcast Message
 // Already handled with broadcast_message
+
+// =================== Handle Receipt Generation Callbacks ===================
+bot.action('receipt_all', async (ctx) => {
+  await handleReceiptAll(ctx);
+});
+
+bot.action('receipt_specific', async (ctx) => {
+  await handleReceiptSpecific(ctx);
+});
+
+// =================== Handle Select Specific Transaction ===================
+bot.action(/select_tx_(.+)/, async (ctx) => {
+  const transactionId = ctx.match[1];
+  await handleSelectTransaction(ctx, transactionId);
+});
+
+// =================== Handle "📘 Learn About Base" Button ===================
+// Already handled above
+
+// =================== Additional Handler Functions ===================
+
+// Handle Admin Actions (if any additional admin actions are required)
+// For now, all admin actions are handled directly in the callback query handler
+
+// =================== Scenes and Middleware Registration ===================
+// Already defined above
+
+// =================== Webhook Handlers ===================
+// Already handled above
 
 // =================== Telegram Webhook Setup ===================
 
