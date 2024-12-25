@@ -152,6 +152,16 @@ const chainMapping = {
   // Add more mappings if necessary
 };
 
+// =================== Bank List with Paycrest Institution Codes ===================
+const bankList = [
+  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
+  { name: 'Diamond Bank', code: '054', aliases: ['diamond', 'diamond bank', 'diamondb', 'diamond bank nigeria'], paycrestInstitutionCode: 'DBLNNGLA' },
+  { name: 'First Bank', code: '011', aliases: ['first bank', 'firstbank', 'first bank nigeria'], paycrestInstitutionCode: 'FBNNNGLA' },
+  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb'], paycrestInstitutionCode: 'GTBNNGLA' },
+  { name: 'Zenith Bank', code: '057', aliases: ['zenith bank', 'zenith', 'zenithbank'], paycrestInstitutionCode: 'ZNNNGGLA' },
+  // ... add all other banks similarly
+];
+
 // =================== Initialize Express App ===================
 const app = express();
 app.use(express.json());
@@ -377,15 +387,6 @@ async function withdrawFromBlockradar(chain, assetId, address, amount, reference
     logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
     throw error;
   }
-}
-
-// =================== Exchange Rate Calculation Function ===================
-function calculatePayout(asset, amount) {
-  const rate = exchangeRates[asset];
-  if (!rate) {
-    throw new Error(`Unsupported asset received: ${asset}`);
-  }
-  return (amount * rate).toFixed(2);
 }
 
 // =================== Generate Reference ID Function ===================
@@ -933,13 +934,302 @@ async function handleAdminBackToMain(ctx) {
   }
 }
 
-// =================== Handle Admin Send Message to User ===================
-async function handleAdminSendMessage(ctx) {
-  await ctx.scene.enter('send_message_scene');
+// =================== Receipt Generation Scene ===================
+
+// Define Scenes
+const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
+const sendMessageScene = new Scenes.BaseScene('send_message_scene');
+const receiptGenerationScene = new Scenes.BaseScene('receipt_generation_scene');
+
+// Bank Linking Scene
+bankLinkingScene.enter(async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = ctx.session.walletIndex;
+  const userState = await getUserState(userId);
+  const wallet = userState.wallets[walletIndex];
+
+  await ctx.reply(`🔗 *Linking Bank Account for Wallet ${walletIndex + 1} (${wallet.chain})*\n\nPlease enter your 10-digit bank account number:`);
+  
+  // Set a timeout for user inactivity (e.g., 2 minutes)
+  ctx.session.bankLinkingTimeout = setTimeout(async () => {
+    await ctx.reply('⌛ Bank linking session timed out due to inactivity. Please start again if you wish to link your bank account.');
+    await ctx.scene.leave();
+  }, 120000); // 2 minutes
+});
+
+bankLinkingScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = ctx.session.walletIndex;
+  const userState = await getUserState(userId);
+  const wallet = userState.wallets[walletIndex];
+
+  // Clear the inactivity timeout
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+    delete ctx.session.bankLinkingTimeout;
+  }
+
+  const accountNumber = ctx.message.text.trim();
+  const accountRegex = /^\d{10}$/;
+  if (!accountRegex.test(accountNumber)) {
+    await ctx.reply('❌ Invalid account number format. Please enter a valid 10-digit bank account number:');
+    // Reset the timeout
+    ctx.session.bankLinkingTimeout = setTimeout(async () => {
+      await ctx.reply('⌛ Bank linking session timed out due to inactivity. Please start again if you wish to link your bank account.');
+      await ctx.scene.leave();
+    }, 120000); // 2 minutes
+    return;
+  }
+
+  // Fetch the bank code based on the wallet's bank name
+  const bank = bankList.find(b => b.name.toLowerCase() === wallet.bank.bankName.toLowerCase());
+  if (!bank) {
+    await ctx.reply('⚠️ Bank not found in the system. Please contact support.');
+    return ctx.scene.leave();
+  }
+
+  try {
+    const verification = await verifyBankAccount(accountNumber, bank.code);
+    if (verification.status !== 'success') {
+      await ctx.reply('❌ Bank account verification failed. Please ensure your account number and bank are correct.');
+      return ctx.scene.leave();
+    }
+
+    const accountName = verification.data.account_name;
+
+    // Update the wallet's bank details in Firestore
+    wallet.bank = {
+      bankName: bank.name,
+      accountNumber: accountNumber,
+      accountName: accountName
+    };
+    userState.wallets[walletIndex] = wallet;
+    await updateUserState(userId, { wallets: userState.wallets });
+
+    await ctx.replyWithMarkdown(`✅ Bank account linked successfully!\n\n*Bank:* ${bank.name}\n*Account Name:* ${accountName}\n*Account Number:* ****${accountNumber.slice(-4)}`);
+
+    // Optionally, provide further options or return to settings menu
+    await ctx.scene.leave();
+    await ctx.reply('⚙️ *Settings Menu*', getSettingsMenu());
+
+  } catch (error) {
+    logger.error(`Error linking bank account for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while linking your bank account. Please try again later.');
+    await ctx.scene.leave();
+  }
+});
+
+bankLinkingScene.on('message', async (ctx) => {
+  await ctx.reply('⚠️ Please enter a valid 10-digit bank account number.');
+});
+
+// Send Message Scene (Admin)
+sendMessageScene.enter(async (ctx) => {
+  await ctx.reply('📩 *Send Message to User*\n\nPlease enter the user ID you want to message:');
+});
+
+sendMessageScene.on('text', async (ctx) => {
+  const input = ctx.message.text.trim();
+  const userId = input;
+
+  // Simple validation for user ID (assuming numeric)
+  if (!/^\d+$/.test(userId)) {
+    await ctx.reply('❌ Invalid user ID format. Please enter a valid numeric user ID:');
+    return;
+  }
+
+  ctx.session.targetUserId = userId;
+  await ctx.reply('💬 Please enter the message you want to send:');
+});
+
+sendMessageScene.on('text', async (ctx) => {
+  const message = ctx.message.text.trim();
+  const targetUserId = ctx.session.targetUserId;
+
+  try {
+    await bot.telegram.sendMessage(targetUserId, message, { parse_mode: 'Markdown' });
+    await ctx.reply('✅ Message sent successfully.');
+    await ctx.scene.leave();
+  } catch (error) {
+    logger.error(`Error sending message to user ${targetUserId}: ${error.message}`);
+    await ctx.reply('⚠️ Failed to send the message. Please ensure the user ID is correct and the user has started the bot.');
+    await ctx.scene.leave();
+  }
+});
+
+sendMessageScene.on('message', async (ctx) => {
+  await ctx.reply('⚠️ Please enter a valid text message.');
+});
+
+// Receipt Generation Scene
+receiptGenerationScene.enter(async (ctx) => {
+  await ctx.reply('🧾 *Generate Transaction Receipt*\n\nPlease choose an option:', Markup.inlineKeyboard([
+    [Markup.button.callback('📄 All Transactions', 'receipt_all')],
+    [Markup.button.callback('🔍 Specific Transaction', 'receipt_specific')],
+    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
+  ]));
+});
+
+// Handle other scenes similarly if necessary
+
+// Register Scenes with Stage
+const stage = new Scenes.Stage([
+  bankLinkingScene,
+  sendMessageScene,
+  receiptGenerationScene
+]);
+
+// Use Middlewares
+bot.use(session());
+bot.use(stage.middleware());
+
+// =================== Additional Handler Functions ===================
+
+// Handle Receipt Generation (All Transactions)
+async function handleReceiptAll(ctx) {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch all transactions for the user
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+    if (transactionsSnapshot.empty) {
+      await ctx.reply('❌ You have no transactions to generate a receipt.');
+      return ctx.scene.leave();
+    }
+
+    // Generate PDF receipt
+    const doc = new PDFDocument();
+    const stream = doc.pipe(blobStream());
+
+    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
+    doc.moveDown();
+
+    transactionsSnapshot.forEach((docData, index) => {
+      const tx = docData.data();
+      doc.fontSize(12).text(`Transaction ${index + 1}:`);
+      doc.text(`Reference ID: ${tx.referenceId}`);
+      doc.text(`Amount: ${tx.amount} ${tx.asset}`);
+      doc.text(`Status: ${tx.status}`);
+      doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
+      doc.text(`Chain: ${tx.chain}`);
+      doc.moveDown();
+    });
+
+    doc.end();
+
+    // Wait for the PDF to be fully generated
+    stream.on('finish', async () => {
+      const buffer = stream.toBlob('application/pdf');
+      const bufferArray = Buffer.from(await buffer.arrayBuffer());
+
+      // Send the PDF to the user
+      await ctx.replyWithDocument({ source: bufferArray, filename: 'Transaction_Receipt.pdf' });
+      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
+      ctx.scene.leave();
+    });
+  } catch (error) {
+    logger.error(`Error generating all transactions receipt for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
+    ctx.scene.leave();
+  }
 }
 
-// =================== Receipt Generation Scene ===================
-// Already defined in the Scenes Definitions section
+// Handle Receipt Generation (Specific Transaction)
+async function handleReceiptSpecific(ctx) {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch all transactions for the user
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+    if (transactionsSnapshot.empty) {
+      await ctx.reply('❌ You have no transactions to select.');
+      return ctx.scene.leave();
+    }
+
+    // Create a list of transactions for selection
+    const keyboard = transactionsSnapshot.docs.map((doc, index) => [
+      Markup.button.callback(`Transaction ${index + 1} - ${doc.data().referenceId}`, `select_tx_${doc.id}`)
+    ]);
+
+    // Add a back button
+    keyboard.push([Markup.button.callback('🔙 Back', 'receipt_back_options')]);
+
+    await ctx.reply('Please select the transaction for which you want to generate a receipt:', Markup.inlineKeyboard(keyboard, { columns: 1 }));
+    ctx.session.transactions = transactionsSnapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error fetching transactions for specific receipt: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred. Please try again later.');
+    ctx.scene.leave();
+  }
+}
+
+// Handle Select Specific Transaction
+async function handleSelectTransaction(ctx, transactionId) {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch the specific transaction
+    const txDoc = await db.collection('transactions').doc(transactionId).get();
+    if (!txDoc.exists || txDoc.data().userId !== userId) {
+      await ctx.reply('❌ Transaction not found or unauthorized access.');
+      return ctx.scene.leave();
+    }
+
+    const tx = txDoc.data();
+
+    // Generate PDF receipt for the specific transaction
+    const doc = new PDFDocument();
+    const stream = doc.pipe(blobStream());
+
+    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
+    doc.moveDown();
+
+    doc.fontSize(12).text(`Reference ID: ${tx.referenceId}`);
+    doc.text(`Amount: ${tx.amount} ${tx.asset}`);
+    doc.text(`Status: ${tx.status}`);
+    doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
+    doc.text(`Chain: ${tx.chain}`);
+    doc.moveDown();
+
+    doc.end();
+
+    // Wait for the PDF to be fully generated
+    stream.on('finish', async () => {
+      const buffer = stream.toBlob('application/pdf');
+      const bufferArray = Buffer.from(await buffer.arrayBuffer());
+
+      // Send the PDF to the user
+      await ctx.replyWithDocument({ source: bufferArray, filename: `Transaction_Receipt_${tx.referenceId}.pdf` });
+      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
+      ctx.scene.leave();
+    });
+  } catch (error) {
+    logger.error(`Error generating specific transaction receipt for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
+    ctx.scene.leave();
+  }
+}
+
+// Handle Base Page Pagination
+async function handleBasePage(ctx, pageIndex) {
+  if (isNaN(pageIndex) || pageIndex < 0 || pageIndex >= baseContent.length) {
+    await ctx.reply('⚠️ Invalid page number.');
+    return;
+  }
+  await sendBaseContent(ctx, pageIndex);
+}
+
+// Handle Settings Support
+async function handleSettingsSupport(ctx) {
+  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
+    [Markup.button.callback('📘 How It Works', 'support_how_it_works')],
+    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+    [Markup.button.callback('💬 Contact Support', 'support_contact')],
+    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
+  ]));
+}
+
+// =================== Admin Functions ===================
+
+// Already handled with send_message_scene and broadcast_message
 
 // =================== Webhook Handlers ===================
 
@@ -1532,184 +1822,14 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
 });
 
 // =================== Admin Panel Functionality ===================
-// Handled above with Admin Menu Handlers
+// Already handled above with Admin Menu Handlers
 
 // =================== Receipt Generation Scene ===================
-// Handled above with Receipt Generation Scene Definition
+// Already handled above with Receipt Generation Scene Definition
 
 // =================== Graceful Shutdown ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-// =================== Additional Handler Functions ===================
-
-// Handle Receipt Generation (All Transactions)
-async function handleReceiptAll(ctx) {
-  const userId = ctx.from.id.toString();
-  try {
-    // Fetch all transactions for the user
-    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
-    if (transactionsSnapshot.empty) {
-      await ctx.reply('❌ You have no transactions to generate a receipt.');
-      return ctx.scene.leave();
-    }
-
-    // Generate PDF receipt
-    const doc = new PDFDocument();
-    const stream = doc.pipe(blobStream());
-
-    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
-    doc.moveDown();
-
-    transactionsSnapshot.forEach((docData, index) => {
-      const tx = docData.data();
-      doc.fontSize(12).text(`Transaction ${index + 1}:`);
-      doc.text(`Reference ID: ${tx.referenceId}`);
-      doc.text(`Amount: ${tx.amount} ${tx.asset}`);
-      doc.text(`Status: ${tx.status}`);
-      doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
-      doc.text(`Chain: ${tx.chain}`);
-      doc.moveDown();
-    });
-
-    doc.end();
-
-    // Wait for the PDF to be fully generated
-    stream.on('finish', async () => {
-      const buffer = stream.toBlob('application/pdf');
-      const bufferArray = Buffer.from(await buffer.arrayBuffer());
-
-      // Send the PDF to the user
-      await ctx.replyWithDocument({ source: bufferArray, filename: 'Transaction_Receipt.pdf' });
-      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
-      ctx.scene.leave();
-    });
-  } catch (error) {
-    logger.error(`Error generating all transactions receipt for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
-    ctx.scene.leave();
-  }
-}
-
-// Handle Receipt Generation (Specific Transaction)
-async function handleReceiptSpecific(ctx) {
-  const userId = ctx.from.id.toString();
-  try {
-    // Fetch all transactions for the user
-    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
-    if (transactionsSnapshot.empty) {
-      await ctx.reply('❌ You have no transactions to select.');
-      return ctx.scene.leave();
-    }
-
-    // Create a list of transactions for selection
-    const keyboard = transactionsSnapshot.docs.map((doc, index) => [
-      Markup.button.callback(`Transaction ${index + 1} - ${doc.data().referenceId}`, `select_tx_${doc.id}`)
-    ]);
-
-    // Add a back button
-    keyboard.push([Markup.button.callback('🔙 Back', 'receipt_back_options')]);
-
-    await ctx.reply('Please select the transaction for which you want to generate a receipt:', Markup.inlineKeyboard(keyboard, { columns: 1 }));
-    ctx.session.transactions = transactionsSnapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error fetching transactions for specific receipt: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred. Please try again later.');
-    ctx.scene.leave();
-  }
-}
-
-// Handle Select Specific Transaction
-async function handleSelectTransaction(ctx, transactionId) {
-  const userId = ctx.from.id.toString();
-  try {
-    // Fetch the specific transaction
-    const txDoc = await db.collection('transactions').doc(transactionId).get();
-    if (!txDoc.exists || txDoc.data().userId !== userId) {
-      await ctx.reply('❌ Transaction not found or unauthorized access.');
-      return ctx.scene.leave();
-    }
-
-    const tx = txDoc.data();
-
-    // Generate PDF receipt for the specific transaction
-    const doc = new PDFDocument();
-    const stream = doc.pipe(blobStream());
-
-    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
-    doc.moveDown();
-
-    doc.fontSize(12).text(`Reference ID: ${tx.referenceId}`);
-    doc.text(`Amount: ${tx.amount} ${tx.asset}`);
-    doc.text(`Status: ${tx.status}`);
-    doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
-    doc.text(`Chain: ${tx.chain}`);
-    doc.moveDown();
-
-    doc.end();
-
-    // Wait for the PDF to be fully generated
-    stream.on('finish', async () => {
-      const buffer = stream.toBlob('application/pdf');
-      const bufferArray = Buffer.from(await buffer.arrayBuffer());
-
-      // Send the PDF to the user
-      await ctx.replyWithDocument({ source: bufferArray, filename: `Transaction_Receipt_${tx.referenceId}.pdf` });
-      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
-      ctx.scene.leave();
-    });
-  } catch (error) {
-    logger.error(`Error generating specific transaction receipt for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
-    ctx.scene.leave();
-  }
-}
-
-// Handle Base Page Pagination
-async function handleBasePage(ctx, pageIndex) {
-  if (isNaN(pageIndex) || pageIndex < 0 || pageIndex >= baseContent.length) {
-    await ctx.reply('⚠️ Invalid page number.');
-    return;
-  }
-  await sendBaseContent(ctx, pageIndex);
-}
-
-// Handle Settings Support
-async function handleSettingsSupport(ctx) {
-  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
-    [Markup.button.callback('📘 How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
-  ]));
-}
-
-// =================== Admin Functions ===================
-
-// Handle Admin Send Message
-// Already handled with send_message_scene
-
-// Handle Admin Broadcast Message
-// Already handled with broadcast_message
-
-// =================== Handle Receipt Generation Callbacks ===================
-bot.action('receipt_all', async (ctx) => {
-  await handleReceiptAll(ctx);
-});
-
-bot.action('receipt_specific', async (ctx) => {
-  await handleReceiptSpecific(ctx);
-});
-
-// =================== Handle Select Specific Transaction ===================
-bot.action(/select_tx_(.+)/, async (ctx) => {
-  const transactionId = ctx.match[1];
-  await handleSelectTransaction(ctx, transactionId);
-});
-
-// =================== Handle "📘 Learn About Base" Button ===================
-// Already handled above
 
 // =================== Additional Handler Functions ===================
 
