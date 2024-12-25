@@ -9,7 +9,6 @@ const fs = require('fs');
 const winston = require('winston');
 const Bottleneck = require('bottleneck');
 require('dotenv').config(); // Ensure to install dotenv and create a .env file
-
 // Logger Setup
 const logger = winston.createLogger({
   level: 'info',
@@ -1661,7 +1660,7 @@ app.post('/webhook/blockradar', async (req, res) => {
 
     const chain = chainKey;
 
-    if (eventType === 'deposit.swept.success') { // Handle 'deposit.success' event
+    if (eventType === 'deposit.success') { // Handle 'deposit.success' event
       if (walletAddress === 'N/A') {
         logger.error('Webhook missing wallet address.');
         return res.status(400).send('Missing wallet address.');
