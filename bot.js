@@ -8,6 +8,8 @@ const path = require('path');
 const fs = require('fs');
 const winston = require('winston');
 const Bottleneck = require('bottleneck');
+const PDFDocument = require('pdfkit'); // Added for PDF generation
+const blobStream = require('blob-stream'); // Added for handling PDF streams
 require('dotenv').config(); // Ensure to install dotenv and create a .env file
 
 // =================== Logger Setup ===================
@@ -160,11 +162,12 @@ app.use(express.json());
 const bot = new Telegraf(BOT_TOKEN);
 
 // =================== Scenes and Middleware Setup ===================
-const stage = new Scenes.Stage();
-const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
-const sendMessageScene = new Scenes.BaseScene('send_message_scene');
-stage.register(bankLinkingScene);
-stage.register(sendMessageScene);
+
+const stage = new Scenes.Stage([
+  bankLinkingScene,
+  sendMessageScene,
+  receiptGenerationScene // Register the new scene here
+]);
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -686,12 +689,12 @@ bot.action('settings_generate_wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
     const userState = await getUserState(userId);
-    
+
     if (userState.wallets.length >= MAX_WALLETS) {
       await ctx.replyWithMarkdown(`⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets before adding new ones.`);
       return ctx.answerCbQuery();
     }
-    
+
     await ctx.reply('📂 *Select the network for which you want to generate a wallet:*', Markup.inlineKeyboard([
       [Markup.button.callback('Base', 'generate_wallet_Base')],
       [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
@@ -793,157 +796,31 @@ bot.action(/admin_(.+)/, async (ctx) => {
   switch (action) {
     case 'view_transactions':
       // Handle viewing transactions
-      try {
-        const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(10).get();
-
-        if (transactionsSnapshot.empty) {
-          await ctx.answerCbQuery('No transactions found.', { show_alert: true });
-          return;
-        }
-
-        let message = '📋 **Recent Transactions**:\n\n';
-
-        transactionsSnapshot.forEach((doc) => {
-          const tx = doc.data();
-          message += `*User ID:* ${tx.userId || 'N/A'}\n`;
-          message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-          message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-          message += `*Status:* ${tx.status || 'Pending'}\n`;
-          message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all transactions: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch transactions.', { show_alert: true });
-      }
+      await handleAdminViewTransactions(ctx);
       break;
-
     case 'send_message':
       // Handle sending messages
-      if (ctx.session.adminMessageId) {
-        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-        ctx.session.adminMessageId = null;
-      }
       await ctx.scene.enter('send_message_scene');
       ctx.answerCbQuery();
       break;
-
     case 'mark_paid':
       // Handle marking transactions as paid as a backup
-      try {
-        const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
-        if (pendingTransactions.empty) {
-          await ctx.answerCbQuery('No pending transactions found.', { show_alert: true });
-          return;
-        }
-
-        const batch = db.batch();
-        pendingTransactions.forEach((transaction) => {
-          const docRef = db.collection('transactions').doc(transaction.id);
-          batch.update(docRef, { status: 'Paid' });
-        });
-
-        await batch.commit();
-
-        // Notify users about their transactions being marked as paid
-        pendingTransactions.forEach(async (transaction) => {
-          const txData = transaction.data();
-          try {
-            const payout = txData.payout || 'N/A';
-            const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
-
-            await bot.telegram.sendMessage(
-              txData.userId,
-              `🎉 *Transaction Successful!*\n\n` +
-              `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n` +
-              `*Amount Paid:* ${txData.amount} ${txData.asset}\n` +
-              `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
-              `*Account Name:* ${accountName}\n` +
-              `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
-              `*Payout (NGN):* ₦${payout}\n\n` +
-              `🔹 *Chain:* ${txData.chain}\n` +
-              `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` +
-              `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`,
-              { parse_mode: 'Markdown' }
-            );
-            logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
-          } catch (error) {
-            logger.error(`Error notifying user ${txData.userId}: ${error.message}`);
-          }
-        });
-
-        // Edit the admin panel message to confirm
-        await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error marking transactions as paid: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
-      }
+      await handleAdminMarkPaid(ctx);
       break;
-
     case 'view_users':
       // Handle viewing all users
-      try {
-        const usersSnapshot = await db.collection('users').get();
-
-        if (usersSnapshot.empty) {
-          await ctx.answerCbQuery('No users found.', { show_alert: true });
-          return;
-        }
-
-        let message = '👥 **All Users**:\n\n';
-
-        usersSnapshot.forEach((doc) => {
-          const user = doc.data();
-          message += `*User ID:* ${doc.id}\n`;
-          message += `*First Name:* ${user.firstName || 'N/A'}\n`;
-          message += `*Number of Wallets:* ${user.wallets.length}\n`;
-          message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all users: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch users.', { show_alert: true });
-      }
+      await handleAdminViewUsers(ctx);
       break;
-
     case 'broadcast_message':
       // Handle broadcasting messages
-      await ctx.reply('📢 Please enter the message you want to broadcast to all users. You can also attach an image (receipt) with your message:');
-      // Set state to indicate awaiting broadcast message
-      await updateUserState(userId, { awaitingBroadcastMessage: true });
-      // Delete the admin panel message to keep chat clean
-      if (ctx.session.adminMessageId) {
-        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-        ctx.session.adminMessageId = null;
-      }
-      ctx.answerCbQuery();
+      await handleAdminBroadcastMessage(ctx);
       break;
-
     case 'manage_banks':
       // Implement bank management functionalities here
       await ctx.replyWithMarkdown('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
       ctx.answerCbQuery();
       break;
-
-    case 'admin_back_to_main':
+    case 'back_to_main':
       // Return to the main menu
       await greetUser(ctx);
       // Delete the admin panel message
@@ -953,138 +830,252 @@ bot.action(/admin_(.+)/, async (ctx) => {
       }
       ctx.answerCbQuery();
       break;
-
     default:
       await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
   }
 });
 
-// =================== Handle Broadcast Message Input ===================
-bot.on('message', async (ctx, next) => {
-  const userId = ctx.from.id.toString();
-  let userState;
+// =================== Handle Admin View Transactions ===================
+async function handleAdminViewTransactions(ctx) {
   try {
-    userState = await getUserState(userId);
+    const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(10).get();
+
+    if (transactionsSnapshot.empty) {
+      await ctx.answerCbQuery('No transactions found.', { show_alert: true });
+      return;
+    }
+
+    let message = '📋 **Recent Transactions**:\n\n';
+
+    transactionsSnapshot.forEach((doc) => {
+      const tx = doc.data();
+      message += `*User ID:* ${tx.userId || 'N/A'}\n`;
+      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+      message += `*Status:* ${tx.status || 'Pending'}\n`;
+      message += `*Chain:* ${tx.chain || 'N/A'}\n`;
+      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
+    });
+
+    // Add a 'Back' button to return to the admin menu
+    const inlineKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
+    ]);
+
+    // Edit the admin panel message
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+    ctx.answerCbQuery();
   } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred. Please try again later.');
+    logger.error(`Error fetching all transactions: ${error.message}`);
+    await ctx.answerCbQuery('⚠️ Unable to fetch transactions.', { show_alert: true });
+  }
+}
+
+// =================== Handle Admin Mark Paid ===================
+async function handleAdminMarkPaid(ctx) {
+  try {
+    const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
+    if (pendingTransactions.empty) {
+      await ctx.answerCbQuery('No pending transactions found.', { show_alert: true });
+      return;
+    }
+
+    const batch = db.batch();
+    pendingTransactions.forEach((transaction) => {
+      const docRef = db.collection('transactions').doc(transaction.id);
+      batch.update(docRef, { status: 'Paid' });
+    });
+
+    await batch.commit();
+
+    // Notify users about their transactions being marked as paid
+    pendingTransactions.forEach(async (transaction) => {
+      const txData = transaction.data();
+      try {
+        const payout = txData.payout || 'N/A';
+        const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
+
+        await bot.telegram.sendMessage(
+          txData.userId,
+          `🎉 *Transaction Successful!*\n\n` +
+          `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n` +
+          `*Amount Paid:* ${txData.amount} ${txData.asset}\n` +
+          `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
+          `*Account Name:* ${accountName}\n` +
+          `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
+          `*Payout (NGN):* ₦${payout}\n\n` +
+          `🔹 *Chain:* ${txData.chain}\n` +
+          `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` +
+          `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`,
+          { parse_mode: 'Markdown' }
+        );
+        logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
+      } catch (error) {
+        logger.error(`Error notifying user ${txData.userId}: ${error.message}`);
+      }
+    });
+
+    // Edit the admin panel message to confirm
+    await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error marking transactions as paid: ${error.message}`);
+    await ctx.answerCbQuery('⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
+  }
+}
+
+// =================== Handle Admin View Users ===================
+async function handleAdminViewUsers(ctx) {
+  try {
+    const usersSnapshot = await db.collection('users').get();
+
+    if (usersSnapshot.empty) {
+      await ctx.answerCbQuery('No users found.', { show_alert: true });
+      return;
+    }
+
+    let message = '👥 **All Users**:\n\n';
+
+    usersSnapshot.forEach((doc) => {
+      const user = doc.data();
+      message += `*User ID:* ${doc.id}\n`;
+      message += `*First Name:* ${user.firstName || 'N/A'}\n`;
+      message += `*Number of Wallets:* ${user.wallets.length}\n`;
+      message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
+    });
+
+    // Add a 'Back' button to return to the admin menu
+    const inlineKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
+    ]);
+
+    // Edit the admin panel message
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error fetching all users: ${error.message}`);
+    await ctx.answerCbQuery('⚠️ Unable to fetch users.', { show_alert: true });
+  }
+}
+
+// =================== Handle Admin Broadcast Message ===================
+async function handleAdminBroadcastMessage(ctx) {
+  await ctx.reply('📢 Please enter the message you want to broadcast to all users. You can also attach an image (receipt) with your message:');
+  // Set state to indicate awaiting broadcast message
+  await updateUserState(ctx.from.id.toString(), { awaitingBroadcastMessage: true });
+  // Delete the admin panel message to keep chat clean
+  if (ctx.session.adminMessageId) {
+    await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
+    ctx.session.adminMessageId = null;
+  }
+}
+
+// =================== Handle Admin Send Message to User ===================
+async function handleAdminSendMessage(ctx) {
+  await ctx.scene.enter('send_message_scene');
+}
+
+// =================== Handle Admin Manage Banks ===================
+async function handleAdminManageBanks(ctx) {
+  await ctx.replyWithMarkdown('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
+}
+
+// =================== Handle Admin Back to Main ===================
+async function handleAdminBackToMain(ctx) {
+  await greetUser(ctx);
+  // Delete the admin panel message
+  if (ctx.session.adminMessageId) {
+    await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
+    ctx.session.adminMessageId = null;
+  }
+}
+
+// =================== Centralized Callback Query Handler ===================
+bot.on('callback_query', async (ctx) => {
+  const callbackData = ctx.callbackQuery.data;
+  const userId = ctx.from.id.toString();
+
+  // Log the callback for debugging
+  logger.info(`Received callback: ${callbackData} from user: ${userId}`);
+
+  // =================== Handle Generate Wallet Callbacks ===================
+  if (callbackData.startsWith('generate_wallet_')) {
+    const chain = callbackData.replace('generate_wallet_', '');
+    await handleGenerateWallet(ctx, chain);
     return;
   }
 
-  if (userState.awaitingBroadcastMessage) {
-    const message = ctx.message;
-
-    if (message.photo) {
-      // Broadcast with Photo
-      const photoArray = message.photo;
-      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
-      const fileId = highestResolutionPhoto.file_id;
-      const caption = message.caption || '';
-
-      try {
-        // Send the photo with caption to the target users
-        let successCount = 0;
-        let failureCount = 0;
-
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          await ctx.reply('No users to broadcast to.', getAdminMenu());
-          await updateUserState(userId, { awaitingBroadcastMessage: false });
-          return;
-        }
-
-        // Initialize rate limiter to prevent hitting Telegram's rate limits
-        const limiter = new Bottleneck({
-          minTime: 200, // 200ms between requests
-          maxConcurrent: 5, // Maximum 5 concurrent requests
-        });
-
-        // Wrap the sendPhoto function with the limiter
-        const limitedSendPhoto = limiter.wrap(bot.telegram.sendPhoto.bind(bot.telegram));
-
-        for (const doc of usersSnapshot.docs) {
-          const targetUserId = doc.id;
-          try {
-            await limitedSendPhoto(targetUserId, fileId, { caption: caption, parse_mode: 'Markdown' });
-            successCount++;
-          } catch (error) {
-            logger.error(`Error sending broadcast photo to user ${targetUserId}: ${error.message}`);
-            failureCount++;
-          }
-        }
-
-        await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
-        logger.info(`Admin ${userId} broadcasted photo message. Success: ${successCount}, Failed: ${failureCount}`);
-      } catch (error) {
-        logger.error(`Broadcast Photo Error: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ An error occurred while broadcasting the photo. Please try again later.', getAdminMenu());
-      }
-    } else if (message.text) {
-      // Broadcast with Text
-      const broadcastMessage = message.text.trim();
-      if (!broadcastMessage) {
-        return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
-      }
-
-      try {
-        let successCount = 0;
-        let failureCount = 0;
-
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          await ctx.reply('No users to broadcast to.', getAdminMenu());
-          await updateUserState(userId, { awaitingBroadcastMessage: false });
-          return;
-        }
-
-        // Initialize rate limiter to prevent hitting Telegram's rate limits
-        const limiter = new Bottleneck({
-          minTime: 200, // 200ms between requests
-          maxConcurrent: 5, // Maximum 5 concurrent requests
-        });
-
-        // Wrap the sendMessage function with the limiter
-        const limitedSendMessage = limiter.wrap(bot.telegram.sendMessage.bind(bot.telegram));
-
-        for (const doc of usersSnapshot.docs) {
-          const targetUserId = doc.id;
-          try {
-            await limitedSendMessage(targetUserId, `📢 *Broadcast Message:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
-            successCount++;
-          } catch (error) {
-            logger.error(`Error sending broadcast message to user ${targetUserId}: ${error.message}`);
-            failureCount++;
-          }
-        }
-
-        await ctx.reply(`✅ Broadcast completed.\n\n📬 Successful: ${successCount}\n❌ Failed: ${failureCount}`, getAdminMenu());
-        logger.info(`Admin ${userId} broadcasted message. Success: ${successCount}, Failed: ${failureCount}`);
-      } catch (error) {
-        logger.error(`Broadcast Text Error: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ An error occurred while broadcasting the message. Please try again later.', getAdminMenu());
-      }
-    } else {
-      // Unsupported message type
-      await ctx.reply('❌ Unsupported message type. Please send text or a photo (receipt).', getAdminMenu());
-    }
-
-    // Reset broadcast message state
-    await updateUserState(userId, { awaitingBroadcastMessage: false });
+  // =================== Handle Receipt Generation Callbacks ===================
+  if (callbackData === 'receipt_all') {
+    await handleReceiptAll(ctx);
+    return;
   }
 
-  await next(); // Pass control to the next handler
-});
-
-// =================== Handle Unsupported Messages ===================
-bot.on('message', async (ctx) => {
-  // If not in a scene, provide a generic response
-  if (!ctx.session || !ctx.session.isBankLinking) {
-    // Ignore command messages to prevent interference
-    if (ctx.message.text && ctx.message.text.startsWith('/')) {
-      return;
-    }
-    await ctx.reply('⚠️ I did not understand that command. Please select an option from the menu.');
+  if (callbackData === 'receipt_specific') {
+    await handleReceiptSpecific(ctx);
+    return;
   }
+
+  if (callbackData.startsWith('select_tx_')) {
+    const transactionId = callbackData.replace('select_tx_', '');
+    await handleSelectTransaction(ctx, transactionId);
+    return;
+  }
+
+  if (callbackData.startsWith('base_page_')) {
+    const pageIndex = parseInt(callbackData.replace('base_page_', ''), 10);
+    await handleBasePage(ctx, pageIndex);
+    return;
+  }
+
+  // =================== Handle Admin Callbacks ===================
+  if (callbackData.startsWith('admin_')) {
+    const adminAction = callbackData.replace('admin_', '');
+    await handleAdminActions(ctx, adminAction);
+    return;
+  }
+
+  // =================== Handle Settings Callbacks ===================
+  switch (callbackData) {
+    case 'settings_generate_wallet':
+      await handleSettingsGenerateWallet(ctx);
+      break;
+    case 'settings_edit_bank':
+      await handleSettingsEditBank(ctx);
+      break;
+    case 'settings_support':
+      await handleSettingsSupport(ctx);
+      break;
+    case 'settings_generate_receipt':
+      await ctx.scene.enter('receipt_generation_scene');
+      break;
+    case 'settings_back_main':
+      await greetUser(ctx);
+      break;
+    case 'support_how_it_works':
+      await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
+      break;
+    case 'support_not_received':
+      await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
+      break;
+    case 'support_contact':
+      await ctx.replyWithMarkdown('You can contact our support team at [@maxcswap](https://t.me/maxcswap).');
+      break;
+    case 'exit_base':
+      if (ctx.session.baseMessageId) {
+        await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
+        ctx.session.baseMessageId = null;
+      }
+      await ctx.replyWithMarkdown('Thank you for learning about Base!');
+      break;
+    default:
+      // Handle unknown callbacks or leave them to other handlers
+      logger.warn(`Unhandled callback data: ${callbackData}`);
+      await ctx.answerCbQuery('⚠️ Unknown action.', { show_alert: true });
+  }
+
+  // Acknowledge the callback to remove the loading state
+  await ctx.answerCbQuery();
 });
 
 // =================== Handle "📘 Learn About Base" Button ===================
@@ -1177,11 +1168,11 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
 
     transactionsSnapshot.forEach((doc) => {
       const tx = doc.data();
-      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-      message += `*Status:* ${tx.status || 'Pending'}\n`;
+      message += `*Reference ID:* \`${tx.referenceId}\`\n`;
+      message += `*Amount:* ${tx.amount} ${tx.asset}\n`;
+      message += `*Status:* ${tx.status}\n`;
       message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
+      message += `*Chain:* ${tx.chain}\n\n`;
     });
 
     await ctx.replyWithMarkdown(message);
@@ -1193,30 +1184,273 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
 
 // =================== Admin Panel Functionality ===================
 
-// Handle Admin Menu Actions (Continued)
-bot.action(/admin_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
+// Already handled above with admin_menu and respective actions
 
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
+// =================== Receipt Generation Scene ===================
+const receiptGenerationScene = new Scenes.BaseScene('receipt_generation_scene');
+
+receiptGenerationScene.enter(async (ctx) => {
+  await ctx.reply('🧾 *Generate Transaction Receipt*\n\nPlease choose an option:', Markup.inlineKeyboard([
+    [Markup.button.callback('All Transactions', 'receipt_all')],
+    [Markup.button.callback('Specific Transaction', 'receipt_specific')],
+    [Markup.button.callback('🔙 Back to Settings', 'receipt_back_settings')],
+  ]));
+});
+
+receiptGenerationScene.action('receipt_all', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch all transactions for the user
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+    if (transactionsSnapshot.empty) {
+      await ctx.reply('❌ You have no transactions to generate a receipt.');
+      return ctx.scene.leave();
+    }
+
+    // Generate PDF receipt
+    const doc = new PDFDocument();
+    const stream = doc.pipe(blobStream());
+
+    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
+    doc.moveDown();
+
+    transactionsSnapshot.forEach((docData, index) => {
+      const tx = docData.data();
+      doc.fontSize(12).text(`Transaction ${index + 1}:`);
+      doc.text(`Reference ID: ${tx.referenceId}`);
+      doc.text(`Amount: ${tx.amount} ${tx.asset}`);
+      doc.text(`Status: ${tx.status}`);
+      doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
+      doc.text(`Chain: ${tx.chain}`);
+      doc.moveDown();
+    });
+
+    doc.end();
+
+    // Wait for the PDF to be fully generated
+    stream.on('finish', async () => {
+      const buffer = stream.toBlob('application/pdf');
+      const bufferArray = Buffer.from(await buffer.arrayBuffer());
+
+      // Send the PDF to the user
+      await ctx.replyWithDocument({ source: bufferArray, filename: 'Transaction_Receipt.pdf' });
+      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
+      ctx.scene.leave();
+    });
+  } catch (error) {
+    logger.error(`Error generating all transactions receipt for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
+    ctx.scene.leave();
+  }
+});
+
+receiptGenerationScene.action('receipt_specific', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch all transactions for the user
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+    if (transactionsSnapshot.empty) {
+      await ctx.reply('❌ You have no transactions to select.');
+      return ctx.scene.leave();
+    }
+
+    // Create a list of transactions for selection
+    const keyboard = transactionsSnapshot.docs.map((doc, index) => [
+      Markup.button.callback(`Transaction ${index + 1} - ${doc.data().referenceId}`, `select_tx_${doc.id}`)
+    ]);
+
+    // Add a back button
+    keyboard.push([Markup.button.callback('🔙 Back', 'receipt_back_options')]);
+
+    await ctx.reply('Please select the transaction for which you want to generate a receipt:', Markup.inlineKeyboard(keyboard, { columns: 1 }));
+    ctx.session.transactions = transactionsSnapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error fetching transactions for specific receipt: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred. Please try again later.');
+    ctx.scene.leave();
+  }
+});
+
+receiptGenerationScene.action(/select_tx_(.+)/, async (ctx) => {
+  const transactionId = ctx.match[1];
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch the specific transaction
+    const txDoc = await db.collection('transactions').doc(transactionId).get();
+    if (!txDoc.exists || txDoc.data().userId !== userId) {
+      await ctx.reply('❌ Transaction not found or unauthorized access.');
+      return ctx.scene.leave();
+    }
+
+    const tx = txDoc.data();
+
+    // Generate PDF receipt for the specific transaction
+    const doc = new PDFDocument();
+    const stream = doc.pipe(blobStream());
+
+    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
+    doc.moveDown();
+
+    doc.fontSize(12).text(`Reference ID: ${tx.referenceId}`);
+    doc.text(`Amount: ${tx.amount} ${tx.asset}`);
+    doc.text(`Status: ${tx.status}`);
+    doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
+    doc.text(`Chain: ${tx.chain}`);
+    doc.moveDown();
+
+    doc.end();
+
+    // Wait for the PDF to be fully generated
+    stream.on('finish', async () => {
+      const buffer = stream.toBlob('application/pdf');
+      const bufferArray = Buffer.from(await buffer.arrayBuffer());
+
+      // Send the PDF to the user
+      await ctx.replyWithDocument({ source: bufferArray, filename: `Transaction_Receipt_${tx.referenceId}.pdf` });
+      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
+      ctx.scene.leave();
+    });
+  } catch (error) {
+    logger.error(`Error generating specific transaction receipt for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
+    ctx.scene.leave();
+  }
+});
+
+receiptGenerationScene.action('receipt_back_options', async (ctx) => {
+  await ctx.scene.reenter();
+  ctx.answerCbQuery();
+});
+
+receiptGenerationScene.action('receipt_back_settings', async (ctx) => {
+  await ctx.reply('⚙️ *Settings Menu*', getSettingsMenu());
+  ctx.scene.leave();
+});
+
+// Handle Scene Exit
+receiptGenerationScene.leave((ctx) => {
+  delete ctx.session.walletIndex;
+  delete ctx.session.bankData;
+  delete ctx.session.processType;
+  delete ctx.session.isBankLinking; // Reset the bank linking flag
+});
+
+// =================== Scenes Definitions ===================
+
+// =================== Bank Linking Scene ===================
+const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
+
+bankLinkingScene.enter(async (ctx) => {
+  const walletIndex = ctx.session.walletIndex;
+  if (walletIndex === undefined || walletIndex < 0) {
+    await ctx.reply('⚠️ Invalid wallet selection.');
+    return ctx.scene.leave();
   }
 
-  const action = ctx.match[1];
+  await ctx.reply('🏦 *Link Your Bank Account*\n\nPlease enter your 10-digit bank account number:');
+  ctx.session.processType = 'link_bank';
+  
+  // Set a timeout to delete the bank linking message after 2 minutes
+  ctx.session.bankLinkingTimeout = setTimeout(async () => {
+    await ctx.reply('⌛ Bank linking timed out. Please try again.');
+    delete ctx.session.bankLinkingTimeout;
+    ctx.scene.leave();
+  }, 120000); // 2 minutes
+});
 
-  switch (action) {
-    case 'view_transactions':
-      // Handle viewing transactions
-      // (Already handled above)
-      break;
+bankLinkingScene.on('text', async (ctx) => {
+  if (ctx.session.processType !== 'link_bank') {
+    return;
+  }
 
-    // Additional admin actions handled earlier
+  const accountNumber = ctx.message.text.trim();
+  const walletIndex = ctx.session.walletIndex;
+  const userId = ctx.from.id.toString();
 
-    default:
-      await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
+  // Validate account number
+  if (!/^\d{10}$/.test(accountNumber)) {
+    return ctx.reply('❌ Invalid account number. Please enter a valid 10-digit bank account number:');
+  }
+
+  // Ask user to select their bank
+  const bankButtons = bankList.map(bank => Markup.button.callback(bank.name, `select_bank_${bank.code}`));
+  await ctx.reply('🏦 *Select Your Bank:*', Markup.inlineKeyboard(bankButtons, { columns: 2 }));
+});
+
+// Handle Bank Selection
+bankLinkingScene.action(/select_bank_(\d+)/, async (ctx) => {
+  const bankCode = ctx.match[1];
+  const accountNumber = ctx.message.text ? ctx.message.text.trim() : ctx.session.accountNumber;
+  const walletIndex = ctx.session.walletIndex;
+  const userId = ctx.from.id.toString();
+
+  // Find the selected bank
+  const selectedBank = bankList.find(bank => bank.code === bankCode);
+  if (!selectedBank) {
+    await ctx.reply('❌ Invalid bank selection.');
+    return ctx.answerCbQuery();
+  }
+
+  // Proceed to verify bank account
+  try {
+    const verification = await verifyBankAccount(accountNumber, bankCode);
+    if (verification.status === 'success') {
+      const accountName = verification.data.account_name;
+      // Update user state with bank details
+      const userState = await getUserState(userId);
+      const updatedWallets = [...userState.wallets];
+      updatedWallets[walletIndex].bank = {
+        bankName: selectedBank.name,
+        accountNumber: accountNumber,
+        accountName: accountName
+      };
+      await updateUserState(userId, { wallets: updatedWallets });
+
+      await ctx.replyWithMarkdown(`✅ Bank account linked successfully!\n\n*Bank:* ${selectedBank.name}\n*Account Name:* ${accountName}\n*Account Number:* ****${accountNumber.slice(-4)}`);
+      await greetUser(ctx);
+    } else {
+      await ctx.reply('❌ Bank account verification failed. Please ensure your account number is correct.');
+    }
+  } catch (error) {
+    logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while verifying your bank account. Please try again later.');
+  }
+
+  // Clear timeout and leave the scene
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+    delete ctx.session.bankLinkingTimeout;
+  }
+  ctx.scene.leave();
+  ctx.answerCbQuery();
+});
+
+// Handle Unsupported Messages in Bank Linking Scene
+bankLinkingScene.on('message', async (ctx) => {
+  if (ctx.session.processType !== 'link_bank') {
+    return;
+  }
+  await ctx.reply('❌ Unsupported message type. Please enter your 10-digit bank account number:');
+});
+
+// Handle Scene Exit
+bankLinkingScene.leave((ctx) => {
+  delete ctx.session.walletIndex;
+  delete ctx.session.bankData;
+  delete ctx.session.processType;
+  delete ctx.session.isBankLinking; // Reset the bank linking flag
+
+  // Clear the inactivity timeout
+  if (ctx.session.bankLinkingTimeout) {
+    clearTimeout(ctx.session.bankLinkingTimeout);
+    delete ctx.session.bankLinkingTimeout;
   }
 });
 
 // =================== Send Message Scene ===================
+const sendMessageScene = new Scenes.BaseScene('send_message_scene');
+
 sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
 });
@@ -1256,6 +1490,7 @@ sendMessageScene.on('photo', async (ctx) => {
   const caption = ctx.message.caption || '';
 
   try {
+    // Send the photo with caption to the target user
     await bot.telegram.sendPhoto(userIdToMessage, fileId, { caption: caption, parse_mode: 'Markdown' });
     await ctx.replyWithMarkdown('✅ Photo message sent successfully.');
     logger.info(`Admin ${userId} sent photo message to user ${userIdToMessage}. Caption: ${caption}`);
@@ -1304,6 +1539,140 @@ sendMessageScene.leave((ctx) => {
   delete ctx.session.userIdToMessage;
   delete ctx.session.sendMessageStep;
 });
+
+// =================== Handle Unsupported Messages ===================
+bot.on('message', async (ctx) => {
+  // If not in a scene, provide a generic response
+  if (!ctx.session || !ctx.session.isBankLinking) {
+    // Ignore command messages to prevent interference
+    if (ctx.message.text && ctx.message.text.startsWith('/')) {
+      return;
+    }
+    await ctx.reply('⚠️ I did not understand that command. Please select an option from the menu.');
+  }
+});
+
+// =================== Learn About Base Content ===================
+const detailedTutorials = {
+  how_it_works: `
+**📘 How DirectPay Works**
+
+1. **Generate Your Wallet:**
+   - Navigate to the "💼 Generate Wallet" option.
+   - Select your preferred network (Base, Polygon, BNB Smart Chain).
+   - Receive a unique wallet address where you can receive crypto payments.
+
+2. **Link Your Bank Account:**
+   - Go to "⚙️ Settings" > "🏦 Link Bank Account."
+   - Provide your bank details to securely receive payouts directly into your bank account.
+
+3. **Receive Payments:**
+   - Share your wallet address with clients or payment sources.
+   - Once a deposit is made, DirectPay will automatically convert the crypto to NGN at current exchange rates.
+
+4. **Monitor Transactions:**
+   - Use the "💰 Transactions" option to view all your deposit and payout activities.
+
+5. **Support & Assistance:**
+   - Access detailed support tutorials anytime from the "ℹ️ Support" section.
+
+**🔒 Security:**
+Your funds are secure with us. We utilize industry-standard encryption and security protocols to ensure your assets and information remain safe.
+
+**💬 Need Help?**
+Visit the support section or contact our support team at [@maxcswap](https://t.me/maxcswap) for any assistance.
+`,
+  transaction_guide: `
+**💰 Transaction Not Received?**
+
+If you haven't received your transaction, follow these steps to troubleshoot:
+
+1. **Verify Wallet Address:**
+   - Ensure that the sender used the correct wallet address provided by DirectPay.
+
+2. **Check Bank Linking:**
+   - Make sure your bank account is correctly linked.
+   - If not linked, go to "⚙️ Settings" > "🏦 Link Bank Account" to add your bank details.
+
+3. **Monitor Transaction Status:**
+   - Use the "💰 Transactions" section to check the status of your deposit.
+   - Pending status indicates that the deposit is being processed.
+
+4. **Wait for Confirmation:**
+   - Deposits might take a few minutes to reflect depending on the network congestion.
+
+5. **Contact Support:**
+   - If the issue persists after following the above steps, reach out to our support team at [@maxswap](https://t.me/maxcswap) with your transaction details for further assistance.
+`,
+  link_bank_tutorial: `
+**🏦 How to Link or Edit Your Bank Account**
+
+*Linking a New Bank Account:*
+
+1. **Navigate to Bank Linking:**
+   - Click on "⚙️ Settings" > "🏦 Link Bank Account" from the main menu.
+
+2. **Select Your Wallet:**
+   - If you have multiple wallets, select the one you want to link a bank account to.
+
+3. **Provide Bank Details:**
+   - Enter your bank name (e.g., Access Bank).
+   - Input your 10-digit bank account number.
+
+4. **Verify Account:**
+   - DirectPay will verify your bank account details.
+   - Confirm the displayed account holder name.
+
+5. **Completion:**
+   - Once verified, your bank account is linked and ready to receive payouts.
+
+*Editing an Existing Bank Account:*
+
+1. **Navigate to Bank Editing:**
+   - Click on "⚙️ Settings" > "✏️ Edit Linked Bank Details" from the main menu.
+
+2. **Select the Wallet:**
+   - Choose the wallet whose bank account you wish to edit.
+
+3. **Provide New Bank Details:**
+   - Enter the updated bank name or account number as required.
+
+4. **Verify Changes:**
+   - Confirm the updated account holder name.
+
+5. **Completion:**
+   - Your bank account details have been updated successfully.
+`,
+};
+
+// =================== Base Content Pages ===================
+const baseContent = [
+  {
+    title: 'Welcome to Base',
+    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
+  },
+  {
+    title: 'Why Choose Base?',
+    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
+  },
+  {
+    title: 'Getting Started',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
+  },
+  {
+    title: 'Learn More',
+    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
+  },
+];
+
+// =================== Centralized Callback Query Handler ===================
+// Note: This section has already been handled above.
+
+// =================== Support and Tutorial Content ===================
+// Already defined in detailedTutorials
+
+// =================== Receipt Generation Scene ===================
+// Already defined above
 
 // =================== Webhook Handlers ===================
 
@@ -1633,203 +2002,25 @@ app.post('/webhook/blockradar', async (req, res) => {
   }
 });
 
+// =================== Webhook Handlers End ===================
+
 // =================== Support and Tutorial Content ===================
-const detailedTutorials = {
-  how_it_works: `
-**📘 How DirectPay Works**
-
-1. **Generate Your Wallet:**
-   - Navigate to the "💼 Generate Wallet" option.
-   - Select your preferred network (Base, Polygon, BNB Smart Chain).
-   - Receive a unique wallet address where you can receive crypto payments.
-
-2. **Link Your Bank Account:**
-   - Go to "⚙️ Settings" > "🏦 Link Bank Account."
-   - Provide your bank details to securely receive payouts directly into your bank account.
-
-3. **Receive Payments:**
-   - Share your wallet address with clients or payment sources.
-   - Once a deposit is made, DirectPay will automatically convert the crypto to NGN at current exchange rates.
-
-4. **Monitor Transactions:**
-   - Use the "💰 Transactions" option to view all your deposit and payout activities.
-
-5. **Support & Assistance:**
-   - Access detailed support tutorials anytime from the "ℹ️ Support" section.
-
-**🔒 Security:**
-Your funds are secure with us. We utilize industry-standard encryption and security protocols to ensure your assets and information remain safe.
-
-**💬 Need Help?**
-Visit the support section or contact our support team at [@maxcswap](https://t.me/maxcswap) for any assistance.
-`,
-  transaction_guide: `
-**💰 Transaction Not Received?**
-
-If you haven't received your transaction, follow these steps to troubleshoot:
-
-1. **Verify Wallet Address:**
-   - Ensure that the sender used the correct wallet address provided by DirectPay.
-
-2. **Check Bank Linking:**
-   - Make sure your bank account is correctly linked.
-   - If not linked, go to "⚙️ Settings" > "🏦 Link Bank Account" to add your bank details.
-
-3. **Monitor Transaction Status:**
-   - Use the "💰 Transactions" section to check the status of your deposit.
-   - Pending status indicates that the deposit is being processed.
-
-4. **Wait for Confirmation:**
-   - Deposits might take a few minutes to reflect depending on the network congestion.
-
-5. **Contact Support:**
-   - If the issue persists after following the above steps, reach out to our support team at [@maxswap](https://t.me/maxcswap) with your transaction details for further assistance.
-`,
-  link_bank_tutorial: `
-**🏦 How to Link or Edit Your Bank Account**
-
-*Linking a New Bank Account:*
-
-1. **Navigate to Bank Linking:**
-   - Click on "⚙️ Settings" > "🏦 Link Bank Account" from the main menu.
-
-2. **Select Your Wallet:**
-   - If you have multiple wallets, select the one you want to link a bank account to.
-
-3. **Provide Bank Details:**
-   - Enter your bank name (e.g., Access Bank).
-   - Input your 10-digit bank account number.
-
-4. **Verify Account:**
-   - DirectPay will verify your bank account details.
-   - Confirm the displayed account holder name.
-
-5. **Completion:**
-   - Once verified, your bank account is linked and ready to receive payouts.
-
-*Editing an Existing Bank Account:*
-
-1. **Navigate to Bank Editing:**
-   - Click on "⚙️ Settings" > "✏️ Edit Linked Bank Details" from the main menu.
-
-2. **Select the Wallet:**
-   - Choose the wallet whose bank account you wish to edit.
-
-3. **Provide New Bank Details:**
-   - Enter the updated bank name or account number as required.
-
-4. **Verify Changes:**
-   - Confirm the updated account holder name.
-
-5. **Completion:**
-   - Your bank account details have been updated successfully.
-`,
-};
-
-// =================== Learn About Base with Pagination and Inline Updates ===================
-
-// Learn About Base Content Pages
-const baseContent = [
-  {
-    title: 'Welcome to Base',
-    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
-  },
-  {
-    title: 'Why Choose Base?',
-    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
-  },
-  {
-    title: 'Getting Started',
-    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
-  },
-  {
-    title: 'Learn More',
-    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
-  },
-];
-
-// =================== Handle "📘 Learn About Base" Button ===================
-bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
-  await sendBaseContent(ctx, 0, true);
-});
-
-// Function to Send Base Content with Pagination and Inline Updates
-async function sendBaseContent(ctx, index, isNew = false) {
-  const content = baseContent[index];
-  const totalPages = baseContent.length;
-
-  const navigationButtons = [];
-
-  if (index > 0) {
-    navigationButtons.push(Markup.button.callback('⬅️ Back', `base_page_${index - 1}`));
-  }
-
-  if (index < totalPages - 1) {
-    navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
-  }
-
-  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
-
-  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-  if (isNew) {
-    const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-    // Store the message ID in session
-    ctx.session.baseMessageId = sentMessage.message_id;
-  } else {
-    try {
-      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
-        parse_mode: 'Markdown',
-        reply_markup: inlineKeyboard.reply_markup,
-      });
-    } catch (error) {
-      // If editing message fails, send a new message and update session
-      const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-      ctx.session.baseMessageId = sentMessage.message_id;
-    }
-  }
-
-  // Set a timeout to delete the message after 2 minutes
-  setTimeout(() => {
-    if (ctx.session.baseMessageId) {
-      ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-      ctx.session.baseMessageId = null;
-    }
-  }, 120000); // Delete after 2 minutes
-}
-
-// Handle Base Content Pagination
-bot.action(/base_page_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1], 10);
-  if (isNaN(index) || index < 0 || index >= baseContent.length) {
-    return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
-  }
-  await sendBaseContent(ctx, index);
-  ctx.answerCbQuery(); // Acknowledge the callback
-});
-
-// Exit the "Learn About Base" Section
-bot.action('exit_base', async (ctx) => {
-  // Delete the message and clear session
-  if (ctx.session.baseMessageId) {
-    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-    ctx.session.baseMessageId = null;
-  }
-  await ctx.replyWithMarkdown('Thank you for learning about Base!');
-  ctx.answerCbQuery();
-});
-
-// =================== Support Functionality ===================
-
-// Handled above with detailedTutorials and support handlers
+// Already defined in detailedTutorials
 
 // =================== Admin Functions ===================
+// Already handled above
 
-// Already handled above with admin_menu and respective actions
+// =================== Centralized Callback Query Handler ===================
+// Already handled above
+
+// =================== Send Message Scene ===================
+// Already defined above
+
+// =================== Receipt Generation Scene ===================
+// Already defined above
 
 // =================== Webhook Handlers ===================
-
-// Paycrest and Blockradar webhooks handled above
+// Already defined above
 
 // =================== Telegram Webhook Setup ===================
 
@@ -1854,6 +2045,166 @@ const port = process.env.PORT || 4000;
 app.listen(port, () => {
   logger.info(`Webhook server running on port ${port}`);
 });
+
+// =================== Graceful Shutdown ===================
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+// =================== Additional Handler Functions ===================
+
+// Handle Receipt Generation (All Transactions)
+async function handleReceiptAll(ctx) {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch all transactions for the user
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+    if (transactionsSnapshot.empty) {
+      await ctx.reply('❌ You have no transactions to generate a receipt.');
+      return ctx.scene.leave();
+    }
+
+    // Generate PDF receipt
+    const doc = new PDFDocument();
+    const stream = doc.pipe(blobStream());
+
+    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
+    doc.moveDown();
+
+    transactionsSnapshot.forEach((docData, index) => {
+      const tx = docData.data();
+      doc.fontSize(12).text(`Transaction ${index + 1}:`);
+      doc.text(`Reference ID: ${tx.referenceId}`);
+      doc.text(`Amount: ${tx.amount} ${tx.asset}`);
+      doc.text(`Status: ${tx.status}`);
+      doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
+      doc.text(`Chain: ${tx.chain}`);
+      doc.moveDown();
+    });
+
+    doc.end();
+
+    // Wait for the PDF to be fully generated
+    stream.on('finish', async () => {
+      const buffer = stream.toBlob('application/pdf');
+      const bufferArray = Buffer.from(await buffer.arrayBuffer());
+
+      // Send the PDF to the user
+      await ctx.replyWithDocument({ source: bufferArray, filename: 'Transaction_Receipt.pdf' });
+      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
+      ctx.scene.leave();
+    });
+  } catch (error) {
+    logger.error(`Error generating all transactions receipt for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
+    ctx.scene.leave();
+  }
+}
+
+// Handle Receipt Generation (Specific Transaction)
+async function handleReceiptSpecific(ctx) {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch all transactions for the user
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+    if (transactionsSnapshot.empty) {
+      await ctx.reply('❌ You have no transactions to select.');
+      return ctx.scene.leave();
+    }
+
+    // Create a list of transactions for selection
+    const keyboard = transactionsSnapshot.docs.map((doc, index) => [
+      Markup.button.callback(`Transaction ${index + 1} - ${doc.data().referenceId}`, `select_tx_${doc.id}`)
+    ]);
+
+    // Add a back button
+    keyboard.push([Markup.button.callback('🔙 Back', 'receipt_back_options')]);
+
+    await ctx.reply('Please select the transaction for which you want to generate a receipt:', Markup.inlineKeyboard(keyboard, { columns: 1 }));
+    ctx.session.transactions = transactionsSnapshot.docs.map(doc => ({ id: doc.id, data: doc.data() }));
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error fetching transactions for specific receipt: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred. Please try again later.');
+    ctx.scene.leave();
+  }
+}
+
+// Handle Select Specific Transaction
+async function handleSelectTransaction(ctx, transactionId) {
+  const userId = ctx.from.id.toString();
+  try {
+    // Fetch the specific transaction
+    const txDoc = await db.collection('transactions').doc(transactionId).get();
+    if (!txDoc.exists || txDoc.data().userId !== userId) {
+      await ctx.reply('❌ Transaction not found or unauthorized access.');
+      return ctx.scene.leave();
+    }
+
+    const tx = txDoc.data();
+
+    // Generate PDF receipt for the specific transaction
+    const doc = new PDFDocument();
+    const stream = doc.pipe(blobStream());
+
+    doc.fontSize(20).text('Transaction Receipt', { align: 'center' });
+    doc.moveDown();
+
+    doc.fontSize(12).text(`Reference ID: ${tx.referenceId}`);
+    doc.text(`Amount: ${tx.amount} ${tx.asset}`);
+    doc.text(`Status: ${tx.status}`);
+    doc.text(`Date: ${new Date(tx.timestamp).toLocaleString()}`);
+    doc.text(`Chain: ${tx.chain}`);
+    doc.moveDown();
+
+    doc.end();
+
+    // Wait for the PDF to be fully generated
+    stream.on('finish', async () => {
+      const buffer = stream.toBlob('application/pdf');
+      const bufferArray = Buffer.from(await buffer.arrayBuffer());
+
+      // Send the PDF to the user
+      await ctx.replyWithDocument({ source: bufferArray, filename: `Transaction_Receipt_${tx.referenceId}.pdf` });
+      await ctx.reply('✅ Your transaction receipt has been generated and sent.');
+      ctx.scene.leave();
+    });
+  } catch (error) {
+    logger.error(`Error generating specific transaction receipt for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while generating your receipt. Please try again later.');
+    ctx.scene.leave();
+  }
+}
+
+// Handle Base Page Pagination
+async function handleBasePage(ctx, pageIndex) {
+  if (isNaN(pageIndex) || pageIndex < 0 || pageIndex >= baseContent.length) {
+    await ctx.reply('⚠️ Invalid page number.');
+    return;
+  }
+  await sendBaseContent(ctx, pageIndex);
+}
+
+// Handle Settings Support
+async function handleSettingsSupport(ctx) {
+  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
+    [Markup.button.callback('📘 How It Works', 'support_how_it_works')],
+    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+    [Markup.button.callback('💬 Contact Support', 'support_contact')],
+    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
+  ]));
+}
+
+// =================== Scenes and Middleware Registration ===================
+// (Already done at the beginning)
+
+// =================== Bank Linking Scene Definition ===================
+// (Already defined above)
+
+// =================== Send Message Scene Definition ===================
+// (Already defined above)
+
+// =================== Receipt Generation Scene Definition ===================
+// (Already defined above)
 
 // =================== Graceful Shutdown ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
