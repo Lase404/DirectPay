@@ -1137,47 +1137,6 @@ async function sendBaseContent(ctx, index, isNew = false) {
   }, 120000); // Delete after 2 minutes
 }
 
-// Define Base Content Pages
-const baseContent = [
-  {
-    title: 'Welcome to Base',
-    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
-  },
-  {
-    title: 'Why Choose Base?',
-    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
-  },
-  {
-    title: 'Getting Started',
-    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
-  },
-  {
-    title: 'Learn More',
-    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
-  },
-];
-
-// Handle Base Content Pagination
-bot.action(/base_page_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1], 10);
-  if (isNaN(index) || index < 0 || index >= baseContent.length) {
-    return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
-  }
-  await sendBaseContent(ctx, index);
-  ctx.answerCbQuery(); // Acknowledge the callback
-});
-
-// Exit the "Learn About Base" Section
-bot.action('exit_base', async (ctx) => {
-  // Delete the message and clear session
-  if (ctx.session.baseMessageId) {
-    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-    ctx.session.baseMessageId = null;
-  }
-  await ctx.replyWithMarkdown('Thank you for learning about Base!');
-  ctx.answerCbQuery();
-});
-
 // =================== Support Functionality ===================
 bot.hears(/ℹ️\s*Support/i, async (ctx) => {
   await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
