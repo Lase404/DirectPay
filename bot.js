@@ -1353,7 +1353,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `*Payout (NGN):* ₦${payout}\n\n` +
               `🔹 *Chain:* ${txData.chain}\n` +
               `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` +
-              `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
+              `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account..`,
               { parse_mode: 'Markdown' }
             );
             logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
