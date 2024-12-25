@@ -2295,7 +2295,6 @@ bot.on('message', async (ctx) => {
 
 // =================== Conclusion ===================
 
-/**
  * This complete bot code integrates the following functionalities:
  * 
  * 1. **Admin Panel Enhancements:**
