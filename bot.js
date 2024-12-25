@@ -218,8 +218,6 @@ function mapToPaycrest(asset, chainName) {
   return { token, network };
 }
 
-// =================== Firestore Helper Functions ===================
-
 // Get User State from Firestore
 async function getUserState(userId) {
   try {
@@ -267,7 +265,7 @@ async function updateUserState(userId, newState) {
   }
 }
 
-// =================== Wallet Generation Function ===================
+// Generate Wallet Function
 async function generateWallet(chain) {
   try {
     const response = await axios.post(
@@ -286,7 +284,7 @@ async function generateWallet(chain) {
   }
 }
 
-// =================== Paycrest Order Creation Function ===================
+// Paycrest Order Creation Function
 async function createPaycrestOrder(userId, amount, token, network, recipientDetails) {
   try {
     // Map to Paycrest network and token
@@ -352,7 +350,7 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
   }
 }
 
-// =================== Withdrawal Function ===================
+// Withdrawal Function
 async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
   try {
     // Ensure the chain exists in the mapping
@@ -1070,8 +1068,6 @@ receiptGenerationScene.enter(async (ctx) => {
   ]));
 });
 
-// Handle other scenes similarly if necessary
-
 // Register Scenes with Stage
 const stage = new Scenes.Stage([
   bankLinkingScene,
@@ -1229,7 +1225,85 @@ async function handleSettingsSupport(ctx) {
 
 // =================== Admin Functions ===================
 
-// Already handled with send_message_scene and broadcast_message
+// Send Message Scene (Admin)
+async function handleAdminSendMessage(ctx) {
+  await ctx.scene.enter('send_message_scene');
+}
+
+// Broadcast Message Function
+async function handleAdminBroadcastMessage(ctx) {
+  await ctx.reply('📢 Please enter the message you want to broadcast to all users. You can also attach an image (receipt) with your message:');
+  // Set state to indicate awaiting broadcast message
+  await updateUserState(ctx.from.id.toString(), { awaitingBroadcastMessage: true });
+  // Delete the admin panel message to keep chat clean
+  if (ctx.session.adminMessageId) {
+    await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
+    ctx.session.adminMessageId = null;
+  }
+}
+
+// =================== Receipt Generation Scene ===================
+receiptGenerationScene.enter(async (ctx) => {
+  await ctx.reply('🧾 *Generate Transaction Receipt*\n\nPlease choose an option:', Markup.inlineKeyboard([
+    [Markup.button.callback('📄 All Transactions', 'receipt_all')],
+    [Markup.button.callback('🔍 Specific Transaction', 'receipt_specific')],
+    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
+  ]));
+});
+
+// =================== Handle Callback Queries ===================
+
+// Centralized Callback Query Handler is already defined above
+
+// =================== Base Content Pages ===================
+const baseContent = [
+  {
+    title: 'Welcome to Base',
+    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
+  },
+  {
+    title: 'Why Choose Base?',
+    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
+  },
+  {
+    title: 'Getting Started',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
+  },
+  {
+    title: 'Learn More',
+    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
+  },
+];
+
+// Function to send Base Content with Pagination
+async function sendBaseContent(ctx, pageIndex, initial = false) {
+  if (isNaN(pageIndex) || pageIndex < 0 || pageIndex >= baseContent.length) {
+    await ctx.reply('⚠️ Invalid page number.');
+    return;
+  }
+
+  const content = baseContent[pageIndex];
+  const message = `📘 *${content.title}*\n\n${content.text}`;
+
+  // Define navigation buttons
+  const buttons = [];
+  if (pageIndex > 0) {
+    buttons.push(Markup.button.callback('◀️ Previous', `base_page_${pageIndex - 1}`));
+  }
+  if (pageIndex < baseContent.length - 1) {
+    buttons.push(Markup.button.callback('Next ▶️', `base_page_${pageIndex + 1}`));
+  }
+  buttons.push(Markup.button.callback('Exit', 'exit_base'));
+
+  const keyboard = Markup.inlineKeyboard([buttons]);
+
+  if (initial) {
+    const sentMessage = await ctx.replyWithMarkdown(message, keyboard);
+    ctx.session.baseMessageId = sentMessage.message_id;
+  } else {
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: keyboard.reply_markup });
+  }
+}
 
 // =================== Webhook Handlers ===================
 
@@ -1655,7 +1729,7 @@ If you haven't received your transaction, follow these steps to troubleshoot:
 };
 
 // =================== Base Content Pages ===================
-const baseContent = [
+const baseContentPages = [
   {
     title: 'Welcome to Base',
     text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
@@ -1674,93 +1748,38 @@ const baseContent = [
   },
 ];
 
+// Function to send Base Content with Pagination
+async function sendBaseContent(ctx, pageIndex, initial = false) {
+  if (isNaN(pageIndex) || pageIndex < 0 || pageIndex >= baseContentPages.length) {
+    await ctx.reply('⚠️ Invalid page number.');
+    return;
+  }
+
+  const content = baseContentPages[pageIndex];
+  const message = `📘 *${content.title}*\n\n${content.text}`;
+
+  // Define navigation buttons
+  const buttons = [];
+  if (pageIndex > 0) {
+    buttons.push(Markup.button.callback('◀️ Previous', `base_page_${pageIndex - 1}`));
+  }
+  if (pageIndex < baseContentPages.length - 1) {
+    buttons.push(Markup.button.callback('Next ▶️', `base_page_${pageIndex + 1}`));
+  }
+  buttons.push(Markup.button.callback('Exit', 'exit_base'));
+
+  const keyboard = Markup.inlineKeyboard([buttons]);
+
+  if (initial) {
+    const sentMessage = await ctx.replyWithMarkdown(message, keyboard);
+    ctx.session.baseMessageId = sentMessage.message_id;
+  } else {
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: keyboard.reply_markup });
+  }
+}
+
 // =================== Centralized Callback Query Handler ===================
-bot.on('callback_query', async (ctx) => {
-  const callbackData = ctx.callbackQuery.data;
-  const userId = ctx.from.id.toString();
-
-  // Log the callback for debugging
-  logger.info(`Received callback: ${callbackData} from user: ${userId}`);
-
-  // =================== Handle Generate Wallet Callbacks ===================
-  if (callbackData.startsWith('generate_wallet_')) {
-    const chain = callbackData.replace('generate_wallet_', '');
-    await handleGenerateWallet(ctx, chain);
-    return;
-  }
-
-  // =================== Handle Receipt Generation Callbacks ===================
-  if (callbackData === 'receipt_all') {
-    await handleReceiptAll(ctx);
-    return;
-  }
-
-  if (callbackData === 'receipt_specific') {
-    await handleReceiptSpecific(ctx);
-    return;
-  }
-
-  if (callbackData.startsWith('select_tx_')) {
-    const transactionId = callbackData.replace('select_tx_', '');
-    await handleSelectTransaction(ctx, transactionId);
-    return;
-  }
-
-  if (callbackData.startsWith('base_page_')) {
-    const pageIndex = parseInt(callbackData.replace('base_page_', ''), 10);
-    await handleBasePage(ctx, pageIndex);
-    return;
-  }
-
-  // =================== Handle Admin Callbacks ===================
-  if (callbackData.startsWith('admin_')) {
-    const adminAction = callbackData.replace('admin_', '');
-    await handleAdminActions(ctx, adminAction);
-    return;
-  }
-
-  // =================== Handle Settings Callbacks ===================
-  switch (callbackData) {
-    case 'settings_generate_wallet':
-      await handleSettingsGenerateWallet(ctx);
-      break;
-    case 'settings_edit_bank':
-      await handleSettingsEditBank(ctx);
-      break;
-    case 'settings_support':
-      await handleSettingsSupport(ctx);
-      break;
-    case 'settings_generate_receipt':
-      await ctx.scene.enter('receipt_generation_scene');
-      break;
-    case 'settings_back_main':
-      await greetUser(ctx);
-      break;
-    case 'support_how_it_works':
-      await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-      break;
-    case 'support_not_received':
-      await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-      break;
-    case 'support_contact':
-      await ctx.replyWithMarkdown('You can contact our support team at [@maxcswap](https://t.me/maxcswap).');
-      break;
-    case 'exit_base':
-      if (ctx.session.baseMessageId) {
-        await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-        ctx.session.baseMessageId = null;
-      }
-      await ctx.replyWithMarkdown('Thank you for learning about Base!');
-      break;
-    default:
-      // Handle unknown callbacks or leave them to other handlers
-      logger.warn(`Unhandled callback data: ${callbackData}`);
-      await ctx.answerCbQuery('⚠️ Unknown action.', { show_alert: true });
-  }
-
-  // Acknowledge the callback to remove the loading state
-  await ctx.answerCbQuery();
-});
+// Already defined above
 
 // =================== Handle "📘 Learn About Base" Button ===================
 bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
