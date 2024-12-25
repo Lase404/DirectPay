@@ -11,20 +11,25 @@ const admin = require('firebase-admin');
 require('dotenv').config();
 
 // =================== Environment Variables ===================
-const {
-  BOT_TOKEN,
-  TELEGRAM_WEBHOOK_URL,
-  TELEGRAM_WEBHOOK_PATH,
-  PAYSTACK_API_KEY, // Paystack API Key
-  PAYCREST_API_KEY,
-  PAYCREST_CLIENT_SECRET,
-  PAYCREST_RETURN_ADDRESS,
-  BLOCKRADAR_API_KEY,
-  PERSONAL_CHAT_ID, // Admin Telegram ID
-  ADMIN_IDS, // Comma-separated list of Admin IDs
-  BLOCKRADAR_USDC_ASSET_ID, // Blockradar USDC Asset ID
-  BLOCKRADAR_USDT_ASSET_ID, // Blockradar USDT Asset ID
-} = process.env;
+// Configuration & API Keys
+const BOT_TOKEN = process.env.BOT_TOKEN;
+const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY; // Client ID
+const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secret
+const PAYCREST_RATE_API_URL = process.env.PAYCREST_RATE_API_URL || 'https://api.paycrest.io/v1/rates'; // Paycrest Rate API Endpoint
+const PAYCREST_RETURN_ADDRESS = process.env.PAYCREST_RETURN_ADDRESS || "0xYourReturnAddressHere"; // Paycrest Return Address
+const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID;
+const ADMIN_IDS = process.env.ADMIN_IDS ? process.env.ADMIN_IDS.split(',').map(id => id.trim()) : [];
+const MAX_WALLETS = 5;
+
+// Telegram Webhook Configuration
+const TELEGRAM_WEBHOOK_PATH = process.env.WEBHOOK_PATH || '/webhook/telegram'; // e.g., '/webhook/telegram'
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN; // e.g., 'https://your-domain.com'
+const TELEGRAM_WEBHOOK_URL = `${WEBHOOK_DOMAIN}${TELEGRAM_WEBHOOK_PATH}`;
+
+// Blockradar API Key
+const BLOCKRADAR_API_KEY = process.env.BLOCKRADAR_API_KEY || 'YOUR_BLOCKRADAR_API_KEY';
+
+
 
 // Validate essential environment variables
 if (!BOT_TOKEN || !TELEGRAM_WEBHOOK_URL || !PAYSTACK_API_KEY || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !PAYCREST_RETURN_ADDRESS || !BLOCKRADAR_API_KEY || !PERSONAL_CHAT_ID || !ADMIN_IDS) {
