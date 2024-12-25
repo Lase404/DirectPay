@@ -512,6 +512,7 @@ async function greetUser(ctx) {
 
 // =================== Handle /start Command ===================
 bot.start(async (ctx) => {
+  logger.info(`Received /start command from user ${ctx.from.id}`);
   try {
     await greetUser(ctx);
   } catch (error) {
@@ -599,7 +600,7 @@ bot.hears('🏦 Link Bank Account', async (ctx) => {
 });
 
 // =================== Handle "📈 View Current Rates" Button ===================
-bot.hears('📈 View Current Rates', async (ctx) => {
+bot.hears(/📈\s*View Current Rates/i, async (ctx) => { // Added regex to match variations
   try {
     let message = '📈 *Current Exchange Rates*:\n\n';
     for (const [asset, rate] of Object.entries(exchangeRates)) {
@@ -658,6 +659,28 @@ bot.action(/select_wallet_(\d+)/, async (ctx) => {
   }
 });
 
+// =================== Handle Edit Wallet Selection ===================
+bot.action(/edit_wallet_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = parseInt(ctx.match[1], 10);
+  
+  try {
+    const userState = await getUserState(userId);
+    if (isNaN(walletIndex) || walletIndex < 0 || walletIndex >= userState.wallets.length) {
+      await ctx.reply('⚠️ Invalid wallet selection.');
+      return ctx.answerCbQuery();
+    }
+
+    ctx.session.walletIndex = walletIndex;
+    await ctx.scene.enter('bank_linking_scene');
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error handling edit_wallet_${walletIndex} for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred. Please try again later.');
+    ctx.answerCbQuery();
+  }
+});
+
 // =================== Handle Settings Actions ===================
 bot.action('settings_generate_wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -706,27 +729,6 @@ bot.action('settings_edit_bank', async (ctx) => {
   } catch (error) {
     logger.error(`Error in settings_edit_bank for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred while editing your bank details. Please try again later.');
-    ctx.answerCbQuery();
-  }
-});
-
-bot.action(/edit_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-  
-  try {
-    const userState = await getUserState(userId);
-    if (isNaN(walletIndex) || walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      await ctx.reply('⚠️ Invalid wallet selection.');
-      return ctx.answerCbQuery();
-    }
-
-    ctx.session.walletIndex = walletIndex;
-    await ctx.scene.enter('bank_linking_scene');
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error handling edit_wallet_${walletIndex} for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred. Please try again later.');
     ctx.answerCbQuery();
   }
 });
@@ -1077,56 +1079,272 @@ bot.on('message', async (ctx, next) => {
 bot.on('message', async (ctx) => {
   // If not in a scene, provide a generic response
   if (!ctx.session || !ctx.session.isBankLinking) {
+    // Ignore command messages to prevent interference
+    if (ctx.message.text && ctx.message.text.startsWith('/')) {
+      return;
+    }
     await ctx.reply('⚠️ I did not understand that command. Please select an option from the menu.');
   }
 });
 
-// =================== Function to Initiate Withdrawals ===================
-async function initiateWithdrawal(userId, amount, asset, chain, bankDetails, transactionHash) {
+// =================== Handle "📘 Learn About Base" Button ===================
+bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
+  await sendBaseContent(ctx, 0, true);
+});
+
+// Function to Send Base Content with Pagination and Inline Updates
+async function sendBaseContent(ctx, index, isNew = false) {
+  const content = baseContent[index];
+  const totalPages = baseContent.length;
+
+  const navigationButtons = [];
+
+  if (index > 0) {
+    navigationButtons.push(Markup.button.callback('⬅️ Back', `base_page_${index - 1}`));
+  }
+
+  if (index < totalPages - 1) {
+    navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
+  }
+
+  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
+
+  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
+
+  if (isNew) {
+    const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
+    // Store the message ID in session
+    ctx.session.baseMessageId = sentMessage.message_id;
+  } else {
+    try {
+      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
+        parse_mode: 'Markdown',
+        reply_markup: inlineKeyboard.reply_markup,
+      });
+    } catch (error) {
+      // If editing message fails, send a new message and update session
+      const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
+      ctx.session.baseMessageId = sentMessage.message_id;
+    }
+  }
+
+  // Set a timeout to delete the message after 2 minutes
+  setTimeout(() => {
+    if (ctx.session.baseMessageId) {
+      ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
+      ctx.session.baseMessageId = null;
+    }
+  }, 120000); // Delete after 2 minutes
+}
+
+// Define Base Content Pages
+const baseContent = [
+  {
+    title: 'Welcome to Base',
+    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
+  },
+  {
+    title: 'Why Choose Base?',
+    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
+  },
+  {
+    title: 'Getting Started',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
+  },
+  {
+    title: 'Learn More',
+    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
+  },
+];
+
+// Handle Base Content Pagination
+bot.action(/base_page_(\d+)/, async (ctx) => {
+  const index = parseInt(ctx.match[1], 10);
+  if (isNaN(index) || index < 0 || index >= baseContent.length) {
+    return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
+  }
+  await sendBaseContent(ctx, index);
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Exit the "Learn About Base" Section
+bot.action('exit_base', async (ctx) => {
+  // Delete the message and clear session
+  if (ctx.session.baseMessageId) {
+    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
+    ctx.session.baseMessageId = null;
+  }
+  await ctx.replyWithMarkdown('Thank you for learning about Base!');
+  ctx.answerCbQuery();
+});
+
+// =================== Support Functionality ===================
+bot.hears(/ℹ️\s*Support/i, async (ctx) => {
+  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
+    [Markup.button.callback('📘 How It Works', 'support_how_it_works')],
+    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+    [Markup.button.callback('💬 Contact Support', 'support_contact')],
+    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
+  ]));
+});
+
+// =================== Handle Support Actions ===================
+bot.action('support_how_it_works', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
+  ctx.answerCbQuery();
+});
+
+bot.action('support_not_received', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
+  ctx.answerCbQuery();
+});
+
+bot.action('support_contact', async (ctx) => {
+  await ctx.replyWithMarkdown('You can contact our support team at [@maxcswap](https://t.me/maxcswap).');
+  ctx.answerCbQuery();
+});
+
+// =================== Handle "💰 Transactions" Button ===================
+bot.hears(/💰\s*Transactions/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
   try {
-    // Create Paycrest order
-    const paycrestOrder = await createPaycrestOrder(userId, amount, asset, chain, bankDetails);
+    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
 
-    // Initiate withdrawal to Paycrest receive address
-    const receiveAddress = paycrestOrder.receiveAddress;
-
-    // Determine Blockradar Asset ID
-    let blockradarAssetId;
-    switch (asset) {
-      case 'USDC':
-        blockradarAssetId = BLOCKRADAR_USDC_ASSET_ID;
-        break;
-      case 'USDT':
-        blockradarAssetId = BLOCKRADAR_USDT_ASSET_ID;
-        break;
-      default:
-        throw new Error(`Unsupported asset: ${asset}`);
+    if (transactionsSnapshot.empty) {
+      return await ctx.replyWithMarkdown('You have no transactions at the moment.');
     }
 
-    await withdrawFromBlockradar(chain, blockradarAssetId, receiveAddress, amount, paycrestOrder.id, { userId, originalTxHash: transactionHash });
+    let message = '💰 *Your Transactions*:\n\n';
 
-    // Update the deposit record with Paycrest order ID and withdrawal status
-    await db.collection('deposits').doc(transactionHash).update({
-      paycrestOrderId: paycrestOrder.id,
-      withdrawalStatus: 'initiated',
-      withdrawalAt: admin.firestore.FieldValue.serverTimestamp(),
+    transactionsSnapshot.forEach((doc) => {
+      const tx = doc.data();
+      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+      message += `*Status:* ${tx.status || 'Pending'}\n`;
+      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
+      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
     });
 
-    // Notify admin about the successful withdrawal
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ Withdrawal initiated for user ${userId}.\n\n` +
-      `*Reference ID:* ${paycrestOrder.id}\n` +
-      `*Amount:* ${amount} ${asset}\n` +
-      `*Network:* ${chain}\n` +
-      `*Withdrawal Address:* ${receiveAddress}\n`, { parse_mode: 'Markdown' });
-
-    logger.info(`Withdrawal initiated for user ${userId}, transactionHash: ${transactionHash}`);
-
-    return Promise.resolve();
+    await ctx.replyWithMarkdown(message);
   } catch (error) {
-    logger.error(`Error initiating withdrawal for user ${userId}: ${error.message}`);
-    throw new Error('Failed to initiate withdrawal.');
+    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
   }
-}
+});
+
+// =================== Admin Panel Functionality ===================
+
+// Handle Admin Menu Actions (Continued)
+bot.action(/admin_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
+  }
+
+  const action = ctx.match[1];
+
+  switch (action) {
+    case 'view_transactions':
+      // Handle viewing transactions
+      // (Already handled above)
+      break;
+
+    // Additional admin actions handled earlier
+
+    default:
+      await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
+  }
+});
+
+// =================== Send Message Scene ===================
+sendMessageScene.enter(async (ctx) => {
+  await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
+});
+
+sendMessageScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userIdToMessage = ctx.message.text.trim();
+
+  // Validate User ID
+  if (!/^\d{5,15}$/.test(userIdToMessage)) {
+    return ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a valid numeric User ID (5-15 digits):');
+  }
+
+  // Check if User Exists
+  const userDoc = await db.collection('users').doc(userIdToMessage).get();
+  if (!userDoc.exists) {
+    return ctx.replyWithMarkdown('❌ User ID not found. Please ensure the User ID is correct or try another one:');
+  }
+
+  // Proceed to next step
+  ctx.session.sendMessageStep = 2;
+  ctx.session.userIdToMessage = userIdToMessage;
+  await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user. You can also attach an image (receipt) with your message.');
+});
+
+sendMessageScene.on('photo', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userIdToMessage = ctx.session.userIdToMessage;
+
+  if (!userIdToMessage) {
+    return ctx.reply('❌ No User ID specified. Please start again.');
+  }
+
+  const photoArray = ctx.message.photo;
+  const highestResolutionPhoto = photoArray[photoArray.length - 1];
+  const fileId = highestResolutionPhoto.file_id;
+  const caption = ctx.message.caption || '';
+
+  try {
+    await bot.telegram.sendPhoto(userIdToMessage, fileId, { caption: caption, parse_mode: 'Markdown' });
+    await ctx.replyWithMarkdown('✅ Photo message sent successfully.');
+    logger.info(`Admin ${userId} sent photo message to user ${userIdToMessage}. Caption: ${caption}`);
+  } catch (error) {
+    logger.error(`Error sending photo to user ${userIdToMessage}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Error sending photo. Please ensure the User ID is correct and the user has not blocked the bot.');
+  }
+
+  // Reset Session Variables and Leave the Scene
+  delete ctx.session.userIdToMessage;
+  delete ctx.session.sendMessageStep;
+  ctx.scene.leave();
+});
+
+sendMessageScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userIdToMessage = ctx.session.userIdToMessage;
+
+  if (!userIdToMessage) {
+    return ctx.reply('❌ No User ID specified. Please start again.');
+  }
+
+  const messageContent = ctx.message.text.trim();
+
+  if (!messageContent) {
+    return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
+  }
+
+  try {
+    await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${messageContent}`, { parse_mode: 'Markdown' });
+    await ctx.replyWithMarkdown('✅ Text message sent successfully.');
+    logger.info(`Admin ${userId} sent text message to user ${userIdToMessage}: ${messageContent}`);
+  } catch (error) {
+    logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
+  }
+
+  // Reset Session Variables and Leave the Scene
+  delete ctx.session.userIdToMessage;
+  delete ctx.session.sendMessageStep;
+  ctx.scene.leave();
+});
+
+// Handle Scene Exit
+sendMessageScene.leave((ctx) => {
+  delete ctx.session.userIdToMessage;
+  delete ctx.session.sendMessageStep;
+});
 
 // =================== Webhook Handlers ===================
 
@@ -1456,8 +1674,7 @@ app.post('/webhook/blockradar', async (req, res) => {
   }
 });
 
-// =================== Support Functionality ===================
-
+// =================== Support and Tutorial Content ===================
 const detailedTutorials = {
   how_it_works: `
 **📘 How DirectPay Works**
@@ -1550,31 +1767,27 @@ If you haven't received your transaction, follow these steps to troubleshoot:
 `,
 };
 
-// =================== Handle "ℹ️ Support" Button ===================
-bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
-    [Markup.button.callback('📘 How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
-  ]));
-});
+// =================== Learn About Base with Pagination and Inline Updates ===================
 
-// =================== Handle Support Actions ===================
-bot.action('support_how_it_works', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_not_received', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@maxcswap](https://t.me/maxcswap).');
-  ctx.answerCbQuery();
-});
+// Learn About Base Content Pages
+const baseContent = [
+  {
+    title: 'Welcome to Base',
+    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
+  },
+  {
+    title: 'Why Choose Base?',
+    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
+  },
+  {
+    title: 'Getting Started',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
+  },
+  {
+    title: 'Learn More',
+    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
+  },
+];
 
 // =================== Handle "📘 Learn About Base" Button ===================
 bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
@@ -1626,26 +1839,6 @@ async function sendBaseContent(ctx, index, isNew = false) {
   }, 120000); // Delete after 2 minutes
 }
 
-// Define Base Content Pages
-const baseContent = [
-  {
-    title: 'Welcome to Base',
-    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
-  },
-  {
-    title: 'Why Choose Base?',
-    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
-  },
-  {
-    title: 'Getting Started',
-    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
-  },
-  {
-    title: 'Learn More',
-    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
-  },
-];
-
 // Handle Base Content Pagination
 bot.action(/base_page_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
@@ -1667,151 +1860,17 @@ bot.action('exit_base', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// =================== Handle "💰 Transactions" Button ===================
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const transactionsSnapshot = await db.collection('transactions').where('userId', '==', userId).orderBy('timestamp', 'desc').get();
+// =================== Support Functionality ===================
 
-    if (transactionsSnapshot.empty) {
-      return await ctx.replyWithMarkdown('You have no transactions at the moment.');
-    }
+// Handled above with detailedTutorials and support handlers
 
-    let message = '💰 *Your Transactions*:\n\n';
+// =================== Admin Functions ===================
 
-    transactionsSnapshot.forEach((doc) => {
-      const tx = doc.data();
-      message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-      message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-      message += `*Status:* ${tx.status || 'Pending'}\n`;
-      message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
-    });
+// Already handled above with admin_menu and respective actions
 
-    await ctx.replyWithMarkdown(message);
-  } catch (error) {
-    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
-  }
-});
+// =================== Webhook Handlers ===================
 
-// =================== Handle "📢 Broadcast Message" ===================
-
-// This functionality is already handled in the Admin Panel section above
-
-// =================== Handle "✏️ Edit Linked Bank Details" ===================
-
-// This functionality is handled by the bankLinkingScene
-
-// =================== Handle "🔧 Admin Panel" Button ===================
-
-// This functionality is handled by the Admin Menu section above
-
-// =================== Handle "🏦 Manage Banks" Button ===================
-
-// Placeholder for future implementation
-// Implement bank management functionalities as needed
-
-// =================== Handle Send Message Scene ===================
-sendMessageScene.enter(async (ctx) => {
-  await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
-});
-
-sendMessageScene.on('message', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  let userState;
-  try {
-    userState = await getUserState(userId);
-  } catch (error) {
-    logger.error(`Error fetching user state for ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (!ctx.session.sendMessageStep) {
-    // Step 1: Capture User ID
-    const userIdToMessage = ctx.message.text.trim();
-
-    // Validate User ID (should be numeric and reasonable length, e.g., Telegram IDs are typically between 5 to 15 digits)
-    if (!/^\d{5,15}$/.test(userIdToMessage)) {
-      return ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a valid numeric User ID (5-15 digits):');
-    }
-
-    // Optionally, verify if the User ID exists in your database
-    const userDoc = await db.collection('users').doc(userIdToMessage).get();
-    if (!userDoc.exists) {
-      return ctx.replyWithMarkdown('❌ User ID not found. Please ensure the User ID is correct or try another one:');
-    }
-
-    // Proceed to Step 2
-    ctx.session.sendMessageStep = 2;
-    ctx.session.userIdToMessage = userIdToMessage;
-    await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user. You can also attach an image (receipt) with your message.');
-  } else if (ctx.session.sendMessageStep === 2) {
-    // Step 2: Capture Message Content
-    const userIdToMessage = ctx.session.userIdToMessage;
-
-    if (ctx.message.photo) {
-      // Message contains a photo
-      const photoArray = ctx.message.photo;
-      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
-      const fileId = highestResolutionPhoto.file_id;
-      const caption = ctx.message.caption || '';
-
-      try {
-        // Send the photo with caption to the target user
-        await bot.telegram.sendPhoto(userIdToMessage, fileId, { caption: caption, parse_mode: 'Markdown' });
-        await ctx.replyWithMarkdown('✅ Photo message sent successfully.');
-        logger.info(`Admin ${userId} sent photo message to user ${userIdToMessage}. Caption: ${caption}`);
-      } catch (error) {
-        logger.error(`Error sending photo to user ${userIdToMessage}: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ Error sending photo. Please ensure the User ID is correct and the user has not blocked the bot.');
-      }
-    } else if (ctx.message.text) {
-      // Message contains only text
-      const messageContent = ctx.message.text.trim();
-
-      if (!messageContent) {
-        return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
-      }
-
-      try {
-        // Send the text message to the target user
-        await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${messageContent}`, { parse_mode: 'Markdown' });
-        await ctx.replyWithMarkdown('✅ Text message sent successfully.');
-        logger.info(`Admin ${userId} sent text message to user ${userIdToMessage}: ${messageContent}`);
-      } catch (error) {
-        logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
-      }
-    } else {
-      // Unsupported message type
-      await ctx.reply('❌ Unsupported message type. Please send text or a photo (receipt).');
-      return;
-    }
-
-    // Reset Session Variables and Leave the Scene
-    delete ctx.session.userIdToMessage;
-    delete ctx.session.sendMessageStep;
-    ctx.scene.leave();
-  }
-});
-
-// Handle Unsupported Message Types in SendMessageScene
-sendMessageScene.on('message', async (ctx) => {
-  if (ctx.session.sendMessageStep !== undefined) {
-    await ctx.reply('❌ Please send text messages or photos only.');
-  }
-});
-
-// Handle Scene Exit
-sendMessageScene.leave((ctx) => {
-  delete ctx.session.userIdToMessage;
-  delete ctx.session.sendMessageStep;
-});
-
-// =================== Handle "📈 View Current Rates" Refresh ===================
-// This functionality is already handled above
+// Paycrest and Blockradar webhooks handled above
 
 // =================== Telegram Webhook Setup ===================
 
