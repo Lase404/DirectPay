@@ -3,12 +3,12 @@ const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const express = require('express');
 const axios = require('axios');
 const crypto = require('crypto');
-const Bottleneck = require('bottleneck'); // For rate limiting
+const Bottleneck = require('bottleneck'); 
 const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
 const admin = require('firebase-admin');
-const Queue = require('bull'); // For background jobs
+const Queue = require('bull');
 require('dotenv').config();
 
 // =================== Logger Setup ===================
