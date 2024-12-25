@@ -11,7 +11,7 @@ const admin = require('firebase-admin');
 const Queue = require('bull');
 require('dotenv').config();
 
-// =================== Logger Setup ===================
+// =================== Logger Setup ==================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
