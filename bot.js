@@ -7,7 +7,6 @@ const crypto = require('crypto');
 const path = require('path');
 const fs = require('fs');
 const winston = require('winston');
-const Bottleneck = require('bottleneck');
 const PDFDocument = require('pdfkit'); // Added for PDF generation
 const blobStream = require('blob-stream'); // Added for handling PDF streams
 require('dotenv').config(); // Ensure to install dotenv and create a .env file
@@ -165,17 +164,198 @@ const bot = new Telegraf(BOT_TOKEN);
 // 1. Bank Linking Scene
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 
+bankLinkingScene.enter(async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = ctx.session.walletIndex;
+
+  try {
+    const userState = await getUserState(userId);
+    const wallet = userState.wallets[walletIndex];
+
+    if (!wallet) {
+      await ctx.reply('⚠️ Invalid wallet selected.');
+      return ctx.scene.leave();
+    }
+
+    await ctx.reply('🏦 *Link Your Bank Account*\n\nPlease enter your bank account number (10 digits):');
+    ctx.session.processType = 'link_bank';
+    // Set a timeout for user to respond within 2 minutes
+    ctx.session.bankLinkingTimeout = setTimeout(() => {
+      ctx.reply('⌛️ Bank linking timed out. Please try again.');
+      ctx.scene.leave();
+    }, 120000); // 2 minutes
+  } catch (error) {
+    logger.error(`Error entering bank linking scene for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred. Please try again later.');
+    ctx.scene.leave();
+  }
+});
+
+bankLinkingScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = ctx.session.walletIndex;
+  const processType = ctx.session.processType;
+
+  if (processType === 'link_bank') {
+    const accountNumber = ctx.message.text.trim();
+
+    // Validate account number (simple regex for 10 digits)
+    if (!/^\d{10}$/.test(accountNumber)) {
+      await ctx.reply('❌ Invalid account number. Please enter a valid 10-digit bank account number:');
+      return;
+    }
+
+    try {
+      const userState = await getUserState(userId);
+      const wallet = userState.wallets[walletIndex];
+
+      if (!wallet) {
+        await ctx.reply('⚠️ Invalid wallet selected.');
+        return ctx.scene.leave();
+      }
+
+      // Prompt for bank selection
+      const availableBanks = bankList.map(bank => bank.name);
+      await ctx.reply('🏦 *Select Your Bank:*', Markup.inlineKeyboard([
+        availableBanks.map(bank => Markup.button.callback(bank, `select_bank_${bank.replace(/\s+/g, '_')}`))
+      ]));
+      ctx.session.accountNumber = accountNumber;
+      ctx.session.processType = 'select_bank';
+      // Reset the timeout
+      clearTimeout(ctx.session.bankLinkingTimeout);
+      ctx.session.bankLinkingTimeout = setTimeout(() => {
+        ctx.reply('⌛️ Bank linking timed out. Please try again.');
+        ctx.scene.leave();
+      }, 120000); // 2 minutes
+    } catch (error) {
+      logger.error(`Error processing bank account number for user ${userId}: ${error.message}`);
+      await ctx.reply('⚠️ An error occurred. Please try again later.');
+      ctx.scene.leave();
+    }
+  }
+});
+
+// Handle Bank Selection
+bankLinkingScene.action(/select_bank_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = ctx.session.walletIndex;
+  const selectedBankName = ctx.match[1].replace(/_/g, ' ');
+
+  try {
+    const userState = await getUserState(userId);
+    const wallet = userState.wallets[walletIndex];
+
+    if (!wallet) {
+      await ctx.reply('⚠️ Invalid wallet selected.');
+      return ctx.scene.leave();
+    }
+
+    const bank = bankList.find(b => b.name.toLowerCase() === selectedBankName.toLowerCase());
+
+    if (!bank) {
+      await ctx.reply('⚠️ Invalid bank selected.');
+      return ctx.scene.leave();
+    }
+
+    // Verify the bank account using Paystack
+    const verificationResult = await verifyBankAccount(ctx.session.accountNumber, bank.code);
+
+    if (!verificationResult || !verificationResult.data || verificationResult.data.account_name === null) {
+      await ctx.reply('⚠️ Unable to verify your bank account. Please ensure the details are correct and try again.');
+      return ctx.scene.leave();
+    }
+
+    const accountName = verificationResult.data.account_name;
+
+    // Update the wallet with bank details
+    wallet.bank = {
+      bankName: bank.name,
+      accountNumber: ctx.session.accountNumber,
+      accountName: accountName
+    };
+
+    // Update Firestore with the new bank details
+    await updateUserState(userId, {
+      wallets: userState.wallets
+    });
+
+    await ctx.replyWithMarkdown(`✅ *Bank Account Linked Successfully!*\n\n*Bank:* ${bank.name}\n*Account Number:* ****${ctx.session.accountNumber.slice(-4)}\n*Account Name:* ${accountName}`);
+
+    ctx.scene.leave();
+  } catch (error) {
+    logger.error(`Error linking bank for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while linking your bank account. Please try again later.');
+    ctx.scene.leave();
+  }
+});
+
 // 2. Send Message Scene
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
 
+sendMessageScene.enter(async (ctx) => {
+  await ctx.reply('📩 *Send a Message to a User*\n\nPlease enter the User ID of the recipient:');
+});
+
+sendMessageScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const recipientId = ctx.message.text.trim();
+
+  if (!/^\d+$/.test(recipientId)) {
+    await ctx.reply('❌ Invalid User ID. Please enter a numeric User ID:');
+    return;
+  }
+
+  ctx.session.recipientId = recipientId;
+  await ctx.reply('💬 Please enter the message you want to send:');
+  ctx.session.processType = 'awaiting_message_text';
+});
+
+sendMessageScene.on('text', async (ctx) => {
+  if (ctx.session.processType === 'awaiting_message_text') {
+    const userId = ctx.from.id.toString();
+    const recipientId = ctx.session.recipientId;
+    const messageText = ctx.message.text.trim();
+
+    try {
+      // Send the message to the recipient
+      await bot.telegram.sendMessage(recipientId, `📩 *Message from Admin:* ${messageText}`, { parse_mode: 'Markdown' });
+      await ctx.reply('✅ Message sent successfully!');
+      ctx.scene.leave();
+    } catch (error) {
+      logger.error(`Error sending message from admin ${userId} to user ${recipientId}: ${error.message}`);
+      await ctx.reply('⚠️ Failed to send the message. Please ensure the User ID is correct and try again.');
+      ctx.scene.leave();
+    }
+  }
+});
+
+// Handle Scene Timeout
+sendMessageScene.on('message', async (ctx) => {
+  if (ctx.scene.state.timeout) {
+    return;
+  }
+});
+
 // 3. Receipt Generation Scene
 const receiptGenerationScene = new Scenes.BaseScene('receipt_generation_scene');
+
+receiptGenerationScene.enter(async (ctx) => {
+  await ctx.reply('🧾 *Generate Transaction Receipt*\n\nChoose an option:', Markup.inlineKeyboard([
+    [Markup.button.callback('📄 All Transactions', 'receipt_all')],
+    [Markup.button.callback('🔍 Specific Transaction', 'receipt_specific')],
+    [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
+  ]));
+});
+
+receiptGenerationScene.leave(() => {
+  delete ctx.session.transactions;
+});
 
 // =================== Scenes and Middleware Setup ===================
 const stage = new Scenes.Stage([
   bankLinkingScene,
   sendMessageScene,
-  receiptGenerationScene // Register the new scene here
+  receiptGenerationScene
 ]);
 
 bot.use(session());
@@ -724,7 +904,8 @@ bot.action('settings_edit_bank', async (ctx) => {
     const userState = await getUserState(userId);
     
     if (userState.wallets.length === 0) {
-      return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+      await ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+      return ctx.answerCbQuery();
     }
 
     if (userState.wallets.length === 1) {
@@ -753,7 +934,6 @@ bot.action('settings_support', async (ctx) => {
     [Markup.button.callback('💬 Contact Support', 'support_contact')],
     [Markup.button.callback('🔙 Back to Settings', 'settings_back_main')],
   ]));
-  ctx.answerCbQuery();
 });
 
 bot.action('settings_back_main', async (ctx) => {
@@ -791,6 +971,8 @@ bot.action('open_admin_panel', async (ctx) => {
       ctx.session.adminMessageId = null;
     }
   }, 300000); // Delete after 5 minutes
+
+  ctx.answerCbQuery();
 });
 
 // Handle Admin Menu Actions
@@ -801,9 +983,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
     return ctx.reply('⚠️ Unauthorized access.');
   }
 
-  const action = ctx.match[1];
+  const adminAction = ctx.match[1];
 
-  switch (action) {
+  switch (adminAction) {
     case 'view_transactions':
       // Handle viewing transactions
       await handleAdminViewTransactions(ctx);
@@ -908,9 +1090,9 @@ async function handleAdminMarkPaid(ctx) {
         await bot.telegram.sendMessage(
           txData.userId,
           `🎉 *Transaction Successful!*\n\n` +
-          `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n` +
+          `*Reference ID:* \`${txData.referenceId}\`\n` +
           `*Amount Paid:* ${txData.amount} ${txData.asset}\n` +
-          `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
+          `*Bank:* ${txData.bankDetails.bankName}\n` +
           `*Account Name:* ${accountName}\n` +
           `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
           `*Payout (NGN):* ₦${payout}\n\n` +
@@ -980,16 +1162,6 @@ async function handleAdminBroadcastMessage(ctx) {
   }
 }
 
-// =================== Handle Admin Send Message to User ===================
-async function handleAdminSendMessage(ctx) {
-  await ctx.scene.enter('send_message_scene');
-}
-
-// =================== Handle Admin Manage Banks ===================
-async function handleAdminManageBanks(ctx) {
-  await ctx.replyWithMarkdown('🏦 **Bank Management**\n\nComing Soon!', { parse_mode: 'Markdown', reply_markup: getAdminMenu().reply_markup });
-}
-
 // =================== Handle Admin Back to Main ===================
 async function handleAdminBackToMain(ctx) {
   await greetUser(ctx);
@@ -1000,45 +1172,25 @@ async function handleAdminBackToMain(ctx) {
   }
 }
 
-// =================== Handle Admin Actions ===================
-async function handleAdminActions(ctx, adminAction) {
-  const userId = ctx.from.id.toString();
-
-  switch (adminAction) {
-    case 'view_transactions':
-      // Handle viewing transactions
-      await handleAdminViewTransactions(ctx);
-      break;
-    case 'send_message':
-      // Handle sending messages
-      await ctx.scene.enter('send_message_scene');
-      ctx.answerCbQuery();
-      break;
-    case 'mark_paid':
-      // Handle marking transactions as paid
-      await handleAdminMarkPaid(ctx);
-      break;
-    case 'view_users':
-      // Handle viewing all users
-      await handleAdminViewUsers(ctx);
-      break;
-    case 'broadcast_message':
-      // Handle broadcasting messages
-      await handleAdminBroadcastMessage(ctx);
-      break;
-    case 'manage_banks':
-      // Handle managing banks
-      await handleAdminManageBanks(ctx);
-      break;
-    case 'back_to_main':
-      // Handle going back to admin menu
-      await handleAdminBackToMain(ctx);
-      break;
-    default:
-      logger.warn(`Unhandled admin action: ${adminAction}`);
-      await ctx.answerCbQuery('⚠️ Unknown admin action.', { show_alert: true });
-  }
+// =================== Handle Admin Send Message to User ===================
+async function handleAdminSendMessage(ctx) {
+  await ctx.scene.enter('send_message_scene');
 }
+
+// =================== Handle Receipt Generation Callbacks ===================
+bot.action('receipt_all', async (ctx) => {
+  await handleReceiptAll(ctx);
+});
+
+bot.action('receipt_specific', async (ctx) => {
+  await handleReceiptSpecific(ctx);
+});
+
+// =================== Handle Select Specific Transaction ===================
+bot.action(/select_tx_(.+)/, async (ctx) => {
+  const transactionId = ctx.match[1];
+  await handleSelectTransaction(ctx, transactionId);
+});
 
 // =================== Handle "📘 Learn About Base" Button ===================
 bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
@@ -1146,11 +1298,11 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
 
 // =================== Admin Panel Functionality ===================
 
-// Already handled above with admin_menu and respective actions
+// Handled above with Admin Menu Handlers
 
 // =================== Receipt Generation Scene ===================
 
-// Already defined above
+// Handled above with Receipt Generation Scene Definition
 
 // =================== Webhook Handlers ===================
 
@@ -1684,9 +1836,11 @@ bot.on('callback_query', async (ctx) => {
 });
 
 // =================== Handle "📘 Learn About Base" Button ===================
-// Already handled above with sendBaseContent
+bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
+  await sendBaseContent(ctx, 0, true);
+});
 
-// =================== Support Functionality ===================
+// =================== Handle Support Actions ===================
 // Already handled above
 
 // =================== Handle "💰 Transactions" Button ===================
@@ -1697,35 +1851,6 @@ bot.on('callback_query', async (ctx) => {
 
 // =================== Receipt Generation Scene ===================
 // Already handled above
-
-// =================== Webhook Handlers ===================
-// Already handled above
-
-// =================== Webhook Handlers End ===================
-
-// =================== Telegram Webhook Setup ===================
-
-// Set Telegram webhook
-(async () => {
-  try {
-    await bot.telegram.setWebhook(TELEGRAM_WEBHOOK_URL);
-    logger.info(`Telegram webhook set to ${TELEGRAM_WEBHOOK_URL}`);
-  } catch (error) {
-    logger.error(`Failed to set Telegram webhook: ${error.message}`);
-    process.exit(1);
-  }
-})();
-
-// Telegram Webhook Handler
-app.post(TELEGRAM_WEBHOOK_PATH, (req, res) => {
-  bot.handleUpdate(req.body, res);
-});
-
-// =================== Express Server ===================
-const port = process.env.PORT || 4000;
-app.listen(port, () => {
-  logger.info(`Webhook server running on port ${port}`);
-});
 
 // =================== Graceful Shutdown ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
@@ -1875,18 +2000,34 @@ async function handleSettingsSupport(ctx) {
   ]));
 }
 
-// =================== Scenes and Middleware Registration ===================
-// (Already done at the beginning)
+// =================== Admin Functions ===================
 
-// =================== Bank Linking Scene Definition ===================
-// (Already defined above)
+// Handle Admin Send Message
+// Already handled with send_message_scene
 
-// =================== Send Message Scene Definition ===================
-// (Already defined above)
+// Handle Admin Broadcast Message
+// Already handled with broadcast_message
 
-// =================== Receipt Generation Scene Definition ===================
-// (Already defined above)
+// =================== Telegram Webhook Setup ===================
 
-// =================== Graceful Shutdown ===================
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+// Set Telegram webhook
+(async () => {
+  try {
+    await bot.telegram.setWebhook(TELEGRAM_WEBHOOK_URL);
+    logger.info(`Telegram webhook set to ${TELEGRAM_WEBHOOK_URL}`);
+  } catch (error) {
+    logger.error(`Failed to set Telegram webhook: ${error.message}`);
+    process.exit(1);
+  }
+})();
+
+// Telegram Webhook Handler
+app.post(TELEGRAM_WEBHOOK_PATH, (req, res) => {
+  bot.handleUpdate(req.body, res);
+});
+
+// =================== Express Server ===================
+const port = process.env.PORT || 4000;
+app.listen(port, () => {
+  logger.info(`Webhook server running on port ${port}`);
+});
