@@ -8,6 +8,9 @@ const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
 const admin = require('firebase-admin');
+const pRetry = require('p-retry');
+const pTimeout = require('p-timeout');
+const Queue = require('bull'); // For background jobs
 require('dotenv').config();
 
 // =================== Logger Setup ===================
@@ -68,6 +71,71 @@ admin.initializeApp({
 });
 
 const db = admin.firestore();
+
+// =================== Background Job Queue Setup ===================
+const withdrawalQueue = new Queue('withdrawals', {
+  redis: {
+    host: '127.0.0.1',
+    port: 6379,
+    // password: 'your_redis_password', // If applicable
+  }
+});
+
+// Process withdrawal jobs
+withdrawalQueue.process(async (job) => {
+  const { userId, amount, asset, chain, bankDetails, originalTxHash } = job.data;
+
+  try {
+    // Create Paycrest order
+    const paycrestOrder = await createPaycrestOrder(userId, amount, asset, chain, bankDetails);
+
+    // Initiate withdrawal to Paycrest receive address
+    const receiveAddress = paycrestOrder.receiveAddress;
+
+    // Determine Blockradar Asset ID
+    let blockradarAssetId;
+    switch (asset) {
+      case 'USDC':
+        blockradarAssetId = process.env.BLOCKRADAR_USDC_ASSET_ID || 'YOUR_BLOCKRADAR_USDC_ASSET_ID'; // Ensure this environment variable is set
+        break;
+      case 'USDT':
+        blockradarAssetId = process.env.BLOCKRADAR_USDT_ASSET_ID || 'YOUR_BLOCKRADAR_USDT_ASSET_ID'; // Ensure this environment variable is set
+        break;
+      default:
+        throw new Error(`Unsupported asset: ${asset}`);
+    }
+
+    await withdrawFromBlockradar(chain, blockradarAssetId, receiveAddress, amount, paycrestOrder.id, { userId, originalTxHash });
+
+    // Update the deposit record with Paycrest order ID and withdrawal status
+    await db.collection('deposits').doc(originalTxHash).update({
+      paycrestOrderId: paycrestOrder.id,
+      withdrawalStatus: 'initiated',
+      withdrawalAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+
+    // Notify admin about the successful withdrawal
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ Withdrawal initiated for user ${userId}.\n\n` +
+      `*Reference ID:* ${paycrestOrder.id}\n` +
+      `*Amount:* ${amount} ${asset}\n` +
+      `*Network:* ${chain}\n` +
+      `*Withdrawal Address:* ${receiveAddress}\n`, { parse_mode: 'Markdown' });
+
+    return Promise.resolve();
+  } catch (error) {
+    logger.error(`Error processing withdrawal job for transactionHash ${job.data.originalTxHash}: ${error.message}`);
+    // Update the deposit record with failure status
+    await db.collection('deposits').doc(originalTxHash).update({
+      withdrawalStatus: 'failed',
+      withdrawalError: error.message,
+      status: 'failed',
+      sweptAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    // Notify admin about the failure
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Failed to initiate withdrawal for user ${userId} associated with transactionHash ${originalTxHash}: ${error.message}`);
+    return Promise.reject(error);
+  }
+});
 
 // =================== Helper Data ===================
 
@@ -228,50 +296,24 @@ async function verifyBankAccount(accountNumber, bankCode) {
   }
 }
 
-// Function to get the main menu with support option
-function getMainMenu(showWallets = false, showBankLink = false) {
-  const buttons = [
-    [Markup.button.text('💼 Generate Wallet'), Markup.button.text('💼 View Wallet')],
-    [Markup.button.text('⚙️ Settings'), Markup.button.text('💰 Transactions')],
-    [Markup.button.text('ℹ️ Support'), Markup.button.text('📈 View Current Rates')],
-  ];
-
-  if (showWallets) {
-    buttons.push([Markup.button.callback('🔄 Refresh Rates', 'refresh_rates')]);
-  }
-
-  return Markup.keyboard(buttons).resize().oneTime();
-}
-
-// Function to get settings menu
-function getSettingsMenu() {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback('✏️ Edit Linked Bank Details', 'settings_edit_bank')],
-    [Markup.button.callback('🔄 Generate New Wallet', 'settings_generate_wallet')],
-    [Markup.button.callback('💬 Contact Support', 'settings_contact_support')],
-    [Markup.button.callback('🧾 Generate Transaction Receipt', 'settings_generate_receipt')],
-  ]);
-}
-
-// Function to get admin menu with new options
-function getAdminMenu() {
-  return Markup.inlineKeyboard([
-    [Markup.button.callback('📋 View Transactions', 'admin_view_transactions')],
-    [Markup.button.callback('👥 User Statistics', 'admin_user_statistics')],
-    [Markup.button.callback('🔍 Search Transaction', 'admin_search_transaction')],
-    [Markup.button.callback('💬 Send Message', 'admin_send_message')],
-    [Markup.button.callback('✅ Mark Transactions as Paid', 'admin_mark_paid')],
-    [Markup.button.callback('👥 View All Users', 'admin_view_users')],
-    [Markup.button.callback('📢 Broadcast Message', 'admin_broadcast_message')],
-    [Markup.button.callback('🏦 Manage Banks', 'admin_manage_banks')],
-    [Markup.button.callback('🔙 Back to Main Menu', 'admin_back_to_main')],
-  ]);
+// Function to map chain and asset to Blockradar parameters (placeholder)
+function mapToBlockradar(chain, asset) {
+  // Implement actual mapping logic here
+  return {
+    chain: chain,
+    assetId: 'mapped_asset_id', // Replace with actual mapping
+  };
 }
 
 // =================== Scenes Definition ===================
 const stage = new Scenes.Stage([
   // Define all scenes here
   // Ensure each scene is defined only once
+  bankLinkingScene,
+  supportScene,
+  sendMessageScene,
+  searchTransactionScene,
+  // Add other scenes as needed
 ]);
 
 // =================== Bank Linking Scene ===================
@@ -924,7 +966,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
               `*Payout (NGN):* ₦${payout}\n\n` +
               `🔹 *Chain:* ${txData.chain}\n` +
-              `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` +
+              `*Date:* ${new Date(txData.timestamp.toDate()).toLocaleString()}\n\n` +
               `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
               { parse_mode: 'Markdown' }
             );
@@ -1108,7 +1150,7 @@ bot.use(session());
 bot.use(stage.middleware());
 
 // =================== Greet User Function ===================
-// Note: This function was duplicated in the original code. Ensure it's defined only once.
+// Note: Ensure this function is defined only once.
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
   let userState;
@@ -1272,16 +1314,19 @@ bot.action(/settings_(.+)/, async (ctx) => {
     case 'edit_bank':
       // Start bank linking scene
       try {
-        await ctx.reply('🔗 *Edit Linked Bank Details*\n\nPlease select the wallet you want to link a bank to:', Markup.inlineKeyboard([
-          // Dynamically generate buttons based on user's wallets
-          // For simplicity, assuming wallets are indexed
-          [Markup.button.callback('Wallet 1', 'select_wallet_0')],
-          [Markup.button.callback('Wallet 2', 'select_wallet_1')],
-          [Markup.button.callback('Wallet 3', 'select_wallet_2')],
-          [Markup.button.callback('Wallet 4', 'select_wallet_3')],
-          [Markup.button.callback('Wallet 5', 'select_wallet_4')],
-          [Markup.button.callback('❌ Cancel', 'settings_cancel')]
-        ]));
+        // Fetch user wallets to dynamically create buttons
+        let userState = await getUserState(userId);
+        if (userState.wallets.length === 0) {
+          return ctx.reply('❌ You have no wallets to link a bank account. Please generate a wallet first.');
+        }
+
+        const walletButtons = userState.wallets.map((wallet, index) => [
+          Markup.button.callback(`Wallet ${index + 1}`, `select_wallet_${index}`)
+        ]);
+
+        walletButtons.push([Markup.button.callback('❌ Cancel', 'settings_cancel')]);
+
+        await ctx.reply('🔗 *Edit Linked Bank Details*\n\nPlease select the wallet you want to link a bank to:', Markup.inlineKeyboard(walletButtons));
       } catch (error) {
         logger.error(`Error accessing bank settings for user ${userId}: ${error.message}`);
         await ctx.reply('⚠️ An error occurred while accessing bank settings. Please try again later.');
@@ -1623,43 +1668,26 @@ app.post('/webhook/blockradar', async (req, res) => {
           { parse_mode: 'Markdown' }
         );
 
-        // Create Paycrest order
-        const paycrestOrder = await createPaycrestOrder(userId, amount, asset, chainRaw, wallet.bank); // Pass token amount
-
-        // Initiate withdrawal to Paycrest receive address
-        const receiveAddress = paycrestOrder.receiveAddress;
-
-        // Determine Blockradar Asset ID
-        let blockradarAssetId;
-        switch (asset) {
-          case 'USDC':
-            blockradarAssetId = process.env.BLOCKRADAR_USDC_ASSET_ID || 'YOUR_BLOCKRADAR_USDC_ASSET_ID'; // Ensure this environment variable is set
-            break;
-          case 'USDT':
-            blockradarAssetId = process.env.BLOCKRADAR_USDT_ASSET_ID || 'YOUR_BLOCKRADAR_USDT_ASSET_ID'; // Ensure this environment variable is set
-            break;
-          default:
-            throw new Error(`Unsupported asset: ${asset}`);
-        }
-
-        await withdrawFromBlockradar(chainRaw, blockradarAssetId, receiveAddress, amount, paycrestOrder.id, { userId, originalTxHash: transactionHash });
-
-        // Update the deposit record with Paycrest order ID and withdrawal status
-        await db.collection('deposits').doc(transactionHash).update({
-          paycrestOrderId: paycrestOrder.id,
-          withdrawalStatus: 'initiated',
-          withdrawalAt: admin.firestore.FieldValue.serverTimestamp(),
+        // Enqueue a withdrawal job to process asynchronously
+        withdrawalQueue.add({
+          userId,
+          amount,
+          asset,
+          chain: chainRaw,
+          bankDetails: wallet.bank,
+          originalTxHash: transactionHash
         });
 
-        // Optionally, notify admin about the successful withdrawal
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ Withdrawal initiated for user ${userId}.\n\n` +
+        // Notify admin about the successful deposit
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ *Payment Completed*\n\n` +
+          `*User ID:* ${userId}\n` +
           `*Reference ID:* ${referenceId}\n` +
-          `*Paycrest Order ID:* ${paycrestOrder.id}\n` +
           `*Amount:* ${amount} ${asset}\n` +
-          `*Network:* ${chainRaw}\n` +
-          `*Withdrawal Address:* ${receiveAddress}\n`, { parse_mode: 'Markdown' });
+          `*Bank:* ${bankName}\n` +
+          `*Account Number:* ****${bankAccount.slice(-4)}\n` +
+          `*Date:* ${new Date(depositData.timestamp.toDate()).toLocaleString()}\n`, { parse_mode: 'Markdown' });
 
-        res.status(200).send('Withdrawal initiated successfully.');
+        res.status(200).send('OK');
       } catch (error) {
         logger.error(`Error processing confirmed deposit for transactionHash ${transactionHash}: ${error.message}`);
         // Update the deposit record with failure status
