@@ -8,8 +8,6 @@ const fs = require('fs');
 const path = require('path');
 const winston = require('winston');
 const admin = require('firebase-admin');
-const pRetry = require('p-retry');
-const pTimeout = require('p-timeout');
 const Queue = require('bull'); // For background jobs
 require('dotenv').config();
 
@@ -73,12 +71,18 @@ admin.initializeApp({
 const db = admin.firestore();
 
 // =================== Background Job Queue Setup ===================
+const webhookQueue = new Queue('webhook-processing', {
+  redis: { host: '127.0.0.1', port: 6379 }, // Adjust as per your Redis setup
+});
+
 const withdrawalQueue = new Queue('withdrawals', {
-  redis: {
-    host: '127.0.0.1',
-    port: 6379,
-    // password: 'your_redis_password', // If applicable
-  }
+  redis: { host: '127.0.0.1', port: 6379 }, // Adjust as per your Redis setup
+});
+
+// Process webhook jobs
+webhookQueue.process(async (job) => {
+  const { event } = job.data;
+  // Implement your webhook processing logic here
 });
 
 // Process withdrawal jobs
@@ -132,7 +136,7 @@ withdrawalQueue.process(async (job) => {
       sweptAt: admin.firestore.FieldValue.serverTimestamp(),
     });
     // Notify admin about the failure
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Failed to initiate withdrawal for user ${userId} associated with transactionHash ${originalTxHash}: ${error.message}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Failed to initiate withdrawal for user associated with transactionHash ${originalTxHash}: ${error.message}`);
     return Promise.reject(error);
   }
 });
@@ -313,6 +317,7 @@ const stage = new Scenes.Stage([
   supportScene,
   sendMessageScene,
   searchTransactionScene,
+  broadcastMessageScene, // Ensure this scene is defined
   // Add other scenes as needed
 ]);
 
@@ -718,7 +723,7 @@ searchTransactionScene.on('text', async (ctx) => {
     message += `• *Amount:* ${transactionData.amount || 'N/A'} ${transactionData.asset || 'N/A'}\n`;
     message += `• *Status:* ${transactionData.status || 'Pending'}\n`;
     message += `• *Transaction Hash:* \`${transactionData.transactionHash || 'N/A'}\`\n`;
-    message += `• *Date:* ${transactionData.timestamp ? transactionData.timestamp.toDate().toLocaleString() : 'N/A'}\n`;
+    message += `• *Date:* ${transactionData.timestamp ? new Date(transactionData.timestamp.toDate()).toLocaleString() : 'N/A'}\n`;
     message += `• *Chain:* ${transactionData.chain || 'N/A'}\n`;
     // Add more fields as necessary
     
@@ -808,7 +813,7 @@ bot.action(/update_status_(.+)_(.+)/, async (ctx) => {
   }
 });
 
-// =================== Additional Admin Panel Actions ===================
+// =================== Admin Panel Actions ===================
 
 // Entry point for Admin Panel
 bot.action('open_admin_panel', async (ctx) => {
@@ -857,7 +862,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
         transactionsSnapshot.forEach((doc) => {
           const tx = doc.data();
-          message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+          message += `• *Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
           message += `*User ID:* ${tx.userId || 'N/A'}\n`;
           message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
           message += `*Status:* ${tx.status || 'Pending'}\n`;
@@ -1034,7 +1039,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
 
     case 'admin_back_to_main':
       // Return to the main menu
-      await greetUser(ctx); // Implement greetUser to send the main menu to the admin
+      await greetUser(ctx); // Implement greetUser to send the admin menu to the admin
       // Delete the admin panel message
       if (ctx.session.adminMessageId) {
         await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
@@ -1498,7 +1503,6 @@ app.post('/webhook/paycrest', async (req, res) => {
 });
 
 // =================== Blockradar Webhook Handler with Idempotency ===================
-// Note: Removed duplicate webhook handler and ensured only one definition exists.
 
 app.post('/webhook/blockradar', async (req, res) => {
   try {
