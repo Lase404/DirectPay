@@ -9,6 +9,7 @@ const fs = require('fs');
 const winston = require('winston');
 const Bottleneck = require('bottleneck');
 require('dotenv').config(); // Ensure to install dotenv and create a .env file
+
 // Logger Setup
 const logger = winston.createLogger({
   level: 'info',
@@ -1603,7 +1604,7 @@ app.post('/webhook/paycrest', async (req, res) => {
             `*Cash amount:* NGN ${txData.payout}\n` +
             `*Network:* ${txData.chain}\n` +
             `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
-            `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
+            `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`,
             { parse_mode: 'Markdown' }
           );
         } catch (error) {
@@ -1665,6 +1666,15 @@ app.post('/webhook/blockradar', async (req, res) => {
         logger.error('Webhook missing wallet address.');
         return res.status(400).send('Missing wallet address.');
       }
+
+      // **Duplicate Check Start**
+      // Check if a transaction with the same hash already exists
+      const existingTxSnapshot = await db.collection('transactions').where('transactionHash', '==', transactionHash).get();
+      if (!existingTxSnapshot.empty) {
+        logger.info(`Transaction with hash ${transactionHash} already exists. Skipping.`);
+        return res.status(200).send('OK');
+      }
+      // **Duplicate Check End**
 
       // Find user by wallet address
       const usersSnapshot = await db.collection('users').where('walletAddresses', 'array-contains', walletAddress).get();
@@ -1728,11 +1738,15 @@ app.post('/webhook/blockradar', async (req, res) => {
         messageId: null // To be set after sending the pending message
       });
 
-      // Send Pending Message to User
+      // Send Detailed Pending Message to User
       const pendingMessage = await bot.telegram.sendMessage(userId,
-        `Hello ${userFirstName},\n\n` +
-        `Your DirectPay order is being processed... ⏳\n\n` +
-        `Please wait while we credit your account.`,
+        `🎉 *Deposit Received!*\n\n` +
+        `*Reference ID:* \`${referenceId}\`\n` +
+        `*Amount Deposited:* ${amount} ${asset}\n` +
+        `*Network:* ${chainRaw}\n\n` +
+        `🔄 *Your order has begun processing!* ⏳\n\n` +
+        `We are converting your crypto to NGN at the current exchange rate of ₦${rate} per ${asset}. Your cash will be credited to your linked bank account shortly.\n\n` +
+        `Thank you for using *DirectPay*!`,
         { parse_mode: 'Markdown' }
       );
 
@@ -1824,11 +1838,12 @@ app.post('/webhook/blockradar', async (req, res) => {
       logger.info(`Transaction stored for user ${userId}: Reference ID ${paycrestOrder.id}`);
 
       // Update User's Pending Message to Final Success Message
-      const finalMessage = `Hello ${userFirstName},\n\n` +
+      const finalMessage = `🎉 *Funds Credited Successfully!*\n\n` +
+        `Hello ${userFirstName},\n\n` +
         `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
-        `*Crypto amount:* ${amount} ${asset}\n` +
-        `*Cash amount:* NGN ${ngnAmount}\n` +
-        `*Network:* ${chainRaw}\n` +
+        `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
+        `*Cash amount:* NGN ${txData.payout}\n` +
+        `*Network:* ${txData.chain}\n` +
         `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
         `To help us keep improving our services, please rate your experience with us.`;
 
