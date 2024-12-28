@@ -45,6 +45,7 @@ const MAX_WALLETS = 5;
 const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY;
 
 const TELEGRAM_WEBHOOK_PATH = process.env.TELEGRAM_WEBHOOK_PATH || '/webhook/telegram';
+const WEBHOOK_DOMAIN = process.env.WEBHOOK_DOMAIN
 const TELEGRAM_WEBHOOK_URL = `${WEBHOOK_DOMAIN}${TELEGRAM_WEBHOOK_PATH}`;
 
 // =================== Blockradar API Keys Mapping ===================
