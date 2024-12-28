@@ -1968,9 +1968,13 @@ async function createPaycrestOrder(userId, amount, token, chain, recipientDetail
   }
 })();
 
-app.post(process.env.TELEGRAM_WEBHOOK_PATH, (req, res) => {
+const TELEGRAM_WEBHOOK_PATH = process.env.TELEGRAM_WEBHOOK_PATH || '/webhook/telegram';
+console.log(`TELEGRAM_WEBHOOK_PATH is set to: ${TELEGRAM_WEBHOOK_PATH}`);
+
+app.post(TELEGRAM_WEBHOOK_PATH, (req, res) => {
   bot.handleUpdate(req.body, res);
 });
+
 
 // =================== Start Express Server ===================
 const port = process.env.PORT || 4000;
