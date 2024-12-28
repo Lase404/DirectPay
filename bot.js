@@ -12,7 +12,7 @@ const path = require('path');
 // =================== Firebase Admin Initialization ===================
 
 admin.initializeApp({
-  credential: admin.credential.cert(require('./serviceAccountKey.json')),
+  credential: admin.credential.cert(require('./directpay.json')),
 });
 const db = admin.firestore();
 
