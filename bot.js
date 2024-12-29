@@ -238,8 +238,7 @@ const getSettingsMenu = () =>
     [Markup.button.callback('✏️ Edit Linked Bank Details', 'settings_edit_bank')],
     [Markup.button.callback('💬 Support', 'settings_support')],
     [Markup.button.callback('🧾 Generate Transaction Receipt', 'settings_generate_receipt')],
-    [Markup.button.callback('🔍 Get Username from User ID', 'admin_get_username')], // New admin function
-    [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
+    [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')]
   ]);
 
 // Admin Menu
@@ -620,8 +619,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     // Add options for managing wallets
     message += `*Options:*\n`;
     const inlineKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('➕ Add New Wallet', 'add_new_wallet')],
-      [Markup.button.callback('🔄 Refresh Wallets', 'refresh_wallets')]
+      [Markup.button.callback('➕ Add New Wallet', 'add_new_wallet')]
     ]);
 
     await ctx.replyWithMarkdown(message, inlineKeyboard);
