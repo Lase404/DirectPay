@@ -171,9 +171,8 @@ const bot = new Telegraf(BOT_TOKEN);
 const stage = new Scenes.Stage();
 const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
 const sendMessageScene = new Scenes.BaseScene('send_message_scene');
-const receiptGenerationScene = new Scenes.BaseScene('receipt_generation_scene'); // Ensure this scene is defined
 const getUsernameScene = new Scenes.BaseScene('get_username_scene'); // New scene for admin to get username
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, getUsernameScene); // Register the new scene
+stage.register(bankLinkingScene, sendMessageScene, getUsernameScene); // Register the new scene
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -191,6 +190,7 @@ const bankList = [
   // Add more banks as needed
 ];
 
+// Paystack API Key (Assuming it's used for bank verification)
 const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY;
 
 // Verify Bank Account with Paycrest
@@ -647,7 +647,6 @@ bot.action('add_new_wallet', async (ctx) => {
       [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
     ]));
 
-    // Acknowledge the callback to remove loading state
     await ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error handling Add New Wallet for user ${userId}: ${error.message}`);
@@ -771,7 +770,6 @@ bot.action('settings_support', async (ctx) => {
     [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
     [Markup.button.callback('💬 Contact Support', 'support_contact')],
   ]));
-  ctx.answerCbQuery();
 });
 
 // Handle "🧾 Generate Transaction Receipt" in Settings
@@ -841,8 +839,13 @@ bot.action(/select_wallet_generate_receipt_(\d+)/, async (ctx) => {
   ctx.answerCbQuery();
 });
 
+// Handle Unsupported Message Types in Generate Receipt Scene
+bot.action(/select_wallet_generate_receipt_(\d+)/, async (ctx) => {
+  // This is already handled above
+});
+
 // =================== Handle "📈 View Current Rates" Button ===================
-bot.hears('📈 View Current Rates', async (ctx) => {
+bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   try {
     let message = '📈 *Current Exchange Rates*:\n\n';
     for (const [asset, rate] of Object.entries(exchangeRates)) {
@@ -1100,7 +1103,7 @@ sendMessageScene.enter(async (ctx) => {
   await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
 });
 
-sendMessageScene.on('message', async (ctx) => {
+sendMessageScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
   try {
@@ -1189,11 +1192,73 @@ sendMessageScene.on('message', async (ctx) => {
 
 // Handle Scene Exit
 sendMessageScene.leave((ctx) => {
-  delete ctx.session.userIdToMessage;
-  delete ctx.session.sendMessageStep;
+  // Any cleanup if necessary
 });
 
 // =================== Admin Functionality: Get Username from User ID ===================
+
+// Handle "🔍 Get Username from User ID" in Admin Menu
+bot.action('admin_get_username', async (ctx) => {
+  const userId = ctx.from.id.toString();
+
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
+  }
+
+  await ctx.replyWithMarkdown('🔍 *Get Username from User ID*\n\nPlease enter the User ID you want to retrieve the username for:');
+  
+  // Enter the Get Username Scene
+  await ctx.scene.enter('get_username_scene');
+  ctx.answerCbQuery();
+});
+
+// Get Username Scene Handlers
+getUsernameScene.on('text', async (ctx) => {
+  const adminId = ctx.from.id.toString();
+  const inputUserId = ctx.message.text.trim();
+
+  // Validate User ID
+  if (!/^\d{5,15}$/.test(inputUserId)) {
+    return ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a valid numeric User ID (5-15 digits):');
+  }
+
+  try {
+    const userDoc = await db.collection('users').doc(inputUserId).get();
+    if (!userDoc.exists) {
+      return ctx.replyWithMarkdown('❌ User ID not found. Please ensure the User ID is correct or try another one:');
+    }
+
+    const userData = userDoc.data();
+    const username = userData.username || 'N/A';
+    const firstName = userData.firstName || 'N/A';
+
+    // Provide additional information if username is not available
+    let response = `🔍 *Username for User ID ${inputUserId}:*\n\n• *Username:* ${username}`;
+    if (username === 'N/A') {
+      response += `\n• *First Name:* ${firstName}`;
+      response += `\n• *Note:* This user has not set a Telegram username.`;
+    }
+
+    await ctx.replyWithMarkdown(response);
+  } catch (error) {
+    logger.error(`Error retrieving username for User ID ${inputUserId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while retrieving the username. Please try again later.');
+  }
+
+  ctx.scene.leave();
+});
+
+// Handle Unsupported Message Types in Get Username Scene
+getUsernameScene.on('message', async (ctx) => {
+  await ctx.reply('❌ Please enter a valid User ID as a numeric text.');
+});
+
+// Handle Scene Exit
+getUsernameScene.leave((ctx) => {
+  // Any cleanup if necessary
+});
+
+// =================== Admin Panel ===================
 
 // Entry point for Admin Panel
 bot.action('open_admin_panel', async (ctx) => {
@@ -1465,18 +1530,23 @@ bot.action(/admin_transactions_page_(\d+)/, async (ctx) => {
   }
 
   try {
-    const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(5).get();
+    const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').get();
     const transactions = transactionsSnapshot.docs.map(doc => doc.data());
-    const totalTransactions = await db.collection('transactions').get();
-    const totalPages = Math.ceil(totalTransactions.size / 5);
+    const totalTransactions = transactionsSnapshot.size;
+    const transactionsPerPage = 5;
+    const totalPages = Math.ceil(totalTransactions / transactionsPerPage);
 
     if (page < 1 || page > totalPages) {
       return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
     }
 
+    const start = (page - 1) * transactionsPerPage;
+    const end = start + transactionsPerPage;
+    const pageTransactions = transactions.slice(start, end);
+
     let message = `📋 **Transactions Page ${page} of ${totalPages}**:\n\n`;
 
-    transactions.forEach(tx => {
+    pageTransactions.forEach(tx => {
       message += `*User ID:* ${tx.userId || 'N/A'}\n`;
       message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
       message += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
@@ -1520,19 +1590,24 @@ bot.action(/admin_users_page_(\d+)/, async (ctx) => {
   }
 
   try {
-    const usersSnapshot = await db.collection('users').orderBy('firstName').limit(5).get();
+    const usersSnapshot = await db.collection('users').orderBy('firstName').get();
     const users = usersSnapshot.docs.map(doc => doc.data());
-    const totalUsers = await db.collection('users').get();
-    const totalPages = Math.ceil(totalUsers.size / 5);
+    const totalUsers = usersSnapshot.size;
+    const usersPerPage = 5;
+    const totalPages = Math.ceil(totalUsers / usersPerPage);
 
     if (page < 1 || page > totalPages) {
       return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
     }
 
+    const start = (page - 1) * usersPerPage;
+    const end = start + usersPerPage;
+    const pageUsers = users.slice(start, end);
+
     let message = `👥 **Users Page ${page} of ${totalPages}**:\n\n`;
 
-    users.forEach((user, index) => {
-      message += `*User ID:* ${usersSnapshot.docs[index].id}\n`;
+    pageUsers.forEach((user, index) => {
+      message += `*User ID:* ${usersSnapshot.docs[start + index].id}\n`;
       message += `*First Name:* ${user.firstName || 'N/A'}\n`;
       message += `*Username:* ${user.username || 'N/A'}\n`; // Display username
       message += `*Number of Wallets:* ${user.wallets.length}\n`;
@@ -2032,62 +2107,7 @@ bot.action('back_to_main', async (ctx) => {
 
 // =================== Admin Functionality: Get Username from User ID ===================
 
-// Handle "🔍 Get Username from User ID" in Admin Menu
-bot.action('admin_get_username', async (ctx) => {
-  const userId = ctx.from.id.toString();
-
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  await ctx.replyWithMarkdown('🔍 *Get Username from User ID*\n\nPlease enter the User ID you want to retrieve the username for:');
-  
-  // Enter the Get Username Scene
-  await ctx.scene.enter('get_username_scene');
-  ctx.answerCbQuery();
-});
-
-// Get Username Scene Handlers
-getUsernameScene.on('text', async (ctx) => {
-  const adminId = ctx.from.id.toString();
-  const inputUserId = ctx.message.text.trim();
-
-  // Validate User ID
-  if (!/^\d{5,15}$/.test(inputUserId)) {
-    return ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a valid numeric User ID (5-15 digits):');
-  }
-
-  try {
-    const userDoc = await db.collection('users').doc(inputUserId).get();
-    if (!userDoc.exists) {
-      return ctx.replyWithMarkdown('❌ User ID not found. Please ensure the User ID is correct or try another one:');
-    }
-
-    const userData = userDoc.data();
-    const username = userData.username || 'N/A';
-
-    await ctx.replyWithMarkdown(`🔍 *Username for User ID ${inputUserId}:*\n\n• *Username:* ${username}`);
-  } catch (error) {
-    logger.error(`Error retrieving username for User ID ${inputUserId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while retrieving the username. Please try again later.');
-  }
-
-  ctx.scene.leave();
-});
-
-// Handle Unsupported Message Types in Get Username Scene
-getUsernameScene.on('message', async (ctx) => {
-  await ctx.reply('❌ Please enter a valid User ID as a numeric text.');
-});
-
-// Handle Scene Exit
-getUsernameScene.leave((ctx) => {
-  // Any cleanup if necessary
-});
-
-// =================== Admin Broadcast Message Handling ===================
-
-// (Already implemented above)
+// (Already handled above)
 
 // =================== Webhook Handlers ===================
 
