@@ -1844,13 +1844,19 @@ app.post('/webhook/blockradar', async (req, res) => {
 
       // Send Detailed Pending Message to User
       const pendingMessage = await bot.telegram.sendMessage(userId,
-        `🎉 *Deposit Received!*\n\n` +
-        `Hello ${userFirstName},\n\n` +
-        `We’ve received your deposit of *${amount} ${asset}* on *${chainRaw}*. We’re now verifying the transaction on the **${chainRaw}** network. We’ll notify you once the off-ramp process begins.\n\n` +
-        `💰 *Estimated Timelines:*\n• *Stablecoin Confirmation:* 1-3 minutes\n• *Bank Crediting:* Additional few minutes\n\n` +
-        `Thank you for using *DirectPay*!`,
-        { parse_mode: 'Markdown' }
-      );
+          `🎉 *Deposit Received!*\n\n` +
+  `Hello ${userFirstName},\n\n` +
+  `We’ve received your deposit on *${chainRaw}*.\n\n` +
+  `📄 *Transaction Details:*\n` +
+  `• *Amount:* ${amount} ${asset}\n` +
+  `• *Sender Address:* \`${senderAddress}\`\n` +
+  `• *Receiver Address:* \`${receiverAddress}\`\n` +
+  `• *Transaction Hash:* \`${transactionHash}\`\n` +
+  `• *Time:* ${time}\n\n` +
+  `Thank you for using *DirectPay*!`,
+  { parse_mode:'Markdown' }
+);
+                                                            
 
       // Update the transaction document with message_id
       await transactionRef.update({
