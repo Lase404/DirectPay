@@ -1753,6 +1753,7 @@ app.post('/webhook/blockradar', async (req, res) => {
     const asset = event.data?.asset?.symbol || 'N/A';
     const transactionHash = event.data?.hash || 'N/A';
     const chainRaw = event.data?.blockchain?.name || 'N/A';
+    const 
 
     // Normalize and map the chain name
     const chainKey = chainMapping[chainRaw.toLowerCase()];
