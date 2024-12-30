@@ -73,13 +73,12 @@ async function fetchExchangeRate(asset) {
         'Authorization': `Bearer ${PAYCREST_API_KEY}`,
         'Content-Type': 'application/json'
       },
-      params: { asset } // Added to pass asset as query parameter
     });
 
-    if (response.data.status === 'success' && response.data.data && response.data.data[asset]) { // Modified to access rate by asset
-      const rate = parseFloat(response.data.data[asset]); // Modified to get rate by asset
+    if (response.data.status === 'success' && response.data.data) {
+      const rate = parseFloat(response.data.data);
       if (isNaN(rate)) {
-        throw new Error(`Invalid rate data for ${asset}: ${response.data.data[asset]}`);
+        throw new Error(`Invalid rate data for ${asset}: ${response.data.data}`);
       }
       return rate;
     } else {
