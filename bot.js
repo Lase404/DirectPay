@@ -1918,7 +1918,7 @@ app.post('/webhook/paycrest', async (req, res) => {
             `*Crypto Amount:* ${txData.amount} ${txData.asset}\n` +
             `*Cash Amount:* NGN ${netAmount}\n` + 
             `*Exchange Rate:* ₦${exchangeRates[txData.asset] || 'N/A'} per ${txData.asset}\n` +
-            `*Service Charge Applied:* 0.5%\n\n` +
+            `*Service Charge Applied:* 0.5%\n\n` + // Inform about service charge
             `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`,
             { parse_mode: 'Markdown' }
           );
@@ -1938,27 +1938,6 @@ app.post('/webhook/paycrest', async (req, res) => {
         `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n`,
         { parse_mode: 'Markdown' }
       );
-
-      res.status(200).send('OK');
-    } catch (error) {
-      logger.error(`Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
-      res.status(500).send('Error');
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`, { parse_mode: 'Markdown' });
-    }
-  } else {
-    logger.info(`Unhandled Paycrest event: ${event}`);
-    res.status(200).send('OK');
-  }
-});
-
-      // Notify admin about the successful payment
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ *Payment Completed*\n\n` +
-        `*User ID:* ${userId}\n` +
-        `*Reference ID:* ${txData.referenceId}\n` +
-        `*Amount:* ${txData.amount} ${txData.asset}\n` +
-        `*Bank:* ${txData.bankDetails.bankName}\n` +
-        `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
-        `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n`, { parse_mode: 'Markdown' });
 
       res.status(200).send('OK');
     } catch (error) {
