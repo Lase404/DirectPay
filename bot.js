@@ -213,7 +213,14 @@ function calculatePayout(asset, amount) {
   if (!rate) {
     throw new Error(`Unsupported asset received: ${asset}`);
   }
-  return (amount * rate).toFixed(2);
+  const grossPayout = amount * rate;
+  const serviceCharge = grossPayout * 0.005; // 0.5% service charge
+  const netPayout = grossPayout - serviceCharge;
+  return {
+    grossPayout: grossPayout.toFixed(2),
+    serviceCharge: serviceCharge.toFixed(2),
+    netPayout: netPayout.toFixed(2)
+  };
 }
 
 // Generate a Unique Reference ID for Transactions
@@ -502,14 +509,18 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       return ctx.replyWithMarkdown(`⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets before adding new ones.`);
     }
     
-    // [UPDATE] Added exchange rate information during wallet generation
-    let ratesMessage = '📈 *Current Exchange Rates*:\n\n';
-    for (const [asset, rate] of Object.entries(exchangeRates)) {
-      ratesMessage += `• *${asset}*: ₦${rate}\n`;
-    }
-    ratesMessage += `\nThese rates will be applied during your deposits and payouts.`;
+    // Check if user has linked a bank before showing exchange rates
+    const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
+    if (hasBankLinked) {
+      // [UPDATE] Show exchange rates only if bank is linked
+      let ratesMessage = '📈 *Current Exchange Rates*:\n\n';
+      for (const [asset, rate] of Object.entries(exchangeRates)) {
+        ratesMessage += `• *${asset}*: ₦${rate}\n`;
+      }
+      ratesMessage += `\nThese rates will be applied during your deposits and payouts.`;
 
-    await ctx.replyWithMarkdown(ratesMessage);
+      await ctx.replyWithMarkdown(ratesMessage);
+    }
 
     await ctx.reply('📂 *Select the network for which you want to generate a wallet:*', Markup.inlineKeyboard([
       [Markup.button.callback('Base', 'generate_wallet_Base')],
@@ -519,77 +530,6 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
   } catch (error) {
     logger.error(`Error handling Generate Wallet for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred while generating your wallet. Please try again later.');
-  }
-});
-
-// Handle Wallet Generation for Inline Buttons
-bot.action(/generate_wallet_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const selectedChainRaw = ctx.match[1]; // e.g., 'Base', 'Polygon', 'BNB Smart Chain'
-
-  // Normalize and map the selected chain
-  const selectedChainKey = chainMapping[selectedChainRaw.toLowerCase()];
-  if (!selectedChainKey) {
-    await ctx.replyWithMarkdown('⚠️ Invalid network selection. Please try again.');
-    return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
-  }
-
-  const chain = selectedChainKey;
-
-  // Acknowledge the Callback to Remove Loading State
-  await ctx.answerCbQuery();
-
-  // Inform User That Wallet Generation Has Started
-  const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet for *${chain}*... Please wait a moment.`);
-
-  try {
-    const walletAddress = await generateWallet(chain);
-
-    // Fetch Updated User State
-    const userState = await getUserState(userId);
-
-    if (userState.wallets.length >= MAX_WALLETS) {
-      await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
-      await ctx.deleteMessage(generatingMessage.message_id);
-      return;
-    }
-
-    // Add the New Wallet to User State
-    userState.wallets.push({
-      address: walletAddress || 'N/A',
-      chain: chain || 'N/A',
-      supportedAssets: chains[chain].supportedAssets ? [...chains[chain].supportedAssets] : [],
-      bank: null,
-      amount: 0 // Initialize amount if needed
-    });
-
-    // Also, Add the Wallet Address to walletAddresses Array
-    const updatedWalletAddresses = userState.walletAddresses || [];
-    updatedWalletAddresses.push(walletAddress);
-
-    // Update User State in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-      walletAddresses: updatedWalletAddresses,
-    });
-
-    // Log Wallet Generation
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId} on ${chain}: ${walletAddress}`, { parse_mode: 'Markdown' });
-    logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
-
-    // Set walletIndex to the newly created wallet
-    const newWalletIndex = userState.wallets.length - 1;
-    ctx.session.walletIndex = newWalletIndex;
-
-    // Delete the Generating Message
-    await ctx.deleteMessage(generatingMessage.message_id);
-
-    // Enter the Bank Linking Scene Immediately
-    await ctx.scene.enter('bank_linking_scene');
-  } catch (error) {
-    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
   }
 });
 
@@ -641,7 +581,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
     logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while fetching your wallets. Please try again later.');
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch your wallets. Please try again later.');
   }
 });
 
@@ -710,14 +650,20 @@ bot.action('settings_generate_wallet', async (ctx) => {
       return ctx.replyWithMarkdown(`⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets before adding new ones.`);
     }
 
-    // [UPDATE] Added exchange rate information during wallet generation
-    let ratesMessage = '📈 *Current Exchange Rates*:\n\n';
-    for (const [asset, rate] of Object.entries(exchangeRates)) {
-      ratesMessage += `• *${asset}*: ₦${rate}\n`;
-    }
-    ratesMessage += `\nThese rates will be applied during your deposits and payouts.`;
+    const hasBankLinked = userState.wallets.some(wallet => wallet.bank);
+    if (!hasBankLinked) {
+      // If no bank is linked, inform the user that exchange rates will be shown in the success message
+      await ctx.replyWithMarkdown('📂 *Generating a new wallet without a linked bank account. Exchange rates will be displayed upon successful wallet creation.');
+    } else {
+      // If bank is linked, show exchange rates
+      let ratesMessage = '📈 *Current Exchange Rates*:\n\n';
+      for (const [asset, rate] of Object.entries(exchangeRates)) {
+        ratesMessage += `• *${asset}*: ₦${rate}\n`;
+      }
+      ratesMessage += `\nThese rates will be applied during your deposits and payouts.`;
 
-    await ctx.replyWithMarkdown(ratesMessage);
+      await ctx.replyWithMarkdown(ratesMessage);
+    }
 
     await ctx.reply('📂 *Select the network for which you want to generate a wallet:*', Markup.inlineKeyboard([
       [Markup.button.callback('Base', 'generate_wallet_Base')],
@@ -844,7 +790,7 @@ bot.action(/select_wallet_generate_receipt_(\d+)/, async (ctx) => {
       return ctx.replyWithMarkdown('You have no transactions for this wallet.');
     }
 
-    // [UPDATE] Prepare receipt with exchange rate information
+    // [UPDATE] Prepare receipt with exchange rate and service charge information
     let receiptMessage = `🧾 *Transaction Receipt for Wallet ${walletIndex + 1} - ${wallet.chain}*\n\n`;
     transactionsSnapshot.forEach((doc) => {
       const tx = doc.data();
@@ -852,6 +798,8 @@ bot.action(/select_wallet_generate_receipt_(\d+)/, async (ctx) => {
       receiptMessage += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
       receiptMessage += `*Status:* ${tx.status || 'Pending'}\n`;
       receiptMessage += `*Exchange Rate:* ₦${exchangeRates[tx.asset] || 'N/A'} per ${tx.asset || 'N/A'}\n`; // Added exchange rate
+      receiptMessage += `*Service Charge:* ₦${tx.serviceCharge || '0.00'} (0.5%)\n`; // Added service charge
+      receiptMessage += `*Cash Amount Paid:* ₦${tx.netPayout || 'N/A'}\n`; // Net payout after service charge
       receiptMessage += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
       receiptMessage += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
     });
@@ -919,13 +867,7 @@ bankLinkingScene.enter(async (ctx) => {
   ctx.session.bankData.step = 1;
   ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
 
-  // Start the inactivity timeout
-  ctx.session.bankLinkingTimeout = setTimeout(() => {
-    if (ctx.session.isBankLinking) {
-      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
-      ctx.scene.leave();
-    }
-  }, 300000); // 5 minutes timeout
+  // [UPDATE] Removed the inactivity timeout as per user request
 });
 
 // Handle Text Inputs in Bank Linking Scene
@@ -933,10 +875,7 @@ bankLinkingScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const input = ctx.message.text.trim();
 
-  // Clear the inactivity timeout upon receiving input
-  if (ctx.session.bankLinkingTimeout) {
-    clearTimeout(ctx.session.bankLinkingTimeout);
-  }
+  // [UPDATE] Removed the inactivity timeout handling
 
   if (ctx.session.bankData.step === 1) {
     // Step 1: Process Bank Name
@@ -952,14 +891,6 @@ bankLinkingScene.on('text', async (ctx) => {
     ctx.session.bankData.step = 2;
 
     await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
-
-    // Restart the inactivity timeout
-    ctx.session.bankLinkingTimeout = setTimeout(() => {
-      if (ctx.session.isBankLinking) {
-        ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
-        ctx.scene.leave();
-      }
-    }, 300000); // 5 minutes timeout
   } else if (ctx.session.bankData.step === 2) {
     // Step 2: Process Account Number
     if (!/^\d{10}$/.test(input)) {
@@ -999,17 +930,9 @@ bankLinkingScene.on('text', async (ctx) => {
         Markup.inlineKeyboard([
           [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
           [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
-          [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')], // New cancellation option
+          [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')], // Added cancellation option
         ])
       );
-
-      // Restart the inactivity timeout
-      ctx.session.bankLinkingTimeout = setTimeout(() => {
-        if (ctx.session.isBankLinking) {
-          ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
-          ctx.scene.leave();
-        }
-      }, 300000); // 5 minutes timeout
     } catch (error) {
       logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
       await ctx.replyWithMarkdown('❌ Failed to verify your bank account. Please ensure your details are correct or try again later.');
@@ -1054,7 +977,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     confirmationMessage += `📂 *Linked Wallet Details:*\n`;
     confirmationMessage += `• *Chain:* ${userState.wallets[walletIndex].chain}\n`;
     confirmationMessage += `• *Address:* \`${userState.wallets[walletIndex].address}\`\n\n`;
-    confirmationMessage += `You can now receive payouts to this bank account.`;
+    confirmationMessage += `*Exchange Rate Information:* Exchange rates will be displayed during wallet generation and in transaction confirmations.`;
 
     await ctx.replyWithMarkdown(confirmationMessage, getMainMenu(true, true));
 
@@ -1083,16 +1006,6 @@ bankLinkingScene.action('confirm_bank_no', async (ctx) => {
   ctx.session.bankData.step = 1;
 
   // Restart the inactivity timeout
-  if (ctx.session.bankLinkingTimeout) {
-    clearTimeout(ctx.session.bankLinkingTimeout);
-  }
-  ctx.session.bankLinkingTimeout = setTimeout(() => {
-    if (ctx.session.isBankLinking) {
-      ctx.replyWithMarkdown('⏰ Bank linking process timed out due to inactivity. Please start again if you wish to link a bank account.');
-      ctx.scene.leave();
-    }
-  }, 300000); // 5 minutes timeout
-
   ctx.scene.reenter(); // Restart the scene
 });
 
@@ -1105,12 +1018,6 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   delete ctx.session.bankData;
   delete ctx.session.processType;
   delete ctx.session.isBankLinking; // Ensure flag is reset
-
-  // Clear the inactivity timeout
-  if (ctx.session.bankLinkingTimeout) {
-    clearTimeout(ctx.session.bankLinkingTimeout);
-    delete ctx.session.bankLinkingTimeout;
-  }
 
   ctx.scene.leave();
 });
@@ -1172,21 +1079,16 @@ sendMessageScene.on('message', async (ctx) => {
       }
     } else if (ctx.message.text) {
       // Broadcast with Text
-      const messageContent = ctx.message.text.trim();
-
-      if (!messageContent) {
+      const broadcastMessage = ctx.message.text.trim();
+      if (!broadcastMessage) {
         return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
       }
 
       try {
-        // [UPDATE] Include exchange rate information if relevant (optional based on message content)
-        // For general messages, exchange rate may not be necessary
-        // However, if the admin includes specific data related to exchange rates, it can be included here
-
         // Send the text message to the target user
-        await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${messageContent}`, { parse_mode: 'Markdown' });
+        await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${broadcastMessage}`, { parse_mode: 'Markdown' });
         await ctx.replyWithMarkdown('✅ Text message sent successfully.');
-        logger.info(`Admin ${userId} sent text message to user ${userIdToMessage}: ${messageContent}`);
+        logger.info(`Admin ${userId} sent text message to user ${userIdToMessage}: ${broadcastMessage}`);
       } catch (error) {
         logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
         await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
@@ -1319,7 +1221,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
         pendingTransactions.forEach(async (transaction) => {
           const txData = transaction.data();
           try {
-            const payout = txData.payout || 'N/A';
+            const payout = txData.netPayout || txData.payout || 'N/A'; // Use netPayout if available
             const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
 
             await bot.telegram.sendMessage(
@@ -1330,7 +1232,8 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
               `*Account Name:* ${accountName}\n` +
               `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
-              `*Payout (NGN):* ₦${payout}\n\n` +
+              `*Service Charge:* ₦${txData.serviceCharge || '0.00'} (0.5%)\n` + // Included service charge
+              `*Cash Amount Paid:* ₦${payout}\n\n` + // Net payout after service charge
               `🔹 *Chain:* ${txData.chain}\n` +
               `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` +
               `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account. If you have any questions or need further assistance, feel free to [contact our support team](https://t.me/maxcswap).`,
@@ -1690,6 +1593,14 @@ async function sendBaseContent(ctx, index, isNew = true) {
       ctx.session.baseMessageId = sentMessage.message_id;
     }
   }
+
+  // Set a timeout to delete the message after 2 minutes
+  setTimeout(() => {
+    if (ctx.session.baseMessageId) {
+      ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
+      ctx.session.baseMessageId = null;
+    }
+  }, 120000); // Delete after 2 minutes
 }
 
 // Handle Base Content Pagination
@@ -1900,8 +1811,9 @@ app.post('/webhook/paycrest', async (req, res) => {
         `Hello ${txData.firstName || 'Valued User'},\n\n` +
         `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
         `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
-        `*Cash amount:* NGN ${txData.payout}\n` +
+        `*Cash amount:* NGN ${txData.netPayout || txData.payout}\n` + // Display net payout after service charge
         `*Exchange Rate:* ₦${exchangeRates[txData.asset] || 'N/A'} per ${txData.asset}\n` + // Added exchange rate
+        `*Service Charge:* ₦${txData.serviceCharge || '0.00'} (0.5%)\n` + // Display service charge
         `*Network:* ${txData.chain}\n` +
         `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
         `To help us keep improving our services, please rate your experience with us.`,
@@ -1914,8 +1826,9 @@ app.post('/webhook/paycrest', async (req, res) => {
           await bot.telegram.editMessageText(userId, messageId, null, `🎉 *Funds Credited Successfully!*\n\n` +
             `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
             `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
-            `*Cash amount:* NGN ${txData.payout}\n` +
+            `*Cash amount:* NGN ${txData.netPayout || txData.payout}\n` + // Display net payout after service charge
             `*Exchange Rate:* ₦${exchangeRates[txData.asset] || 'N/A'} per ${txData.asset}\n` + // Added exchange rate
+            `*Service Charge:* ₦${txData.serviceCharge || '0.00'} (0.5%)\n` + // Display service charge
             `*Network:* ${txData.chain}\n` +
             `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
             `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`,
@@ -1933,8 +1846,10 @@ app.post('/webhook/paycrest', async (req, res) => {
         `*User ID:* ${userId}\n` +
         `*Reference ID:* ${txData.referenceId}\n` +
         `*Amount:* ${txData.amount} ${txData.asset}\n` +
+        `*Service Charge:* ₦${txData.serviceCharge || '0.00'} (0.5%)\n` + // Display service charge
+        `*Cash Amount Paid:* ₦${txData.netPayout || txData.payout}\n` + // Display net payout
         `*Bank:* ${txData.bankDetails.bankName}\n` +
-        `*Account Number:* ****${txData.bankDetails.accountNumber.slice(0)}\n` +
+        `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
         `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n`, { parse_mode: 'Markdown' });
 
       res.status(200).send('OK');
@@ -2024,8 +1939,8 @@ app.post('/webhook/blockradar', async (req, res) => {
         throw new Error(`Exchange rate for ${asset} not available.`);
       }
 
-      // Calculate the NGN amount based on the current exchange rate
-      const ngnAmount = calculatePayout(asset, amount);
+      // Calculate the NGN amount based on the current exchange rate and deduct 0.5% service charge
+      const payoutDetails = calculatePayout(asset, amount);
 
       const referenceId = generateReferenceId();
       const bankName = wallet.bank.bankName || 'N/A';
@@ -2045,7 +1960,8 @@ app.post('/webhook/blockradar', async (req, res) => {
         transactionHash: transactionHash,
         referenceId: referenceId,
         bankDetails: wallet.bank,
-        payout: ngnAmount, // Store NGN payout
+        payout: payoutDetails.netPayout, // Store net payout after service charge
+        serviceCharge: payoutDetails.serviceCharge, // Store service charge
         timestamp: new Date().toISOString(),
         status: 'Processing',
         paycrestOrderId: '', // To be updated upon Paycrest order creation
@@ -2058,10 +1974,12 @@ app.post('/webhook/blockradar', async (req, res) => {
         `*Reference ID:* \`${referenceId}\`\n` +
         `*Amount Deposited:* ${amount} ${asset}\n` +
         `*Exchange Rate:* ₦${rate} per ${asset}\n` + // Added exchange rate
+        `*Service Charge:* ₦${payoutDetails.serviceCharge} (0.5%)\n` + // Added service charge
+        `*Cash Amount to be Paid:* ₦${payoutDetails.netPayout}\n` +
         `*Network:* ${chainRaw}\n\n` +
         `🔄 *Your order has begun processing!* ⏳\n\n` +
-        `We are converting your crypto to NGN at the current exchange rate of ₦${rate} per ${asset}. Your cash will be credited to your linked bank account shortly.\n\n` +
-        `Please be patient.`,
+        `We are converting your crypto to NGN at the current exchange rate of ₦${rate} per ${asset}. A service charge of 0.5% has been deducted. Your cash will be credited to your linked bank account shortly.\n\n` +
+        `Thank you for using *DirectPay*!`,
         { parse_mode: 'Markdown' }
       );
 
@@ -2075,12 +1993,13 @@ app.post('/webhook/blockradar', async (req, res) => {
         `*User ID:* ${userId}\n` +
         `*Amount Deposited:* ${amount} ${asset}\n` +
         `*Exchange Rate:* ₦${rate} per ${asset}\n` +
-        `*Amount to be Paid:* ₦${ngnAmount}\n` +
+        `*Service Charge:* ₦${payoutDetails.serviceCharge} (0.5%)\n` + // Included service charge
+        `*Amount to be Paid:* ₦${payoutDetails.netPayout}\n` + // Net payout after service charge
         `*Time:* ${new Date().toLocaleString()}\n` +
         `*Bank Details:*\n` +
         `  - *Account Name:* ${accountName}\n` +
         `  - *Bank Name:* ${bankName}\n` +
-        `  - *Account Number:* ****${bankAccount.slice(0)}\n` +
+        `  - *Account Number:* ****${bankAccount.slice(-4)}\n` +
         `*Chain:* ${chainRaw}\n` +
         `*Transaction Hash:* \`${transactionHash}\`\n` +
         `*Reference ID:* ${referenceId}\n`;
@@ -2108,7 +2027,7 @@ app.post('/webhook/blockradar', async (req, res) => {
         // Update user's pending message to indicate failure
         const failureMessage = `Hello ${userFirstName},\n\n` +
           `⚠️ *Your DirectPay order has failed to process.*\n\n` +
-          `Please contact our support team to request a refund.`;
+          `Please contact our support team for assistance.`;
         await bot.telegram.editMessageText(userId, pendingMessage.message_id, null, failureMessage, { parse_mode: 'Markdown' });
         return res.status(500).send('Paycrest order error');
       }
@@ -2157,12 +2076,6 @@ app.post('/webhook/blockradar', async (req, res) => {
       delete ctx.session.bankData;
       delete ctx.session.processType;
       delete ctx.session.isBankLinking; // Reset the bank linking flag
-
-      // Clear the inactivity timeout
-      if (ctx.session.bankLinkingTimeout) {
-        clearTimeout(ctx.session.bankLinkingTimeout);
-        delete ctx.session.bankLinkingTimeout;
-      }
 
       res.status(200).send('OK');
     }
