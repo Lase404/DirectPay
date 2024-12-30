@@ -218,7 +218,7 @@ function calculatePayout(asset, amount) {
   const netAmount = grossAmount - serviceCharge;
   return {
     netAmount: netAmount.toFixed(2),
-    serviceCharge: serviceCharge.toFixed(2) /
+    serviceCharge: serviceCharge.toFixed(2)
   };
 }
 
