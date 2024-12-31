@@ -172,6 +172,7 @@ app.use((req, res, next) => {
   }
 });
 
+
 // =================== Initialize  Bot ===================
 const bot = new Telegraf(BOT_TOKEN);
 // =================== Start the Bot and Express Server ===================
@@ -1711,12 +1712,15 @@ app.post('/webhook/paycrest', bodyParser.raw({ type: 'application/json' }), asyn
   try {
     parsedBody = JSON.parse(rawBody.toString());
   } catch (error) {
-    logger.error('Failed to parse Paycrest webhook body:', error.message);
+    logger.error(`Failed to parse Paycrest webhook body: ${error.message}`);
     return res.status(400).send('Invalid JSON.');
   }
 
   const event = parsedBody.event;
   const data = parsedBody.data;
+
+  // Log the received event for debugging purposes
+  logger.info(`Received Paycrest event: ${event}`);
 
   try {
     // Extract common data
@@ -1731,7 +1735,11 @@ app.post('/webhook/paycrest', bodyParser.raw({ type: 'application/json' }), asyn
 
     if (txSnapshot.empty) {
       logger.error(`No transaction found for Paycrest orderId: ${orderId}`);
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ No transaction found for Paycrest orderId: \`${orderId}\``, { parse_mode: 'Markdown' });
+      await bot.telegram.sendMessage(
+        PERSONAL_CHAT_ID, 
+        `❗️ No transaction found for Paycrest orderId: \`${orderId}\``, 
+        { parse_mode: 'Markdown' }
+      );
       return res.status(200).send('OK');
     }
 
@@ -1740,27 +1748,38 @@ app.post('/webhook/paycrest', bodyParser.raw({ type: 'application/json' }), asyn
     const userId = txData.userId;
     const userFirstName = txData.firstName || 'Valued User';
 
-    switch (status) {
+    // Switch based on the 'event' field instead of 'status'
+    switch (event) {
       case 'payment_order.pending':
-        await bot.telegram.sendMessage(userId, `⏳ *Your DirectPay order is pending processing.*\n\n` +
+        await bot.telegram.sendMessage(
+          userId, 
+          `⏳ *Your DirectPay order is pending processing.*\n\n` +
           `*Reference ID:* \`${reference}\`\n` +
           `*Amount:* ₦${amountPaid}\n` +
           `*Status:* Pending\n\n` +
-          `We are currently processing your order. Please wait for further updates.`, { parse_mode: 'Markdown' });
+          `We are currently processing your order. Please wait for further updates.`, 
+          { parse_mode: 'Markdown' }
+        );
 
         // Log to admin
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔄 *Payment Order Pending*\n\n` +
+        await bot.telegram.sendMessage(
+          PERSONAL_CHAT_ID, 
+          `🔄 *Payment Order Pending*\n\n` +
           `*User:* ${userFirstName} (ID: ${userId})\n` +
           `*Reference ID:* ${reference}\n` +
-          `*Amount Paid:* ₦${amountPaid}\n`, { parse_mode: 'Markdown' });
+          `*Amount Paid:* ₦${amountPaid}\n`, 
+          { parse_mode: 'Markdown' }
+        );
         break;
 
       case 'payment_order.settled':
-        await bot.telegram.sendMessage(userId, `🎉 *Funds Credited Successfully!*\n\n` +
+        await bot.telegram.sendMessage(
+          userId, 
+          `🎉 *Funds Credited Successfully!*\n\n` +
           `Hello ${userFirstName},\n\n` +
           `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
           `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
-          `*Cash amount:* NGN ${amountPaid}\n` + // Updated to use 'amountPaid'
+          `*Cash amount:* NGN ${amountPaid}\n` +
           `*Network:* ${txData.chain}\n` +
           `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
           `Thank you 💙.`,
@@ -1771,14 +1790,20 @@ app.post('/webhook/paycrest', bodyParser.raw({ type: 'application/json' }), asyn
         await db.collection('transactions').doc(txDoc.id).update({ status: 'Completed' });
 
         // Log to admin
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ *Payment Order Settled*\n\n` +
+        await bot.telegram.sendMessage(
+          PERSONAL_CHAT_ID, 
+          `✅ *Payment Order Settled*\n\n` +
           `*User:* ${userFirstName} (ID: ${userId})\n` +
           `*Reference ID:* ${reference}\n` +
-          `*Amount Paid:* ₦${amountPaid}\n`, { parse_mode: 'Markdown' });
+          `*Amount Paid:* ₦${amountPaid}\n`, 
+          { parse_mode: 'Markdown' }
+        );
         break;
 
       case 'payment_order.expired':
-        await bot.telegram.sendMessage(userId, `⚠️ *Your DirectPay order has expired.*\n\n` +
+        await bot.telegram.sendMessage(
+          userId, 
+          `⚠️ *Your DirectPay order has expired.*\n\n` +
           `Hello ${userFirstName},\n\n` +
           `We regret to inform you that your DirectPay order with *Reference ID:* \`${reference}\` has expired.\n\n` +
           `*Reason:* We experienced issues while processing your order. Rest assured, the funds have been returned to your original payment method.\n\n` +
@@ -1791,13 +1816,19 @@ app.post('/webhook/paycrest', bodyParser.raw({ type: 'application/json' }), asyn
         await db.collection('transactions').doc(txDoc.id).update({ status: 'Expired' });
 
         // Log to admin
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⏰ *Payment Order Expired*\n\n` +
+        await bot.telegram.sendMessage(
+          PERSONAL_CHAT_ID, 
+          `⏰ *Payment Order Expired*\n\n` +
           `*User:* ${userFirstName} (ID: ${userId})\n` +
-          `*Reference ID:* ${reference}\n`, { parse_mode: 'Markdown' });
+          `*Reference ID:* ${reference}\n`, 
+          { parse_mode: 'Markdown' }
+        );
         break;
 
       case 'payment_order.refunded':
-        await bot.telegram.sendMessage(userId, `❌ *Your DirectPay order has been refunded.*\n\n` +
+        await bot.telegram.sendMessage(
+          userId, 
+          `❌ *Your DirectPay order has been refunded.*\n\n` +
           `Hello ${userFirstName},\n\n` +
           `We regret to inform you that your DirectPay order with *Reference ID:* \`${reference}\` has been refunded.\n\n` +
           `*Reason:* We experienced issues while processing your order. Rest assured, the funds have been returned to your original payment method.\n\n` +
@@ -1810,10 +1841,14 @@ app.post('/webhook/paycrest', bodyParser.raw({ type: 'application/json' }), asyn
         await db.collection('transactions').doc(txDoc.id).update({ status: 'Refunded' });
 
         // Log to admin
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔄 *Payment Order Refunded*\n\n` +
+        await bot.telegram.sendMessage(
+          PERSONAL_CHAT_ID, 
+          `🔄 *Payment Order Refunded*\n\n` +
           `*User:* ${userFirstName} (ID: ${userId})\n` +
           `*Reference ID:* ${reference}\n` +
-          `*Amount Paid:* ₦${amountPaid}\n`, { parse_mode: 'Markdown' });
+          `*Amount Paid:* ₦${amountPaid}\n`, 
+          { parse_mode: 'Markdown' }
+        );
         break;
 
       default:
@@ -1823,7 +1858,11 @@ app.post('/webhook/paycrest', bodyParser.raw({ type: 'application/json' }), asyn
     res.status(200).send('OK');
   } catch (error) {
     logger.error(`Error processing Paycrest webhook: ${error.message}`);
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing Paycrest webhook: ${error.message}`, { parse_mode: 'Markdown' });
+    await bot.telegram.sendMessage(
+      PERSONAL_CHAT_ID, 
+      `❗️ Error processing Paycrest webhook: ${error.message}`, 
+      { parse_mode: 'Markdown' }
+    );
     res.status(500).send('Error');
   }
 });
