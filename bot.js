@@ -33,7 +33,7 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-// =============== Keys ===================
+// ========== Keys ===================
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY; // Client ID
 const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET; // Client Secret
@@ -65,7 +65,7 @@ let exchangeRates = {
   USDT: 0
 };
 
-// ========== Exchange Rate from paycrest =============
+// ========== Exchange Rate from paycrest ==========
 async function fetchExchangeRate(asset) {
   try {
     const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
@@ -89,6 +89,7 @@ async function fetchExchangeRate(asset) {
     throw error;
   }
 }
+
 async function fetchExchangeRates() {
   try {
     const rates = {};
@@ -201,9 +202,6 @@ app.listen(port, () => {
 
 // =================== Scenes and Middleware Setup ===================
 const stage = new Scenes.Stage();
-const bankLinkingScene = new Scenes.BaseScene('bank_linking_scene');
-const sendMessageScene = new Scenes.BaseScene('send_message_scene');
-const receiptGenerationScene = new Scenes.BaseScene('receipt_generation_scene'); // Ensure this scene is defined
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
 bot.use(session());
 bot.use(stage.middleware());
@@ -612,7 +610,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     // Delete the Generating Message
     await ctx.deleteMessage(generatingMessage.message_id);
 
-    // Enter the Bank Linking Scene Immediately
+    // Enter the Bank Linking Wizard Scene Immediately
     await ctx.scene.enter('bank_linking_scene');
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
@@ -829,7 +827,7 @@ bot.action('settings_generate_receipt', async (ctx) => {
 
     // Prompt user to select which wallet to generate receipt for
     let keyboard = userState.wallets.map((wallet, index) => [
-      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_wallet_generate_receipt_${index}`)
+      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_receipt_wallet_${index}`)
     ]);
     await ctx.reply('Please select the wallet for which you want to generate a transaction receipt:', Markup.inlineKeyboard(keyboard));
     ctx.answerCbQuery();
@@ -841,7 +839,7 @@ bot.action('settings_generate_receipt', async (ctx) => {
 });
 
 // Handle Wallet Selection for Generating Receipt
-bot.action(/select_wallet_generate_receipt_(\d+)/, async (ctx) => {
+bot.action(/select_receipt_wallet_(\d+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
   const walletIndex = parseInt(ctx.match[1], 10);
 
@@ -850,43 +848,8 @@ bot.action(/select_wallet_generate_receipt_(\d+)/, async (ctx) => {
     return ctx.answerCbQuery();
   }
 
-  try {
-    const userState = await getUserState(userId);
-    const wallet = userState.wallets[walletIndex];
-
-    if (!wallet) {
-      throw new Error('Wallet not found.');
-    }
-
-    // Fetch transactions related to this wallet with pagination
-    const pageSize = 10; // Number of transactions per page
-    const transactionsSnapshot = await db.collection('transactions')
-      .where('walletAddress', '==', wallet.address)
-      .orderBy('timestamp', 'desc')
-      .limit(pageSize)
-      .get();
-
-    if (transactionsSnapshot.empty) {
-      return ctx.replyWithMarkdown('You have no transactions for this wallet.');
-    }
-
-    let receiptMessage = `🧾 *Transaction Receipt for Wallet ${walletIndex + 1} - ${wallet.chain}*\n\n`;
-    transactionsSnapshot.forEach((doc) => {
-      const tx = doc.data();
-      receiptMessage += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-      receiptMessage += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-      receiptMessage += `*Status:* ${tx.status || 'Pending'}\n`;
-      receiptMessage += `*Exchange Rate:* ₦${exchangeRates[tx.asset] || 'N/A'} per ${tx.asset || 'N/A'}\n`; // Added exchange rate
-      receiptMessage += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      receiptMessage += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
-    });
-
-    await ctx.replyWithMarkdown(receiptMessage);
-  } catch (error) {
-    logger.error(`Error generating receipt for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while generating the receipt. Please try again later.');
-  }
-
+  ctx.session.walletIndex = walletIndex;
+  await ctx.scene.enter('receipt_generation_scene');
   ctx.answerCbQuery();
 });
 
@@ -902,7 +865,7 @@ const detailedTutorials = {
    - Receive a unique wallet address where you can receive crypto payments.
 
 2. **Link Your Bank Account:**
-   - Immediately after your wallet is generated, provide your bank details to securely receive payouts directly into your bank account.
+   - After generating your wallet, provide your bank details to securely receive payouts directly into your bank account.
 
 3. **Receive Payments:**
    - Share your wallet address with clients or payment sources.
@@ -1378,267 +1341,10 @@ bot.action(/admin_(.+)/, async (ctx) => {
 });
 
 // =================== Send Message to User from Admin Panel ===================
-sendMessageScene.enter(async (ctx) => {
-  await ctx.replyWithMarkdown('📩 Please enter the User ID you want to message:');
-});
-
-sendMessageScene.on('message', async (ctx) => {
-  const adminUserId = ctx.from.id.toString();
-  let adminState;
-  try {
-    adminState = await getUserState(adminUserId);
-  } catch (error) {
-    logger.error(`Error fetching admin state for ${adminUserId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    return;
-  }
-
-  if (!ctx.session.sendMessageStep) {
-    // Step 1: Capture User ID
-    const userIdToMessage = ctx.message.text.trim();
-
-    // Validate User ID (should be numeric and reasonable length)
-    if (!/^\d{5,15}$/.test(userIdToMessage)) {
-      return ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a valid numeric User ID (5-15 digits):');
-    }
-
-    // Verify if the User ID exists in your database
-    const userDoc = await db.collection('users').doc(userIdToMessage).get();
-    if (!userDoc.exists) {
-      return ctx.replyWithMarkdown('❌ User ID not found. Please ensure the User ID is correct or try another one:');
-    }
-
-    // Proceed to Step 2
-    ctx.session.sendMessageStep = 2;
-    ctx.session.userIdToMessage = userIdToMessage;
-    await ctx.replyWithMarkdown('📝 Please enter the message you want to send to the user. You can also attach an image (receipt) with your message.');
-  } else if (ctx.session.sendMessageStep === 2) {
-    // Step 2: Capture Message Content
-    const userIdToMessage = ctx.session.userIdToMessage;
-
-    if (ctx.message.photo) {
-      // Broadcast with Photo
-      const photoArray = ctx.message.photo;
-      const highestResolutionPhoto = photoArray[photoArray.length - 1]; // Get the highest resolution photo
-      const fileId = highestResolutionPhoto.file_id;
-      const caption = ctx.message.caption || '';
-
-      try {
-        // Send the photo with caption to the target user
-        await bot.telegram.sendPhoto(userIdToMessage, fileId, { caption: caption, parse_mode: 'Markdown' });
-        await ctx.replyWithMarkdown('✅ Photo message sent successfully.');
-        logger.info(`Admin ${adminUserId} sent photo message to user ${userIdToMessage}. Caption: ${caption}`);
-      } catch (error) {
-        logger.error(`Error sending photo to user ${userIdToMessage}: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ Error sending photo. Please ensure the User ID is correct and the user has not blocked the bot.');
-      }
-    } else if (ctx.message.text) {
-      // Broadcast with Text
-      const messageContent = ctx.message.text.trim();
-
-      if (!messageContent) {
-        return ctx.reply('❌ Message content cannot be empty. Please enter a valid message:');
-      }
-
-      try {
-        // Send the text message to the target user
-        await bot.telegram.sendMessage(userIdToMessage, `📩 *Message from Admin:*\n\n${messageContent}`, { parse_mode: 'Markdown' });
-        await ctx.replyWithMarkdown('✅ Text message sent successfully.');
-        logger.info(`Admin ${adminUserId} sent text message to user ${userIdToMessage}: ${messageContent}`);
-      } catch (error) {
-        logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ Error sending message. Please ensure the User ID is correct and the user has not blocked the bot.');
-      }
-    } else {
-      // Unsupported message type
-      await ctx.reply('❌ Unsupported message type. Please send text or a photo (receipt).');
-      return;
-    }
-
-    // Reset Session Variables and Leave the Scene
-    delete ctx.session.userIdToMessage;
-    delete ctx.session.sendMessageStep;
-    ctx.scene.leave();
-  }
-});
-
-// Handle Unsupported Message Types in SendMessageScene
-// Removed the incorrectly nested handler
-// No need to add another 'sendMessageScene.on('message', ...)' here
-
-// Handle Scene Exit for SendMessageScene
-sendMessageScene.leave((ctx) => {
-  delete ctx.session.userIdToMessage;
-  delete ctx.session.sendMessageStep;
-});
+// Already defined earlier
 
 // =================== Bank Linking Scene ===================
-bankLinkingScene.enter(async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = ctx.session.walletIndex;
-
-  if (walletIndex === undefined || walletIndex === null) {
-    await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first.');
-    ctx.scene.leave();
-    return;
-  }
-
-  // Initialize bank linking data
-  ctx.session.bankData = {};
-  ctx.session.bankData.step = 1;
-  ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
-});
-
-bankLinkingScene.on('text', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const input = ctx.message.text.trim();
-  logger.info(`User ${userId} entered bank name: ${input}`);
-
-  if (ctx.session.bankData.step === 1) {
-    // Step 1: Process Bank Name
-    const bankNameInput = input.toLowerCase();
-    const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
-
-    if (!bank) {
-      return await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list:\n\n' + bankList.map(b => `• ${b.name}`).join('\n'));
-    }
-
-    ctx.session.bankData.bankName = bank.name;
-    ctx.session.bankData.bankCode = bank.code;
-    ctx.session.bankData.step = 2;
-
-    await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
-  } else if (ctx.session.bankData.step === 2) {
-    // Step 2: Validate Account Number
-    if (!/^\d{10}$/.test(input)) {
-      return await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
-    }
-
-    ctx.session.bankData.accountNumber = input;
-    ctx.session.bankData.step = 3;
-
-    // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 Verifying your bank details...');
-
-    try {
-      const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
-
-      if (!verificationResult || !verificationResult.data) {
-        throw new Error('Invalid verification response.');
-      }
-
-      const accountName = verificationResult.data.account_name;
-
-      if (!accountName) {
-        throw new Error('Unable to retrieve account name.');
-      }
-
-      ctx.session.bankData.accountName = accountName;
-      ctx.session.bankData.step = 4;
-
-      // Ask for Confirmation
-      await ctx.replyWithMarkdown(
-        `🏦 *Bank Account Verification*\n\n` +
-        `Please confirm your bank details:\n` +
-        `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
-        `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
-        `- *Account Holder:* ${accountName}\n\n` +
-        `Is this information correct?`,
-        Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
-          [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
-          [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')], // New cancellation option
-        ])
-      );
-    } catch (error) {
-      logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Failed to verify your bank account. Please ensure your details are correct or try again later.');
-      ctx.scene.leave();
-    }
-  }
-});
-
-// Confirm Bank Account
-bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const bankData = ctx.session.bankData;
-  const walletIndex = ctx.session.walletIndex;
-
-  try {
-    let userState = await getUserState(userId);
-
-    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first.');
-      ctx.scene.leave();
-      return;
-    }
-
-    // Update Bank Details for the Selected Wallet
-    userState.wallets[walletIndex].bank = {
-      bankName: bankData.bankName,
-      bankCode: bankData.bankCode,
-      accountNumber: bankData.accountNumber,
-      accountName: bankData.accountName,
-    };
-
-    // Update User State in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-    });
-
-    // Prepare Confirmation Message with Wallet Details
-    let confirmationMessage = `✅ *Bank Account Linked Successfully!*\n\n`;
-    confirmationMessage += `*Bank Name:* ${bankData.bankName}\n`;
-    confirmationMessage += `*Account Number:* ${bankData.accountNumber}\n`;
-    confirmationMessage += `*Account Holder:* ${bankData.accountName}\n\n`;
-    confirmationMessage += `📂 *Linked Wallet Details:*\n`;
-    confirmationMessage += `• *Chain:* ${userState.wallets[walletIndex].chain}\n`;
-    confirmationMessage += `• *Address:* \`${userState.wallets[walletIndex].address}\`\n\n`;
-    confirmationMessage += `You can now receive payouts to this bank account.`;
-
-    await ctx.replyWithMarkdown(confirmationMessage, getMainMenu(true, true));
-
-    // Log to Admin
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
-      `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
-      `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
-    logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
-
-    // Acknowledge the Callback to Remove Loading State
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ An error occurred while confirming your bank details. Please try again later.');
-    ctx.scene.leave();
-  }
-});
-
-// Decline Bank Account Confirmation
-bankLinkingScene.action('confirm_bank_no', async (ctx) => {
-  await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
-
-  // Reset Bank Data and Restart the Scene
-  ctx.session.bankData = {};
-  ctx.session.bankData.step = 1;
-
-  ctx.scene.reenter(); // Restart the scene
-
-  await ctx.answerCbQuery();
-});
-
-// Handle Cancellation of Bank Linking
-bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
-  await ctx.replyWithMarkdown('❌ Bank linking process has been canceled.');
-
-  // Clean Up Session Variables
-  delete ctx.session.walletIndex;
-  delete ctx.session.bankData;
-  delete ctx.session.processType;
-
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
+// Already defined earlier
 
 // =================== Verify Paycrest Signature ===================
 
