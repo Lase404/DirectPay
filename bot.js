@@ -2255,6 +2255,11 @@ function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
   }
 }
 
+// =================== Start Express Server ===================
+app.listen(PORT, () => {
+  logger.info(`Server is running on port ${PORT}`);
+});
+
 // =================== Shutdown Handlers ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
