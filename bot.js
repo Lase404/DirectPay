@@ -1056,7 +1056,8 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
         // Notify admin about the unknown chain
         await bot.telegram.sendMessage(
           PERSONAL_CHAT_ID,
-          `⚠️ Received deposit on unknown chain: \`${chainRaw}\``
+          `⚠️ Received deposit on unknown chain: \`${chainRaw}\``,
+          { parse_mode: 'Markdown' }
         );
         return res.status(400).send('Unknown chain.');
       }
@@ -1086,7 +1087,8 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           // Notify admin about the unmatched wallet
           await bot.telegram.sendMessage(
             PERSONAL_CHAT_ID,
-            `⚠️ No user found for wallet address: \`${walletAddress}\``
+            `⚠️ No user found for wallet address: \`${walletAddress}\``,
+            { parse_mode: 'Markdown' }
           );
           return res.status(200).send('OK');
         }
@@ -1310,9 +1312,20 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
       res.status(500).send('Error processing webhook');
       await bot.telegram.sendMessage(
         PERSONAL_CHAT_ID,
-        `❗️ Error processing Blockradar webhook: ${error.message}`
+        `❗️ Error processing Blockradar webhook: ${error.message}`,
+        { parse_mode: 'Markdown' }
       );
     }
+  } catch (error) {
+    // This is the missing catch block for the outer try
+    logger.error(`Error in Blockradar webhook handler: ${error.message}`);
+    await bot.telegram.sendMessage(
+      PERSONAL_CHAT_ID,
+      `❗️ Error in Blockradar webhook handler: ${error.message}`,
+      { parse_mode: 'Markdown' }
+    );
+    res.status(500).send('Error');
+  }
 });
 
 // =================== Other Bot Handlers ===================
