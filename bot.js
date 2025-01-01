@@ -2546,7 +2546,7 @@ app.post(WEBHOOK_PATH, (req, res) => {
 
   bot.handleUpdate(req.body, res);
 });
-=======
+
 const SERVER_PORT = process.env.PORT || 4000; // Use the PORT from environment variables
 
 app.listen(SERVER_PORT, () => {
