@@ -1087,6 +1087,10 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
     ctx.answerCbQuery();
   }
 });
+
+// =================== Check if User is Admin ===================
+const isAdminUser = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
+
 // =================== /start Command ===================
 bot.start(async (ctx) => {
   try {
