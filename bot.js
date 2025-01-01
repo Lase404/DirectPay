@@ -2120,17 +2120,6 @@ app.post('/webhook/paycrest', async (req, res) => {
     const userId = txData.userId;
     const userFirstName = txData.firstName || 'Valued User';
 
-    // Switch based on the 'event' field instead of 'status'
-    switch (event) {
-      case 'payment_order.pending':
-        await bot.telegram.sendMessage(
-          userId, 
-          `⏳ *Your DirectPay order is pending processing.*\n\n` +
-            `*Reference ID:* \`${reference}\`\n` +
-            `*Amount:* ₦${amountPaid}\n\n` +
-            `We are currently processing your order. Please wait for further updates.`, 
-          { parse_mode: 'Markdown' }
-        );
 
         // Log to admin
         await bot.telegram.sendMessage(
