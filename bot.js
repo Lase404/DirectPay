@@ -833,7 +833,6 @@ function verifyBlockradarSignature(requestBody, signatureHeader, secretKey) {
     return false;
   }
 }
-
 // =================== Paycrest Webhook Handler ===================
 app.post('/webhook/paycrest', express.raw({ type: '*/*' }), async (req, res) => {
   try {
@@ -998,6 +997,16 @@ app.post('/webhook/paycrest', express.raw({ type: '*/*' }), async (req, res) => 
       );
       res.status(500).send('Error');
     }
+  } catch (error) {
+    // This is the missing catch block for the outer try
+    logger.error(`Error in Paycrest webhook handler: ${error.message}`);
+    await bot.telegram.sendMessage(
+      PERSONAL_CHAT_ID,
+      `❗️ Error in Paycrest webhook handler: ${error.message}`,
+      { parse_mode: 'Markdown' }
+    );
+    res.status(500).send('Error');
+  }
 });
 
 // =================== Blockradar Webhook Handler ===================
