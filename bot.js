@@ -2120,6 +2120,28 @@ app.post('/webhook/paycrest', async (req, res) => {
     const userId = txData.userId;
     const userFirstName = txData.firstName || 'Valued User';
 
+    // Switch based on the 'event' field instead of 'status'
+    switch (event) {
+      case 'payment_order.pending':
+        await bot.telegram.sendMessage(
+          userId, 
+          `⏳ *Your DirectPay order is pending processing.*\n\n` +
+            `*Reference ID:* \`${reference}\`\n` +
+            `We are currently processing your order. Please wait for further updates.`, 
+          { parse_mode: 'Markdown' }
+        );
+
+        // Log to admin
+        await bot.telegram.sendMessage(
+          PERSONAL_CHAT_ID, 
+          `🔄 *Payment Order Pending*\n\n` +
+            `*User:* ${userFirstName} (ID: ${userId})\n` +
+            `*Reference ID:* ${reference}\n` +
+            `*Amount Paid:* ₦${amountPaid}\n`, 
+          { parse_mode: 'Markdown' }
+        );
+        break;
+
       case 'payment_order.settled':
         await bot.telegram.sendMessage(
           userId, 
@@ -2524,6 +2546,11 @@ app.post(WEBHOOK_PATH, (req, res) => {
   bot.handleUpdate(req.body, res);
 });
 
+// =================== Launch Bot without bot.launch() ===================
+// Do NOT call bot.launch() when using webhooks with Express
+// Instead, ensure the Express server is running and handling updates
+
+// =================== Start Express Server ===================
 const SERVER_PORT = process.env.PORT || 4000; // Use the PORT from environment variables
 
 app.listen(SERVER_PORT, () => {
