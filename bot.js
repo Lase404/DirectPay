@@ -1092,24 +1092,6 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
   }
 });
 
-// =================== Settings Handler ===================
-bot.hears('⚙️ Settings', async (ctx) => {
-  await ctx.reply('⚙️ *Settings Menu*', getSettingsMenu());
-});
-
-/**
- * Generates the Settings Menu Inline Keyboard.
- * @returns {Markup} - Inline Keyboard Markup.
- */
-const getSettingsMenu = () =>
-  Markup.inlineKeyboard([
-    [Markup.button.callback('🔄 Generate New Wallet', 'settings_generate_wallet')],
-    [Markup.button.callback('✏️ Edit Linked Bank Details', 'settings_edit_bank')],
-    [Markup.button.callback('💬 Support', 'settings_support')],
-    [Markup.button.callback('🧾 Generate Transaction Receipt', 'settings_generate_receipt')],
-    [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
-  ]);
-
 // =================== Check if User is Admin ===================
 const isAdminUser = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
 
