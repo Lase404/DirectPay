@@ -50,7 +50,8 @@ const {
   PORT = 4000,
   BLOCKRADAR_BASE_API_KEY,
   BLOCKRADAR_BNB_API_KEY,
-  BLOCKRADAR_POLYGON_API_KEY
+  BLOCKRADAR_POLYGON_API_KEY,
+  MAX_WALLETS = 5 // Define the maximum number of wallets per user
 } = process.env;
 
 if (!BOT_TOKEN || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !WEBHOOK_DOMAIN || !PAYSTACK_API_KEY) {
@@ -80,7 +81,6 @@ const TELEGRAM_WEBHOOK_URL = `${WEBHOOK_DOMAIN}${WEBHOOK_PATH_TELEGRAM}`;
 // =================== Define Supported Banks ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
-  // ... Add all other banks here with their respective codes, aliases, and Paycrest codes
   { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
   { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
   { name: 'OPay', code: '999992', aliases: ['opay', 'opay nigeria'], paycrestInstitutionCode: 'OPAYNGPC' },
@@ -137,6 +137,13 @@ const chainMapping = {
   'bnb chain': 'BNB Smart Chain',
   'bnb': 'BNB Smart Chain',
   // Add more mappings if necessary
+};
+
+// =================== Exchange Rates Placeholder ===================
+const SUPPORTED_ASSETS = ['USDC', 'USDT'];
+let exchangeRates = {
+  USDC: 0,
+  USDT: 0
 };
 
 // =================== Helper Functions =================//
@@ -531,8 +538,8 @@ const bankLinkingScene = new Scenes.WizardScene(
   }
 );
 
-// Handle Confirmation Actions Within the Bank Linking Scene
-bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
+// Handle Confirmation Actions Outside the Scene
+bot.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const bankData = ctx.session.bankData;
   const walletIndex = ctx.session.walletIndex;
@@ -589,7 +596,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   }
 });
 
-bankLinkingScene.action('confirm_bank_no', async (ctx) => {
+bot.action('confirm_bank_no', async (ctx) => {
   await ctx.replyWithMarkdown('⚠️ Let\'s try again.');
 
   // Restart the scene
@@ -599,7 +606,7 @@ bankLinkingScene.action('confirm_bank_no', async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
+bot.action('cancel_bank_linking', async (ctx) => {
   await ctx.replyWithMarkdown('❌ Bank linking process has been canceled.');
 
   // Clean Up Session Variables
@@ -724,8 +731,9 @@ const receiptGenerationScene = new Scenes.WizardScene(
     let walletIndex;
 
     if (ctx.session.walletIndex === undefined || ctx.session.walletIndex === null) {
-      const match = ctx.match[1];
-      walletIndex = parseInt(ctx.match[1], 10);
+      // This step is reached only if the user selected a wallet
+      const match = ctx.match ? ctx.match[1] : null;
+      walletIndex = parseInt(match, 10);
 
       if (isNaN(walletIndex)) {
         await ctx.replyWithMarkdown('⚠️ Invalid wallet selection. Please try again.');
@@ -786,12 +794,6 @@ bot.use(session());
 bot.use(stage.middleware());
 
 // =================== Exchange Rate Fetching ===================
-const SUPPORTED_ASSETS = ['USDC', 'USDT'];
-let exchangeRates = {
-  USDC: 0,
-  USDT: 0
-};
-
 async function fetchExchangeRate(asset) {
   try {
     const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
@@ -897,6 +899,11 @@ async function greetUser(ctx) {
     await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists, hasBankLinked));
   }
 }
+
+// =================== Generic Message Handler for Logging ===================
+bot.on('message', (ctx) => {
+  logger.info(`Received message from ${ctx.from.id}: ${ctx.message.text || '[Non-text message]'}`);
+});
 
 // =================== Generate Wallet Handler ===================
 bot.hears('💼 Generate Wallet', async (ctx) => {
@@ -1120,7 +1127,6 @@ const getSettingsMenu = () =>
   ]);
 
 // =================== Check if User is Admin ===================
-
 // Already defined earlier as isAdmin(userId)
 
 // =================== Admin Panel ===================
@@ -1316,10 +1322,10 @@ bot.action(/admin_(.+)/, async (ctx) => {
           return ctx.answerCbQuery();
         }
 
+        // Enter a separate scene or implement a flow for broadcasting
+        // For simplicity, prompt the admin to send the broadcast message
+        ctx.session.awaitingBroadcastMessage = true;
         await ctx.reply('📢 Please enter the message you want to broadcast to all users. You can also attach an image (receipt) with your message:');
-        // Set state to indicate awaiting broadcast message
-        // Implement a separate scene or handler if needed
-        // For simplicity, this example does not implement it
         await ctx.answerCbQuery();
       } catch (error) {
         logger.error(`Error initiating broadcast message: ${error.message}`);
@@ -1344,19 +1350,54 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
-// =================== Send Message to User from Admin Panel ===================
-// Already handled by sendMessageScene
+// =================== Broadcast Message Handler ===================
+// Handle incoming messages when awaiting broadcast
+bot.on('message', async (ctx, next) => {
+  if (ctx.session.awaitingBroadcastMessage) {
+    const adminUserId = ctx.from.id.toString();
+    if (!isAdmin(adminUserId)) {
+      ctx.session.awaitingBroadcastMessage = false;
+      return next();
+    }
 
-// =================== Support Handlers ===================
-bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
-    [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-  ]));
+    const messageContent = ctx.message.text || '';
+    const photo = ctx.message.photo ? ctx.message.photo[ctx.message.photo.length - 1].file_id : null;
+
+    try {
+      const usersSnapshot = await db.collection('users').get();
+      if (usersSnapshot.empty) {
+        await ctx.replyWithMarkdown('⚠️ No users available to broadcast.');
+        ctx.session.awaitingBroadcastMessage = false;
+        return;
+      }
+
+      usersSnapshot.forEach(async (doc) => {
+        const userId = doc.id;
+        try {
+          if (photo) {
+            await bot.telegram.sendPhoto(userId, photo, { caption: messageContent, parse_mode: 'Markdown' });
+          } else {
+            await bot.telegram.sendMessage(userId, messageContent, { parse_mode: 'Markdown' });
+          }
+          logger.info(`Broadcast message sent to user ${userId}`);
+        } catch (error) {
+          logger.error(`Error sending broadcast to user ${userId}: ${error.message}`);
+        }
+      });
+
+      await ctx.replyWithMarkdown('📢 Broadcast message sent successfully.');
+      ctx.session.awaitingBroadcastMessage = false;
+    } catch (error) {
+      logger.error(`Error during broadcast: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast. Please try again later.');
+      ctx.session.awaitingBroadcastMessage = false;
+    }
+  } else {
+    return next();
+  }
 });
 
-// Support Actions
+// =================== Support Handlers ===================
 const detailedTutorials = {
   how_it_works: `
 **📘 How DirectPay Works**
@@ -1429,6 +1470,15 @@ If you haven't received your transaction, follow these steps to troubleshoot:
 `,
 };
 
+bot.hears(/ℹ️\s*Support/i, async (ctx) => {
+  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
+    [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
+    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+    [Markup.button.callback('💬 Contact Support', 'support_contact')],
+  ]));
+});
+
+// Support Actions
 bot.action('support_how_it_works', async (ctx) => {
   await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
   ctx.answerCbQuery();
@@ -1449,6 +1499,7 @@ bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
   await sendBaseContent(ctx, 0, true);
 });
 
+// Base Content Definition
 const baseContent = [
   {
     title: 'Welcome to Base',
@@ -1710,7 +1761,7 @@ bot.action(/select_wallet_edit_bank_(\d+)/, async (ctx) => {
 
 // Handle "💬 Support" in Settings
 bot.action('settings_support', async (ctx) => {
-  await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
+  await ctx.reply('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
     [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
     [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
     [Markup.button.callback('💬 Contact Support', 'support_contact')],
@@ -1773,77 +1824,13 @@ bot.action('support_contact', async (ctx) => {
 });
 
 // =================== Learn About Base Handler ===================
-bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
-  await sendBaseContent(ctx, 0, true);
-});
+// Already handled above
 
 // =================== Send Base Content ===================
-/**
- * Sends Base content with pagination.
- * @param {TelegrafContext} ctx - Telegraf context.
- * @param {number} index - Current page index.
- * @param {boolean} isNew - Indicates if it's a new message or an edit.
- */
-async function sendBaseContent(ctx, index, isNew = true) {
-  const content = baseContent[index];
-  const totalPages = baseContent.length;
-
-  const navigationButtons = [];
-
-  if (index > 0) {
-    navigationButtons.push(Markup.button.callback('⬅️ Back', `base_page_${index - 1}`));
-  }
-
-  if (index < totalPages - 1) {
-    navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
-  }
-
-  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
-
-  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-  if (isNew) {
-    const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-    // Store the message ID in session
-    ctx.session.baseMessageId = sentMessage.message_id;
-  } else {
-    try {
-      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
-        parse_mode: 'Markdown',
-        reply_markup: inlineKeyboard.reply_markup,
-      });
-    } catch (error) {
-      // If editing message fails, send a new message and update session
-      const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-      ctx.session.baseMessageId = sentMessage.message_id;
-    }
-  }
-}
-
-// Base Content Pagination
-bot.action(/base_page_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1], 10);
-  if (isNaN(index) || index < 0 || index >= baseContent.length) {
-    return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
-  }
-  await sendBaseContent(ctx, index, false);
-  ctx.answerCbQuery(); // Acknowledge the callback
-});
-
-// Exit Base Content
-bot.action('exit_base', async (ctx) => {
-  // Delete the message and clear session
-  if (ctx.session.baseMessageId) {
-    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-    ctx.session.baseMessageId = null;
-  }
-  await ctx.replyWithMarkdown('Thank you for learning about Base!');
-  ctx.answerCbQuery();
-});
+// Already handled above
 
 // =================== Admin Panel Handlers ===================
-
-// Already handled above in Admin Panel section
+// Already handled above
 
 // =================== Telegram Webhook ===================
 // Use Telegraf's webhookCallback middleware for Telegram updates
@@ -2254,6 +2241,11 @@ function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
     return false;
   }
 }
+
+// =================== Health Check Endpoint ===================
+app.get('/health', (req, res) => {
+  res.status(200).send('OK');
+});
 
 // =================== Start Express Server ===================
 app.listen(PORT, () => {
