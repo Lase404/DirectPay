@@ -1,3 +1,4 @@
+
 // =================== Import Dependencies ===================
 const express = require('express');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
@@ -59,12 +60,13 @@ if (!BOT_TOKEN || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !WEBHOOK_DOMAI
 
 // =================== Initialize Express App ===================
 const app = express();
-
-const PORT = process.env.PORT || 4000; // Fallback to 4000 if PORT is undefined
+// =================== Start Express Server ===================
+const PORT = process.env.PORT || 4000;
 
 app.listen(PORT, () => {
   logger.info(`Webhook server running on port ${PORT}`);
 });
+
 // =================== Initialize Telegraf Bot ===================
 const bot = new Telegraf(BOT_TOKEN);
 
@@ -2415,3 +2417,11 @@ app.post('/webhook/blockradar', async (req, res) => {
 // =================== Shutdown Handlers ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+// =================== Start Telegraf Bot ===================
+bot.launch()
+  .then(() => logger.info('Bot started successfully.'))
+  .catch(error => {
+    logger.error(`Failed to launch bot: ${error.message}`);
+    process.exit(1);
+  });
