@@ -2120,18 +2120,6 @@ app.post('/webhook/paycrest', async (req, res) => {
     const userId = txData.userId;
     const userFirstName = txData.firstName || 'Valued User';
 
-
-        // Log to admin
-        await bot.telegram.sendMessage(
-          PERSONAL_CHAT_ID, 
-          `🔄 *Payment Order Pending*\n\n` +
-            `*User:* ${userFirstName} (ID: ${userId})\n` +
-            `*Reference ID:* ${reference}\n` +
-            `*Amount Paid:* ₦${amountPaid}\n`, 
-          { parse_mode: 'Markdown' }
-        );
-        break;
-
       case 'payment_order.settled':
         await bot.telegram.sendMessage(
           userId, 
