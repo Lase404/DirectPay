@@ -58,6 +58,12 @@ if (!BOT_TOKEN || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !WEBHOOK_DOMAI
   process.exit(1);
 }
 
+// Start Express Server
+const port = process.env.PORT || 4000;
+app.listen(port, () => {
+  logger.info(`Webhook server running on port ${port}`);
+});
+
 // =================== Initialize Express App ===================
 const app = express();
 
