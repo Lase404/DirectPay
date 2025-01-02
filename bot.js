@@ -542,7 +542,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     let userState = await getUserState(userId);
 
     if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first.');
+      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first using the "💼 Generate Wallet" option.');
       await ctx.answerCbQuery();
       return ctx.scene.leave();
     }
@@ -783,6 +783,10 @@ const receiptGenerationScene = new Scenes.WizardScene(
 const stage = new Scenes.Stage();
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
 
+// **IMPORTANT: Apply Session and Stage Middleware**
+bot.use(session()); // Initialize session middleware
+bot.use(stage.middleware()); // Apply stage middleware
+
 // =================== Apply Telegraf Webhook Middleware ===================
 
 if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
@@ -915,10 +919,15 @@ async function greetUser(ctx) {
     : `👋 Welcome, ${userState.firstName}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
 
   if (adminUser) {
-    const sentMessage = await ctx.replyWithMarkdown(greeting, Markup.inlineKeyboard([
-      [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
-    ]));
-    ctx.session.adminMessageId = sentMessage.message_id;
+    try {
+      const sentMessage = await ctx.replyWithMarkdown(greeting, Markup.inlineKeyboard([
+        [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')],
+      ]));
+      ctx.session.adminMessageId = sentMessage.message_id; // This should now work as ctx.session is initialized
+    } catch (error) {
+      logger.error(`Error sending admin greeting to user ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the greeting. Please try again later.');
+    }
   } else {
     await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists, hasBankLinked));
   }
@@ -1148,9 +1157,8 @@ const getSettingsMenu = () =>
 // =================== Handle Settings Menu Actions ===================
 bot.action(/settings_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  const action = ctx.match[1];
 
-  switch (action) {
+  switch (ctx.match[1]) {
     case 'generate_wallet':
       // Handle Generate New Wallet from Settings
       await ctx.replyWithMarkdown('💼 *Generate New Wallet*\n\n' +
@@ -1759,6 +1767,10 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
+// =================== Handle Support Requests ===================
+
+// (Already handled in Support Handlers above)
+
 // =================== Webhook Signature Verification ===================
 
 /**
@@ -1780,15 +1792,6 @@ function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
     return false;
   }
 }
-
-/**
- * Verifies Blockradar webhook signature.
- * @param {Buffer} requestBody - Raw request body.
- * @param {string} signatureHeader - Signature from headers.
- * @param {string} secretKey - Blockradar client secret.
- * @returns {boolean} - Verification result.
- */
-// Removed Blockradar signature verification functions as per user request
 
 // =================== Paycrest Webhook Handler ===================
 app.post('/webhook/paycrest', express.raw({ type: '*/*' }), async (req, res) => {
@@ -2259,6 +2262,14 @@ app.post('/webhook/blockradar', express.json(), async (req, res) => {
     res.status(500).send('Error');
   }
 });
+
+// =================== Admin Panel Functions ===================
+
+/**
+ * =================== Admin Panel ===================
+ * (Already defined earlier)
+ * This section remains unchanged.
+ */
 
 // =================== Start Express Server ===================
 app.listen(PORT, () => {
