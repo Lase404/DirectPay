@@ -2077,7 +2077,6 @@ function verifyBlockradarSignature(requestBody, signatureHeader, secretKey) {
     return false;
   }
 }
-
 // =================== Blockradar Webhook Handler ===================
 app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) => {
   try {
@@ -2129,7 +2128,7 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
 
       const chain = chainKey;
 
-      // Handle different event types using if-else
+      // Handle different event types using if-else inside the try block
       if (eventType === 'deposit.success') {
         if (walletAddress === 'N/A') {
           logger.error('Blockradar webhook missing wallet address.');
@@ -2367,30 +2366,30 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
         logger.info(`Transaction stored for user ${userId}: Reference ID ${paycrestOrder.id}`);
 
         res.status(200).send('OK');
+      } else {
+        // Handle other event types here
+        logger.warn(`Unhandled Blockradar webhook event type: ${eventType}`);
+        res.status(200).send('Unhandled event type.');
       }
-    } else {
-      logger.warn(`Unhandled Blockradar webhook event type: ${eventType}`);
-      res.status(200).send('Unhandled event type.');
+    } catch (error) {
+      logger.error(`Error processing Blockradar webhook: ${error.message}`);
+      res.status(500).send('Error processing webhook');
+      await bot.telegram.sendMessage(
+        PERSONAL_CHAT_ID,
+        `❗️ Error processing Blockradar webhook: ${error.message}`,
+        { parse_mode: 'Markdown' }
+      );
     }
   } catch (error) {
-    logger.error(`Error processing Blockradar webhook: ${error.message}`);
-    res.status(500).send('Error processing webhook');
+    // This is the outer catch for the entire handler
+    logger.error(`Error in Blockradar webhook handler: ${error.message}`);
     await bot.telegram.sendMessage(
       PERSONAL_CHAT_ID,
-      `❗️ Error processing Blockradar webhook: ${error.message}`,
+      `❗️ Error in Blockradar webhook handler: ${error.message}`,
       { parse_mode: 'Markdown' }
     );
+    res.status(500).send('Error');
   }
-} catch (error) {
-  // This is the outer catch for the entire handler
-  logger.error(`Error in Blockradar webhook handler: ${error.message}`);
-  await bot.telegram.sendMessage(
-    PERSONAL_CHAT_ID,
-    `❗️ Error in Blockradar webhook handler: ${error.message}`,
-    { parse_mode: 'Markdown' }
-  );
-  res.status(500).send('Error');
-}
 });
 
 // =================== Shutdown Handlers ===================
