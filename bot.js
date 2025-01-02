@@ -843,11 +843,7 @@ bot.start(async (ctx) => {
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
   }
 });
-
-/**
- * Greets the user and provides the main menu.
- * @param {TelegrafContext} ctx - Telegraf context.
- */
+// Greet User
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
   let userState;
@@ -884,6 +880,7 @@ async function greetUser(ctx) {
     await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists, hasBankLinked));
   }
 }
+
 
 // =================== Generate Wallet Handler ===================
 bot.hears('💼 Generate Wallet', async (ctx) => {
