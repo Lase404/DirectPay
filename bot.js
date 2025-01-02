@@ -1534,10 +1534,6 @@ async function fetchExchangeRates() {
 // Initial fetch
 fetchExchangeRates();
 
-// Update Exchange Rates Every 5 Minutes
-const PAYCREST_RATE_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
-setInterval(fetchExchangeRates, PAYCREST_RATE_UPDATE_INTERVAL);
-
 // =================== Apply Global Middleware ===================
 
 // **Global bodyParser.json() is applied after webhook routes to prevent interference**
@@ -2579,8 +2575,6 @@ async function fetchExchangeRates() {
   }
 }
 
-// Initial fetch
-fetchExchangeRates();
 
 // Update Exchange Rates Every 5 Minutes
 const PAYCREST_RATE_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
