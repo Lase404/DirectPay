@@ -50,7 +50,7 @@ const {
   BLOCKRADAR_BNB_API_KEY,
   BLOCKRADAR_POLYGON_API_KEY,
   MAX_WALLETS = 5, // Maximum number of wallets per user
-  BLOCKRADAR_CLIENT_SECRET, // Added for Blockradar webhook signature verification
+  // Removed BLOCKRADAR_CLIENT_SECRET
 } = process.env;
 
 // =================== Validations ===================
@@ -64,11 +64,6 @@ if ((WEBHOOK_DOMAIN && !WEBHOOK_PATH) || (!WEBHOOK_DOMAIN && WEBHOOK_PATH)) {
   process.exit(1);
 }
 
-if (!BLOCKRADAR_CLIENT_SECRET) {
-  logger.error('Missing BLOCKRADAR_CLIENT_SECRET for Blockradar webhook verification.');
-  process.exit(1);
-}
-
 // =================== Initialize Express App ===================
 const app = express();
 
@@ -78,7 +73,15 @@ const bot = new Telegraf(BOT_TOKEN);
 // =================== Define Supported Banks ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
-  // ... Add all other banks here with their respective codes, aliases, and Paycrest codes
+  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZENITHNGLA' },
+  { name: 'First Bank', code: '011', aliases: ['first', 'first bank', 'firstb', 'first bank nigeria'], paycrestInstitutionCode: 'FBNGINGLA' },
+  { name: 'GTBank', code: '058', aliases: ['gt', 'gtbank', 'gt bank', 'gtbank nigeria'], paycrestInstitutionCode: 'GTNGNGLA' },
+  { name: 'Union Bank', code: '032', aliases: ['union', 'union bank', 'unionb', 'union bank nigeria'], paycrestInstitutionCode: 'UNIONNGLA' },
+  { name: 'UBA', code: '033', aliases: ['uba', 'ubabank', 'uba bank', 'ubabank nigeria'], paycrestInstitutionCode: 'UBANGNGLA' },
+  { name: 'FCMB', code: '214', aliases: ['fcmb', 'fcmb bank', 'fcmbbank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGPC' },
+  { name: 'Keystone Bank', code: '082', aliases: ['keystone', 'keystone bank', 'keystoneb', 'keystone bank nigeria'], paycrestInstitutionCode: 'KEYSTONELA' },
+  { name: 'Heritage Bank', code: '030', aliases: ['heritage', 'heritage bank', 'heritageb', 'heritage bank nigeria'], paycrestInstitutionCode: 'HERITAGENGLA' },
+  { name: 'Sterling Bank', code: '232', aliases: ['sterling', 'sterling bank', 'sterlingb', 'sterling bank nigeria'], paycrestInstitutionCode: 'STERLINGNGLA' },
   { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
   { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
   { name: 'OPay', code: '999992', aliases: ['opay', 'opay nigeria'], paycrestInstitutionCode: 'OPAYNGPC' },
@@ -757,12 +760,13 @@ const receiptGenerationScene = new Scenes.WizardScene(
       let receiptMessage = `🧾 *Transaction Receipt for Wallet ${walletIndex + 1} - ${wallet.chain}*\n\n`;
       transactionsSnapshot.forEach((doc) => {
         const tx = doc.data();
-        receiptMessage += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-        receiptMessage += `*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-        receiptMessage += `*Status:* ${tx.status || 'Pending'}\n`;
-        receiptMessage += `*Exchange Rate:* ₦${exchangeRates[tx.asset] || 'N/A'} per ${tx.asset || 'N/A'}\n`;
-        receiptMessage += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-        receiptMessage += `*Chain:* ${tx.chain || 'N/A'}\n\n`;
+        receiptMessage += `*Transaction ${tx.referenceId || 'N/A'}:*\n`;
+        receiptMessage += `• *Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
+        receiptMessage += `• *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+        receiptMessage += `• *Status:* ${tx.status || 'Pending'}\n`;
+        receiptMessage += `• *Exchange Rate:* ₦${exchangeRates[tx.asset] || 'N/A'} per ${tx.asset || 'N/A'}\n`;
+        receiptMessage += `• *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
+        receiptMessage += `• *Chain:* ${tx.chain || 'N/A'}\n\n`;
       });
 
       await ctx.replyWithMarkdown(receiptMessage);
@@ -1141,67 +1145,90 @@ const getSettingsMenu = () =>
     [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
   ]);
 
-// Handle "🔄 Generate New Wallet" in Settings
-bot.action('settings_generate_wallet', async (ctx) => {
+// =================== Handle Settings Menu Actions ===================
+bot.action(/settings_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    
-    if (userState.wallets.length >= MAX_WALLETS) {
-      return ctx.replyWithMarkdown(`⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets before adding new ones.`);
-    }
+  const action = ctx.match[1];
 
-    // Added exchange rate information during wallet generation
-    let ratesMessage = '📈 *Current Exchange Rates*:\n\n';
-    for (const [asset, rate] of Object.entries(exchangeRates)) {
-      ratesMessage += `• *${asset}*: ₦${rate}\n`;
-    }
-    ratesMessage += `\nThese rates will be applied during your deposits and payouts.`;
+  switch (action) {
+    case 'generate_wallet':
+      // Handle Generate New Wallet from Settings
+      await ctx.replyWithMarkdown('💼 *Generate New Wallet*\n\n' +
+        'Select the network for which you want to generate a new wallet:',
+        Markup.inlineKeyboard([
+          [Markup.button.callback('Base', 'generate_wallet_Base')],
+          [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
+          [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
+        ])
+      );
+      break;
 
-    await ctx.replyWithMarkdown(ratesMessage);
+    case 'edit_bank':
+      // Handle Edit Linked Bank Details from Settings
+      try {
+        const userState = await getUserState(userId);
 
-    await ctx.reply('📂 *Select the network for which you want to generate a wallet:*', Markup.inlineKeyboard([
-      [Markup.button.callback('Base', 'generate_wallet_Base')],
-      [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-      [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-    ]));
+        if (userState.wallets.length === 0) {
+          return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+        }
 
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error handling Generate New Wallet in Settings for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while generating your wallet. Please try again later.');
-    ctx.answerCbQuery();
+        // If only one wallet, proceed to edit bank
+        if (userState.wallets.length === 1) {
+          ctx.session.walletIndex = 0;
+          await ctx.scene.enter('bank_linking_scene');
+        } else {
+          // Multiple wallets, prompt user to select which wallet to edit
+          let keyboard = userState.wallets.map((wallet, index) => [
+            Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_wallet_edit_bank_${index}`)
+          ]);
+          await ctx.reply('Please select the wallet for which you want to edit the bank details:', Markup.inlineKeyboard(keyboard));
+        }
+      } catch (error) {
+        logger.error(`Error handling Edit Linked Bank Details in Settings for user ${userId}: ${error.message}`);
+        await ctx.replyWithMarkdown('⚠️ An error occurred while editing your bank details. Please try again later.');
+      }
+      break;
+
+    case 'support':
+      // Handle Support from Settings
+      await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
+        [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
+        [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+        [Markup.button.callback('💬 Contact Support', 'support_contact')],
+      ]));
+      break;
+
+    case 'generate_receipt':
+      // Handle Generate Transaction Receipt from Settings
+      try {
+        const userState = await getUserState(userId);
+
+        if (userState.wallets.length === 0) {
+          return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+        }
+
+        // Prompt user to select which wallet to generate receipt for
+        let keyboard = userState.wallets.map((wallet, index) => [
+          Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_receipt_wallet_${index}`)
+        ]);
+        await ctx.reply('Please select the wallet for which you want to generate a transaction receipt:', Markup.inlineKeyboard(keyboard));
+      } catch (error) {
+        logger.error(`Error handling Generate Transaction Receipt in Settings for user ${userId}: ${error.message}`);
+        await ctx.replyWithMarkdown('⚠️ An error occurred while generating the receipt. Please try again later.');
+      }
+      break;
+
+    case 'back_to_main':
+      // Return to the main menu
+      await greetUser(ctx);
+      break;
+
+    default:
+      await ctx.reply('⚠️ Unknown settings option selected.');
   }
-});
 
-// Handle "✏️ Edit Linked Bank Details" in Settings
-bot.action('settings_edit_bank', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    
-    if (userState.wallets.length === 0) {
-      return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
-    }
-
-    // If only one wallet, proceed to edit bank
-    if (userState.wallets.length === 1) {
-      ctx.session.walletIndex = 0;
-      await ctx.scene.enter('bank_linking_scene');
-    } else {
-      // Multiple wallets, prompt user to select which wallet to edit
-      let keyboard = userState.wallets.map((wallet, index) => [
-        Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_wallet_edit_bank_${index}`)
-      ]);
-      await ctx.reply('Please select the wallet for which you want to edit the bank details:', Markup.inlineKeyboard(keyboard));
-    }
-    
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error handling Edit Linked Bank Details in Settings for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while editing your bank details. Please try again later.');
-    ctx.answerCbQuery();
-  }
+  // Acknowledge the callback to remove the loading state
+  await ctx.answerCbQuery();
 });
 
 // Handle Wallet Selection for Editing Bank Details
@@ -1217,39 +1244,6 @@ bot.action(/select_wallet_edit_bank_(\d+)/, async (ctx) => {
   ctx.session.walletIndex = walletIndex;
   await ctx.scene.enter('bank_linking_scene');
   ctx.answerCbQuery();
-});
-
-// Handle "💬 Support" in Settings
-bot.action('settings_support', async (ctx) => {
-  await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
-    [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-  ]));
-  ctx.answerCbQuery();
-});
-
-// Handle "🧾 Generate Transaction Receipt" in Settings
-bot.action('settings_generate_receipt', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    
-    if (userState.wallets.length === 0) {
-      return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
-    }
-
-    // Prompt user to select which wallet to generate receipt for
-    let keyboard = userState.wallets.map((wallet, index) => [
-      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_receipt_wallet_${index}`)
-    ]);
-    await ctx.reply('Please select the wallet for which you want to generate a transaction receipt:', Markup.inlineKeyboard(keyboard));
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error handling Generate Transaction Receipt in Settings for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while generating the receipt. Please try again later.');
-    ctx.answerCbQuery();
-  }
 });
 
 // Handle Wallet Selection for Generating Receipt
@@ -1755,27 +1749,15 @@ bot.action(/admin_(.+)/, async (ctx) => {
       }
       break;
 
-    case 'admin_back_to_main':
+    case 'back_to_main':
       // Return to the main menu
       await greetUser(ctx);
-      // Delete the admin panel message
-      if (ctx.session.adminMessageId) {
-        await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-        ctx.session.adminMessageId = null;
-      }
-      ctx.answerCbQuery();
       break;
 
     default:
       await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
   }
 });
-
-// =================== Support Handlers ===================
-// (Duplicate section removed as it was already defined earlier)
-
-// =================== Transactions Handler ===================
-// (Duplicate section removed as it was already defined earlier)
 
 // =================== Webhook Signature Verification ===================
 
@@ -1806,18 +1788,7 @@ function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
  * @param {string} secretKey - Blockradar client secret.
  * @returns {boolean} - Verification result.
  */
-function verifyBlockradarSignature(requestBody, signatureHeader, secretKey) {
-  const hmac = crypto.createHmac('sha256', secretKey);
-  hmac.update(requestBody);
-  const calculatedSignature = hmac.digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(calculatedSignature), Buffer.from(signatureHeader));
-  } catch (error) {
-    // If buffer lengths are not equal, timingSafeEqual throws an error
-    return false;
-  }
-}
+// Removed Blockradar signature verification functions as per user request
 
 // =================== Paycrest Webhook Handler ===================
 app.post('/webhook/paycrest', express.raw({ type: '*/*' }), async (req, res) => {
@@ -1994,28 +1965,9 @@ app.post('/webhook/paycrest', express.raw({ type: '*/*' }), async (req, res) => 
 });
 
 // =================== Blockradar Webhook Handler ===================
-app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) => {
+app.post('/webhook/blockradar', express.json(), async (req, res) => {
   try {
-    const signature = req.headers['x-blockradar-signature']; // Adjust based on actual header
-    const rawBody = req.body; // Buffer
-
-    if (!signature) {
-      logger.error('No Blockradar signature found in headers.');
-      return res.status(400).send('Signature missing.');
-    }
-
-    if (!verifyBlockradarSignature(rawBody, signature, BLOCKRADAR_CLIENT_SECRET)) {
-      logger.error('Invalid Blockradar signature.');
-      return res.status(401).send('Invalid signature.');
-    }
-
-    let parsedBody;
-    try {
-      parsedBody = JSON.parse(rawBody.toString());
-    } catch (error) {
-      logger.error(`Failed to parse Blockradar webhook body: ${error.message}`);
-      return res.status(400).send('Invalid JSON.');
-    }
+    const parsedBody = req.body;
 
     const event = parsedBody.type; // Assuming 'type' is the event type
     const data = parsedBody.data;
