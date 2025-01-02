@@ -62,7 +62,6 @@ const requiredEnvVars = [
   'BLOCKRADAR_BASE_API_KEY',
   'BLOCKRADAR_BNB_API_KEY',
   'BLOCKRADAR_POLYGON_API_KEY',
-  'BLOCKRADAR_CLIENT_SECRET',
   'PERSONAL_CHAT_ID',
 ];
 const missingVars = requiredEnvVars.filter(varName => !process.env[varName]);
