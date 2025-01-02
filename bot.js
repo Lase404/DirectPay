@@ -1929,7 +1929,6 @@ function verifyBlockradarSignature(requestBody, signatureHeader, secretKey) {
     return false;
   }
 }
-
 // =================== Blockradar Webhook Handler ===================
 app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) => {
   try {
@@ -1960,48 +1959,51 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
     // Log the received event for debugging purposes
     logger.info(`Received Blockradar event: ${event}`);
 
+    // Use a try block to handle event logic
     try {
-      // Extract common event data safely using optional chaining
       const eventType = event || 'Unknown Event';
       const walletAddress = data?.recipientAddress || 'N/A';
       const amount = parseFloat(data?.amount) || 0;
       const asset = data?.asset?.symbol || 'N/A';
       const transactionHash = data?.hash || 'N/A';
       const chainRaw = data?.blockchain?.name || 'N/A';
-      const senderAddress = data?.senderAddress || 'N/A'; 
-      
-      // Normalize and map the chain name for ease
+      const senderAddress = data?.senderAddress || 'N/A';
+
+      // Normalize chain name
       const chainKey = chainMapping[chainRaw.toLowerCase()];
       if (!chainKey) {
         logger.error(`Unknown chain received in Blockradar webhook: ${chainRaw}`);
-        // Notify admin about the unknown chain
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ Received deposit on unknown chain: \`${chainRaw}\``);
+        await bot.telegram.sendMessage(
+          PERSONAL_CHAT_ID, 
+          `⚠️ Received deposit on unknown chain: \`${chainRaw}\``
+        );
         return res.status(400).send('Unknown chain.');
       }
-
       const chain = chainKey;
 
-      // Handle different event types using if-else
       if (eventType === 'deposit.success') {
-        if (walletAddress === 'N/A') {
-          logger.error('Blockradar webhook missing wallet address.');
-          return res.status(400).send('Missing wallet address.');
-        }
-
-        // **Duplicate Check Start**
-        // Check if a transaction with the same hash already exists
-        const existingTxSnapshot = await db.collection('transactions').where('transactionHash', '==', transactionHash).get();
+        // 1. Duplicate check
+        const existingTxSnapshot = await db
+          .collection('transactions')
+          .where('transactionHash', '==', transactionHash)
+          .get();
         if (!existingTxSnapshot.empty) {
           logger.info(`Transaction with hash ${transactionHash} already exists. Skipping.`);
           return res.status(200).send('OK');
         }
-        // **Duplicate Check End**
 
-        // Find user by wallet address
-        const usersSnapshot = await db.collection('users').where('walletAddresses', 'array-contains', walletAddress).get();
+        // 2. Find user by wallet address
+        if (walletAddress === 'N/A') {
+          logger.error('Blockradar webhook missing wallet address.');
+          return res.status(400).send('Missing wallet address.');
+        }
+        const usersSnapshot = await db
+          .collection('users')
+          .where('walletAddresses', 'array-contains', walletAddress)
+          .get();
+
         if (usersSnapshot.empty) {
           logger.warn(`No user found for wallet address ${walletAddress}`);
-          // Notify admin about the unmatched wallet
           await bot.telegram.sendMessage(
             PERSONAL_CHAT_ID,
             `⚠️ No user found for wallet address: \`${walletAddress}\``,
@@ -2015,7 +2017,7 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
         const userState = userDoc.data();
         const wallet = userState.wallets.find((w) => w.address === walletAddress);
 
-        // Check if Wallet has Linked Bank
+        // 3. Check if the user’s wallet is linked to a bank
         if (!wallet || !wallet.bank) {
           await bot.telegram.sendMessage(
             userId,
@@ -2024,13 +2026,13 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           );
           await bot.telegram.sendMessage(
             PERSONAL_CHAT_ID,
-            `⚠️ User ${userId} has received a deposit but hasn't linked a bank account.`,
+            `⚠️ User ${userId} received a deposit but hasn't linked a bank account.`,
             { parse_mode: 'Markdown' }
           );
           return res.status(200).send('OK');
         }
 
-        // Only support USDC and USDT
+        // 4. Only support USDC/USDT
         if (!['USDC', 'USDT'].includes(asset)) {
           await bot.telegram.sendMessage(
             userId,
@@ -2045,24 +2047,20 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           return res.status(200).send('OK');
         }
 
-        // Get the latest exchange rate (ensure exchangeRates are updated dynamically)
+        // 5. Fetch exchange rate and compute NGN payout
         const rate = exchangeRates[asset];
         if (!rate) {
           throw new Error(`Exchange rate for ${asset} not available.`);
         }
-
-        // Calculate the NGN amount based on the current exchange rate
         const ngnAmount = calculatePayout(asset, amount);
 
+        // 6. Create a transaction document
         const referenceId = generateReferenceId();
         const bankName = wallet.bank.bankName || 'N/A';
         const bankAccount = wallet.bank.accountNumber || 'N/A';
         const accountName = wallet.bank.accountName || 'Valued User';
-
-        // Fetch the user's first name
         const userFirstName = userState.firstName || 'Valued User';
 
-        // Create Transaction Document with Status 'Processing' and store messageId as null at first
         const transactionRef = await db.collection('transactions').add({
           userId,
           walletAddress,
@@ -2072,33 +2070,31 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           transactionHash: transactionHash,
           referenceId: referenceId,
           bankDetails: wallet.bank,
-          payout: ngnAmount, // Store NGN payout
+          payout: ngnAmount,
           timestamp: new Date().toISOString(),
           status: 'Processing',
-          paycrestOrderId: '', // To be updated upon Paycrest order creation
-          messageId: null, // To be set after sending the pending message
-          firstName: userFirstName // Added firstName here
+          paycrestOrderId: '',
+          messageId: null,
+          firstName: userFirstName
         });
 
-        // Send Detailed Pending Message to User
-        const pendingMessage = await bot.telegram.sendMessage(userId,
+        // 7. Inform the user (pending)
+        const pendingMessage = await bot.telegram.sendMessage(
+          userId,
           `🎉 *Deposit Received!*\n\n` +
-          `*Reference ID:* \`${referenceId}\`\n` +
-          `*Amount Deposited:* ${amount} ${asset}\n` +
-          `*Exchange Rate:* ₦${rate} per ${asset}\n` + 
-          `*Network:* ${chainRaw}\n\n` +
-          `🔄 *Your order has begun processing!* ⏳\n\n` +
-          `We are converting your crypto to NGN at the current exchange rate of ₦${rate} per ${asset}. Your cash will be credited to your linked bank account shortly.\n\n` +
-          `Thank you for using *DirectPay*!`,
+            `*Reference ID:* \`${referenceId}\`\n` +
+            `*Amount Deposited:* ${amount} ${asset}\n` +
+            `*Exchange Rate:* ₦${rate} per ${asset}\n` +
+            `*Network:* ${chainRaw}\n\n` +
+            `🔄 *Your order has begun processing!* ⏳\n\n` +
+            `We are converting your crypto to NGN at the current rate of ₦${rate} per ${asset}. Your cash will be credited to your linked bank account shortly.\n\n` +
+            `Thank you for using *DirectPay*!`,
           { parse_mode: 'Markdown' }
         );
 
-        // Update the transaction document with message_id
-        await transactionRef.update({
-          messageId: pendingMessage.message_id,
-        });
+        await transactionRef.update({ messageId: pendingMessage.message_id });
 
-        // Notify admin with detailed deposit information
+        // 8. Notify admin
         const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
           `*User ID:* ${userId}\n` +
           `*Amount Deposited:* ${amount} ${asset}\n` +
@@ -2118,7 +2114,7 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           { parse_mode: 'Markdown' }
         );
 
-        // Integrate Paycrest to off-ramp automatically
+        // 9. Create a Paycrest order
         const paycrestMapping = mapToPaycrest(asset, chainRaw);
         if (!paycrestMapping) {
           logger.error('No Paycrest mapping for this asset/chain.');
@@ -2129,7 +2125,6 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           return res.status(200).send('OK');
         }
 
-        // Create Paycrest order with returnAddress as senderAddress
         let paycrestOrder;
         try {
           paycrestOrder = await createPaycrestOrder(
@@ -2143,15 +2138,13 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           await transactionRef.update({ paycrestOrderId: paycrestOrder.id });
         } catch (err) {
           logger.error(`Error creating Paycrest order for user ${userId}: ${err.message}`);
-          // Notify admin about the failure
           await bot.telegram.sendMessage(
             PERSONAL_CHAT_ID,
             `❗️ Error creating Paycrest order for user ${userId}: ${err.message}`,
             { parse_mode: 'Markdown' }
           );
-          // Update transaction status to 'Failed'
           await transactionRef.update({ status: 'Failed' });
-          // Update user's pending message to indicate failure
+
           const failureMessage = `Hello ${userFirstName},\n\n` +
             `⚠️ *Your DirectPay order has failed to process.*\n\n` +
             `Please contact our support team for assistance.`;
@@ -2165,9 +2158,7 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           return res.status(500).send('Paycrest order error');
         }
 
-        const receiveAddress = paycrestOrder.receiveAddress;
-
-        // Withdraw from Blockradar to Paycrest receiveAddress
+        // 10. Withdraw from Blockradar to Paycrest
         let blockradarAssetId;
         switch (asset) {
           case 'USDC':
@@ -2184,22 +2175,26 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           await withdrawFromBlockradar(
             chainRaw,
             blockradarAssetId,
-            receiveAddress,
+            paycrestOrder.receiveAddress,
             amount,
             paycrestOrder.id,
             { userId, originalTxHash: transactionHash }
           );
         } catch (err) {
-          logger.error(`Error withdrawing from Blockradar for user ${userId}: ${err.response ? err.response.data.message : err.message}`);
-          // Notify admin about this failure
+          logger.error(
+            `Error withdrawing from Blockradar for user ${userId}: ${
+              err.response ? err.response.data.message : err.message
+            }`
+          );
           await bot.telegram.sendMessage(
             PERSONAL_CHAT_ID,
-            `❗️ Error withdrawing from Blockradar for user ${userId}: ${err.response ? err.response.data.message : err.message}`,
+            `❗️ Error withdrawing from Blockradar for user ${userId}: ${
+              err.response ? err.response.data.message : err.message
+            }`,
             { parse_mode: 'Markdown' }
           );
-          // Update transaction status to 'Failed'
           await transactionRef.update({ status: 'Failed' });
-          // Update user's pending message to indicate failure
+
           const failureMessage = `Hello ${userFirstName},\n\n` +
             `⚠️ *Your DirectPay order has failed to process.*\n\n` +
             `Please contact our support team for assistance.`;
@@ -2213,16 +2208,24 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
           return res.status(500).send('Blockradar withdrawal error');
         }
 
-        // Update transaction status to 'Pending'
-        await db.collection('transactions').doc(transactionRef.id).update({ status: 'Pending' });
+        // Finally, set status to 'Pending' while off-ramp completes
+        await transactionRef.update({ status: 'Pending' });
 
         logger.info(`Transaction stored for user ${userId}: Reference ID ${paycrestOrder.id}`);
-
         res.status(200).send('OK');
+      } else {
+        // If the event type is not handled above:
+        logger.warn(`Unhandled Blockradar webhook event type: ${eventType}`);
+        res.status(200).send('Unhandled event type.');
       }
-    } else {
-      logger.warn(`Unhandled Blockradar webhook event type: ${eventType}`);
-      res.status(200).send('Unhandled event type.');
+    } catch (error) {
+      logger.error(`Error processing Blockradar webhook: ${error.message}`);
+      res.status(500).send('Error processing webhook');
+      await bot.telegram.sendMessage(
+        PERSONAL_CHAT_ID,
+        `❗️ Error processing Blockradar webhook: ${error.message}`,
+        { parse_mode: 'Markdown' }
+      );
     }
   } catch (error) {
     logger.error(`Error processing Blockradar webhook: ${error.message}`);
