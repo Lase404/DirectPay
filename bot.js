@@ -50,11 +50,22 @@ const {
   BLOCKRADAR_BNB_API_KEY,
   BLOCKRADAR_POLYGON_API_KEY,
   MAX_WALLETS = 5, // Maximum number of wallets per user
+  BLOCKRADAR_CLIENT_SECRET, // Added for Blockradar webhook signature verification
 } = process.env;
 
 // =================== Validations ===================
 if (!BOT_TOKEN || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !WEBHOOK_DOMAIN || !PAYSTACK_API_KEY) {
   logger.error('Missing required environment variables. Please check your .env file.');
+  process.exit(1);
+}
+
+if ((WEBHOOK_DOMAIN && !WEBHOOK_PATH) || (!WEBHOOK_DOMAIN && WEBHOOK_PATH)) {
+  logger.error('Both WEBHOOK_DOMAIN and WEBHOOK_PATH must be set together.');
+  process.exit(1);
+}
+
+if (!BLOCKRADAR_CLIENT_SECRET) {
+  logger.error('Missing BLOCKRADAR_CLIENT_SECRET for Blockradar webhook verification.');
   process.exit(1);
 }
 
@@ -768,9 +779,36 @@ const receiptGenerationScene = new Scenes.WizardScene(
 const stage = new Scenes.Stage();
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
 
-// =================== Apply Middlewares ===================
-bot.use(session());
-bot.use(stage.middleware());
+// =================== Apply Telegraf Webhook Middleware ===================
+
+if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
+  const webhookURL = `${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`;
+  bot.telegram.setWebhook(webhookURL)
+    .then(() => {
+      logger.info(`Webhook set to ${webhookURL}`);
+    })
+    .catch((err) => {
+      logger.error(`Failed to set webhook: ${err.message}`);
+    });
+
+  // Integrate Telegraf's webhook callback with Express
+  app.use(bot.webhookCallback(WEBHOOK_PATH));
+} else {
+  // Fallback to long polling if webhook details are missing
+  logger.warn('WEBHOOK_DOMAIN or WEBHOOK_PATH not set. Falling back to long polling.');
+  bot.launch()
+    .then(() => {
+      logger.info('Bot started using long polling.');
+    })
+    .catch((err) => {
+      logger.error(`Failed to launch bot: ${err.message}`);
+    });
+}
+
+// =================== Apply Other Middlewares ===================
+
+// It's crucial that bodyParser.json() does not interfere with webhook paths
+app.use(bodyParser.json());
 
 // =================== Exchange Rate Fetching ===================
 const SUPPORTED_ASSETS = ['USDC', 'USDT'];
@@ -843,6 +881,7 @@ bot.start(async (ctx) => {
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
   }
 });
+
 // Greet User
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
@@ -880,7 +919,6 @@ async function greetUser(ctx) {
     await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists, hasBankLinked));
   }
 }
-
 
 // =================== Generate Wallet Handler ===================
 bot.hears('💼 Generate Wallet', async (ctx) => {
@@ -1231,7 +1269,6 @@ bot.action(/select_receipt_wallet_(\d+)/, async (ctx) => {
 
 // =================== Support Handlers ===================
 
-// Detailed Tutorials
 const detailedTutorials = {
   how_it_works: `
 **📘 How DirectPay Works**
@@ -1735,129 +1772,12 @@ bot.action(/admin_(.+)/, async (ctx) => {
 });
 
 // =================== Support Handlers ===================
-bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
-    [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-  ]));
-});
-
-// Support Actions
-bot.action('support_how_it_works', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_not_received', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
-  ctx.answerCbQuery();
-});
+// (Duplicate section removed as it was already defined earlier)
 
 // =================== Transactions Handler ===================
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const pageSize = 5; // Number of transactions per page
-    const userState = await getUserState(userId);
-    const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
-    ctx.session.transactionsPage = 1; // Initialize to first page
+// (Duplicate section removed as it was already defined earlier)
 
-    const generateTransactionPage = (page) => {
-      const start = (page - 1) * pageSize;
-      const end = start + pageSize;
-      const transactions = userState.wallets.slice(start, end);
-
-      let message = `💰 *Your Transactions* (Page ${page}/${totalPages}):\n\n`;
-      transactions.forEach((tx, index) => {
-        message += `*Transaction ${start + index + 1}:*\n`;
-        message += `• *Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-        message += `• *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-        message += `• *Status:* ${tx.status || 'Pending'}\n`;
-        message += `• *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-        message += `• *Chain:* ${tx.chain || 'N/A'}\n\n`;
-      });
-
-      const navigationButtons = [];
-
-      if (page > 1) {
-        navigationButtons.push(Markup.button.callback('⬅️ Previous', `transaction_page_${page - 1}`));
-      }
-      if (page < totalPages) {
-        navigationButtons.push(Markup.button.callback('Next ➡️', `transaction_page_${page + 1}`));
-      }
-      navigationButtons.push(Markup.button.callback('🔄 Refresh', `transaction_page_${page}`));
-
-      const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-      return { message, inlineKeyboard };
-    };
-
-    const { message, inlineKeyboard } = generateTransactionPage(ctx.session.transactionsPage);
-    await ctx.replyWithMarkdown(message, inlineKeyboard);
-  } catch (error) {
-    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
-  }
-});
-
-// Transaction Page Navigation
-bot.action(/transaction_page_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const requestedPage = parseInt(ctx.match[1], 10);
-
-  try {
-    const pageSize = 5;
-    const userState = await getUserState(userId);
-    const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
-
-    if (requestedPage < 1 || requestedPage > totalPages) {
-      return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
-    }
-
-    ctx.session.transactionsPage = requestedPage;
-
-    const start = (requestedPage - 1) * pageSize;
-    const end = start + pageSize;
-    const transactions = userState.wallets.slice(start, end);
-
-    let message = `💰 *Your Transactions* (Page ${requestedPage}/${totalPages}):\n\n`;
-    transactions.forEach((tx, index) => {
-      message += `*Transaction ${start + index + 1}:*\n`;
-      message += `• *Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-      message += `• *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-      message += `• *Status:* ${tx.status || 'Pending'}\n`;
-      message += `• *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      message += `• *Chain:* ${tx.chain || 'N/A'}\n\n`;
-    });
-
-    const navigationButtons = [];
-
-    if (requestedPage > 1) {
-      navigationButtons.push(Markup.button.callback('⬅️ Previous', `transaction_page_${requestedPage - 1}`));
-    }
-    if (requestedPage < totalPages) {
-      navigationButtons.push(Markup.button.callback('Next ➡️', `transaction_page_${requestedPage + 1}`));
-    }
-    navigationButtons.push(Markup.button.callback('🔄 Refresh', `transaction_page_${requestedPage}`));
-
-    const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-    ctx.answerCbQuery(); // Acknowledge the callback
-  } catch (error) {
-    logger.error(`Error navigating transaction pages for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while navigating transactions. Please try again later.');
-    ctx.answerCbQuery();
-  }
-});
-
-// =================== Verify Paycrest Signature ===================
+// =================== Webhook Signature Verification ===================
 
 /**
  * Verifies Paycrest webhook signature.
@@ -1867,6 +1787,26 @@ bot.action(/transaction_page_(\d+)/, async (ctx) => {
  * @returns {boolean} - Verification result.
  */
 function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
+  const hmac = crypto.createHmac('sha256', secretKey);
+  hmac.update(requestBody);
+  const calculatedSignature = hmac.digest('hex');
+
+  try {
+    return crypto.timingSafeEqual(Buffer.from(calculatedSignature), Buffer.from(signatureHeader));
+  } catch (error) {
+    // If buffer lengths are not equal, timingSafeEqual throws an error
+    return false;
+  }
+}
+
+/**
+ * Verifies Blockradar webhook signature.
+ * @param {Buffer} requestBody - Raw request body.
+ * @param {string} signatureHeader - Signature from headers.
+ * @param {string} secretKey - Blockradar client secret.
+ * @returns {boolean} - Verification result.
+ */
+function verifyBlockradarSignature(requestBody, signatureHeader, secretKey) {
   const hmac = crypto.createHmac('sha256', secretKey);
   hmac.update(requestBody);
   const calculatedSignature = hmac.digest('hex');
@@ -2053,27 +1993,6 @@ app.post('/webhook/paycrest', express.raw({ type: '*/*' }), async (req, res) => 
   }
 });
 
-// =================== Verify Blockradar Signature ===================
-
-/**
- * Verifies Blockradar webhook signature.
- * @param {Buffer} requestBody - Raw request body.
- * @param {string} signatureHeader - Signature from headers.
- * @param {string} secretKey - Blockradar client secret.
- * @returns {boolean} - Verification result.
- */
-function verifyBlockradarSignature(requestBody, signatureHeader, secretKey) {
-  const hmac = crypto.createHmac('sha256', secretKey);
-  hmac.update(requestBody);
-  const calculatedSignature = hmac.digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(calculatedSignature), Buffer.from(signatureHeader));
-  } catch (error) {
-    // If buffer lengths are not equal, timingSafeEqual throws an error
-    return false;
-  }
-}
 // =================== Blockradar Webhook Handler ===================
 app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) => {
   try {
@@ -2389,13 +2308,11 @@ app.post('/webhook/blockradar', express.raw({ type: '*/*' }), async (req, res) =
   }
 });
 
-// =================== Shutdown Handlers ===================
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
 // =================== Start Express Server ===================
-app.use(bodyParser.json());
-
 app.listen(PORT, () => {
   logger.info(`Express server listening on port ${PORT}`);
 });
+
+// =================== Shutdown Handlers ===================
+process.once('SIGINT', () => bot.stop('SIGINT'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
