@@ -190,37 +190,66 @@ async function verifyBankAccount(accountNumber, bankCode) {
  * @param {string} refundAddress - Address to refund in case of failure.
  * @returns {object} - Paycrest order data.
  */
-async function createPaycrestOrder(userId, amount, token, network, recipientDetails, refundAddress) {
+async function createPaycrestOrder(userId, amount, token, network, recipientDetails, userSendAddress) {
   try {
-    const payload = {
-      userId,
-      amount,
-      token,
-      network,
-      recipient: {
-        accountName: recipientDetails.accountName,
-        accountNumber: recipientDetails.accountNumber,
-        bankName: recipientDetails.bankName,
-        bankCode: recipientDetails.bankCode
-      },
-      refundAddress // Use senderAddress as refund address
+    const paycrestMapping = mapToPaycrest(token, network);
+    if (!paycrestMapping) {
+      throw new Error('No Paycrest mapping for the selected asset/chain.');
+    }
+
+    // Fetch the Paycrest Institution Code
+    const bank = bankList.find(b => b.name.toLowerCase() === recipientDetails.bankName.toLowerCase());
+    if (!bank || !bank.paycrestInstitutionCode) {
+      const errorMsg = `No Paycrest institution code found for bank: ${recipientDetails.bankName}`;
+      logger.error(errorMsg);
+      // Notify admin about the missing institution code
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ ${errorMsg} for user ${userId}.`);
+      throw new Error(errorMsg);
+    }
+
+    const recipient = {
+      institution: bank.paycrestInstitutionCode, // Use the mapped Paycrest institution code
+      accountIdentifier: recipientDetails.accountNumber,
+      accountName: recipientDetails.accountName,
+      memo: `Payment from DirectPay`,
+      providerId: "" // Assuming empty; update if necessary
     };
 
-    const response = await axios.post('https://api.paycrest.io/v1/orders', payload, {
+    // Fetch the current rate from exchangeRates
+    const rate = exchangeRates[token];
+    if (!rate) {
+      throw new Error(`Exchange rate for ${token} not available.`);
+    }
+
+    // payload
+    const orderPayload = {
+      amount: String(amount), // Token amount as string
+      rate: String(rate), // Exchange rate as string from Paycrest Rate API
+      network: paycrestMapping.network, // e.g., 'polygon', 'base', etc.
+      token: paycrestMapping.token, // 'USDT' or 'USDC'
+      recipient: recipient,
+      returnAddress: senderAddress || PAYCREST_RETURN_ADDRESS, // Use user's send address or default
+      feePercent: 2, // Example fee percentage
+    };
+
+    // API req
+    const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
       headers: {
-        Authorization: `Bearer ${PAYCREST_API_KEY}`,
+        'API-Key': PAYCREST_API_KEY,
         'Content-Type': 'application/json'
       }
     });
 
-    if (response.data.status === 'success') {
-      return response.data.data; // Assuming Paycrest returns order data in 'data'
-    } else {
-      throw new Error(response.data.message || 'Failed to create Paycrest order.');
+    // response OK?
+    if (orderResp.data.status !== 'success') {
+      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
     }
-  } catch (error) {
-    logger.error(`Error creating Paycrest order: ${error.message}`);
-    throw error;
+
+    // Return the order data
+    return orderResp.data.data; // Contains id, amount, token, network, receiveAddress, etc.
+  } catch (err) {
+    logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
+    throw new Error('Failed to create Paycrest order.');
   }
 }
 
