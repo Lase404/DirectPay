@@ -200,7 +200,7 @@ async function verifyBankAccount(accountNumber, bankCode) {
  * @param {string} userSendAddress - User's sending address.
  * @returns {object} - Paycrest order data.
  */
-async function createPaycrestOrder(userId, amount, token, network, recipientDetails, senderAddress) {
+async function createPaycrestOrder(userId, amount, token, network, recipientDetails, userSendAddress) {
   try {
     // Map to Paycrest network and token
     const paycrestMapping = mapToPaycrest(token, network);
@@ -239,7 +239,7 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
       network: paycrestMapping.network, // e.g., 'polygon', 'base', etc.
       token: paycrestMapping.token, // 'USDT' or 'USDC'
       recipient: recipient,
-      returnAddress: senderAddress || PAYCREST_RETURN_ADDRESS, // Use user's send address or default
+      returnAddress: userSendAddress || PAYCREST_RETURN_ADDRESS, // Use user's send address or default
       feePercent: 2, // Example fee percentage
     };
 
@@ -1451,7 +1451,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       return { message, inlineKeyboard };
     };
 
-    const { message, inlineKeyboard } = generateTransactionPage(ctx.session.transactionsPage);
+    const { message, inlineKeyboard } = generateTransactionPage(ctx.session.transactionsPage, userState, pageSize, totalPages);
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
     logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
@@ -1522,48 +1522,6 @@ function generateTransactionPage(page, userState, pageSize, totalPages) {
 
   return { message, inlineKeyboard };
 }
-
-// =================== Support Handlers ===================
-bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
-    [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
-    [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-    [Markup.button.callback('💬 Contact Support', 'support_contact')],
-  ]));
-});
-
-// Support Actions
-bot.action('support_how_it_works', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_not_received', async (ctx) => {
-  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-  ctx.answerCbQuery();
-});
-
-bot.action('support_contact', async (ctx) => {
-  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
-  ctx.answerCbQuery();
-});
-
-// =================== Transactions Handler ===================
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const pageSize = 5; // Number of transactions per page
-    const userState = await getUserState(userId);
-    const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
-    ctx.session.transactionsPage = 1; // Initialize to first page
-
-    const { message, inlineKeyboard } = generateTransactionPage(ctx.session.transactionsPage, userState, pageSize, totalPages);
-    await ctx.replyWithMarkdown(message, inlineKeyboard);
-  } catch (error) {
-    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
-  }
-});
 
 // =================== Admin Panel ===================
 
@@ -1779,7 +1737,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
-// =================== Admin Panel Back to Main ===================
+// Handle Admin Panel Back to Main
 bot.action('admin_back_to_main', async (ctx) => {
   await greetUser(ctx);
 });
@@ -2079,23 +2037,8 @@ app.post('/webhook/blockradar', express.json(), async (req, res) => {
         firstName: userFirstName // Added firstName here
       });
 
-      // Send Detailed Pending Message to User
-      const pendingMessage = await bot.telegram.sendMessage(userId,
-        `🎉 *Deposit Received!*\n\n` +
-        `*Reference ID:* \`${referenceId}\`\n` +
-        `*Amount Deposited:* ${amount} ${asset}\n` +
-        `*Exchange Rate:* ₦${rate} per ${asset}\n` + 
-        `*Network:* ${chainRaw}\n\n` +
-        `🔄 *Your order has begun processing!* ⏳\n\n` +
-        `We are converting your crypto to NGN at the current exchange rate of ₦${rate} per ${asset}. Your cash will be credited to your linked bank account shortly.\n\n` +
-        `Thank you for using *DirectPay*!`,
-        { parse_mode: 'Markdown' }
-      );
-
-      // Update the transaction document with message_id
-      await transactionRef.update({
-        messageId: pendingMessage.message_id,
-      });
+      // **Removed "Order Pending" Message to User**
+      // Previously, the bot sent a pending message to the user. This has been removed as per the user's request.
 
       // Notify admin with detailed deposit information
       const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
@@ -2151,16 +2094,9 @@ app.post('/webhook/blockradar', express.json(), async (req, res) => {
         // Update transaction status to 'Failed'
         await transactionRef.update({ status: 'Failed' });
         // Update user's pending message to indicate failure
-        const failureMessage = `Hello ${userFirstName},\n\n` +
-          `⚠️ *Your DirectPay order has failed to process.*\n\n` +
-          `Please contact our support team for assistance.`;
-        await bot.telegram.editMessageText(
-          userId,
-          pendingMessage.message_id,
-          null,
-          failureMessage,
-          { parse_mode: 'Markdown' }
-        );
+        // **Removed Pending Message Update**
+        // Previously, the bot updated a pending message to indicate failure. This has been removed.
+
         return res.status(500).send('Paycrest order error');
       }
 
@@ -2199,16 +2135,9 @@ app.post('/webhook/blockradar', express.json(), async (req, res) => {
         // Update transaction status to 'Failed'
         await transactionRef.update({ status: 'Failed' });
         // Update user's pending message to indicate failure
-        const failureMessage = `Hello ${userFirstName},\n\n` +
-          `⚠️ *Your DirectPay order has failed to process.*\n\n` +
-          `Please contact our support team for assistance.`;
-        await bot.telegram.editMessageText(
-          userId,
-          pendingMessage.message_id,
-          null,
-          failureMessage,
-          { parse_mode: 'Markdown' }
-        );
+        // **Removed Pending Message Update**
+        // Previously, the bot updated a pending message to indicate failure. This has been removed.
+
         return res.status(500).send('Blockradar withdrawal error');
       }
 
@@ -2350,16 +2279,8 @@ async function handlePaymentOrderPending(data) {
   const userId = txData.userId;
   const userFirstName = txData.firstName || 'Valued User';
 
-  // Send pending message to user
-  await bot.telegram.sendMessage(
-    userId,
-    `⏳ *Your DirectPay order is pending processing.*\n\n` +
-    `*Reference ID:* \`${reference}\`\n` +
-    `*Amount:* ₦${amountPaid}\n` +
-    `*Status:* Pending\n\n` +
-    `We are currently processing your order. Please wait for further updates.`,
-    { parse_mode: 'Markdown' }
-  );
+  // **Removed "Order Pending" Message to User**
+  // Previously, the bot sent a pending message to the user. This has been removed as per the user's request.
 
   // Log to admin
   await bot.telegram.sendMessage(
@@ -2488,9 +2409,8 @@ async function handlePaymentOrderExpired(data) {
     userId,
     `⚠️ *Your DirectPay order has expired.*\n\n` +
     `Hello ${userFirstName},\n\n` +
-    `We regret to inform you that your DirectPay order with *Reference ID:* \`${reference}\` has expired.\n\n` +
+    `We regret to inform you that your DirectPay order has expired.\n\n` +
     `*Reason:* We experienced issues while processing your order. Rest assured, the funds have been returned to your original payment method.\n\n` +
-    `*Refund Transaction Hash:* \`${refundTxHash}\`\n\n` +
     `If you believe this is a mistake or need further assistance, please don't hesitate to contact our support team.\n\n` +
     `Thank you for your understanding.`,
     { parse_mode: 'Markdown' }
@@ -2517,7 +2437,7 @@ async function handlePaymentOrderExpired(data) {
 async function handlePaymentOrderRefunded(data) {
   const orderId = data.id;
   const status = data.status;
-  const refundTxHash = data.refundTxHash || 'N/A'; // Assuming 'refundTxHash' is provided
+  const refundTxHash = data.txHash || 'N/A'; // Assuming 'refundTxHash' is provided
   const reference = data.reference;
 
   // Fetch the transaction by Paycrest order ID
