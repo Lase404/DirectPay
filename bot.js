@@ -76,9 +76,8 @@ const bankList = [
   // Add more banks as needed
 ];
 
-// =================== Define Supported Chains ===================
 const chains = {
-  Base: {
+  base: {
     id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
     key: BLOCKRADAR_BASE_API_KEY,
     apiUrl: 'https://api.blockradar.co/v1/wallets/e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1/addresses',
@@ -86,10 +85,10 @@ const chains = {
     network: 'Base',
     assets: {
       USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
-      USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
+      USDT: 'your_unique_usdt_asset_id_for_base' // Replace with the correct ID
     }
   },
-  Polygon: {
+  polygon: {
     id: 'f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a',
     key: BLOCKRADAR_POLYGON_API_KEY,
     apiUrl: 'https://api.blockradar.co/v1/wallets/f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a/addresses',
@@ -100,7 +99,7 @@ const chains = {
       USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1',
     }
   },
-  'BNB Smart Chain': {
+  'bnb smart chain': {
     id: '7a844e91-5740-4589-9695-c74411adec7e',
     key: BLOCKRADAR_BNB_API_KEY,
     apiUrl: 'https://api.blockradar.co/v1/wallets/7a844e91-5740-4589-9695-c74411adec7e/addresses',
@@ -111,15 +110,6 @@ const chains = {
       USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb',
     }
   }
-};
-
-// =================== Chain Mapping ===================
-const chainMapping = {
-  base: 'Base',
-  polygon: 'Polygon',
-  'bnb smart chain': 'BNB Smart Chain',
-  'bnb-smart-chain': 'BNB Smart Chain',
-  // Add other mappings as needed
 };
 
 // =================== Helper Functions ===================
@@ -713,7 +703,7 @@ async function handleBlockradarDepositSuccess(event, res) {
     if (userSnapshot.empty) {
       logger.warn(`No user found for recipientAddress ${recipientAddress}`);
       // Notify admin about the unmatched wallet
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No user found for recipient address: \`${recipientAddress}\``);
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ No user found for recipient address: \`${recipientAddress}\``, { parse_mode: 'Markdown' });
       return res.status(200).send('OK');
     }
 
@@ -726,7 +716,7 @@ async function handleBlockradarDepositSuccess(event, res) {
 
     if (!wallet) {
       logger.warn(`User ${userId} does not have a wallet with address ${recipientAddress}`);
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} does not have a wallet with address: \`${recipientAddress}\``);
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} does not have a wallet with address: \`${recipientAddress}\``, { parse_mode: 'Markdown' });
       return res.status(200).send('OK');
     }
 
@@ -800,6 +790,7 @@ async function handleBlockradarDepositSuccess(event, res) {
     // Notify admin with detailed deposit information
     const adminDepositMessage = `⚡️ *New Deposit Received*\n\n` +
       `*User ID:* ${userId}\n` +
+      `*Reference ID:* \`${referenceId}\`\n` +
       `*Amount Deposited:* ${amount} ${asset}\n` +
       `*Exchange Rate:* ₦${rate} per ${asset}\n` +
       `*Amount to be Paid:* ₦${ngnAmount}\n` +
@@ -847,7 +838,7 @@ async function handleBlockradarDepositSuccess(event, res) {
 
     // Withdraw from Blockradar to Paycrest receiveAddress
     let blockradarAssetId;
-    const chainKeyLower = chainRaw.toLowerCase();
+    const chainKeyLower = chainRaw.toLowerCase(); // 'base'
     switch (asset) {
       case 'USDC':
         blockradarAssetId = chains[chainKeyLower]?.assets['USDC'];
@@ -933,6 +924,7 @@ async function handleBlockradarDepositSuccess(event, res) {
     );
   }
 }
+
 
 // =================== Paycrest Webhook Event Handlers ===================
 
