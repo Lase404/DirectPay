@@ -50,8 +50,9 @@ const PAYCREST_RATE_API_URL = process.env.PAYCREST_RATE_API_URL;
 const BLOCKRADAR_API_KEY = process.env.BLOCKRADAR_API_KEY;
 const BLOCKRADAR_API_URL = process.env.BLOCKRADAR_API_URL;
 const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID; // Admin Chat ID
+const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY; // Added PAYSTACK_API_KEY
 
-if (!BOT_TOKEN || !PAYCREST_CLIENT_SECRET || !PAYCREST_API_KEY || !PAYCREST_RATE_API_URL || !BLOCKRADAR_API_KEY || !BLOCKRADAR_API_URL || !PERSONAL_CHAT_ID) {
+if (!BOT_TOKEN || !PAYCREST_CLIENT_SECRET || !PAYCREST_API_KEY || !PAYCREST_RATE_API_URL || !BLOCKRADAR_API_KEY || !BLOCKRADAR_API_URL || !PERSONAL_CHAT_ID || !PAYSTACK_API_KEY) {
   logger.error('Missing one or more required environment variables.');
   process.exit(1);
 }
@@ -97,6 +98,15 @@ const chainMapping = {
 // Define supported assets
 const SUPPORTED_ASSETS = ['USDC', 'USDT'];
 
+// =================== Define Bank List ===================
+// Define a list of banks with their codes and names
+const bankList = [
+  { code: '058', name: 'GTBank' },
+  { code: '011', name: 'First Bank' },
+  { code: '221', name: 'Zenith Bank' },
+  // Add more banks as needed
+];
+
 // =================== Helper Functions ===================
 
 /**
@@ -127,15 +137,13 @@ function isValidAddress(address, chain) {
  * @param {string} bankCode - Bank code.
  * @returns {object} - Bank account details.
  */
-const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
-
 async function verifyBankAccount(accountNumber, bankCode) {
   try {
     const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
       params: { account_number: accountNumber, bank_code: bankCode },
       headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
     });
-    return response.data;
+    return response.data.data;
   } catch (error) {
     logger.error(`Error verifying bank account (${accountNumber}, ${bankCode}): ${error.response ? error.response.data.message : error.message}`);
     throw new Error('Failed to verify bank account. Please try again later.');
@@ -152,22 +160,25 @@ async function verifyBankAccount(accountNumber, bankCode) {
  * @param {object} metadata - Additional metadata.
  */
 async function withdrawFromBlockradar(chain, assetId, receiveAddress, amount, paycrestOrderId, metadata) {
-  // Implement withdrawal logic using Blockradar API
-  // Placeholder implementation
-  const response = await axios.post(`${BLOCKRADAR_API_URL}/withdraw`, {
-    chain,
-    assetId,
-    address: receiveAddress,
-    amount,
-    metadata
-  }, {
-    headers: {
-      'Authorization': `Bearer ${BLOCKRADAR_API_KEY}`,
-      'Content-Type': 'application/json'
-    }
-  });
+  try {
+    const response = await axios.post(`${BLOCKRADAR_API_URL}/withdraw`, {
+      chain,
+      assetId,
+      address: receiveAddress,
+      amount,
+      metadata
+    }, {
+      headers: {
+        'Authorization': `Bearer ${BLOCKRADAR_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
 
-  return response.data;
+    return response.data;
+  } catch (error) {
+    logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
+    throw new Error('Failed to withdraw from Blockradar.');
+  }
 }
 
 /**
@@ -181,27 +192,30 @@ async function withdrawFromBlockradar(chain, assetId, receiveAddress, amount, pa
  * @returns {object} - Paycrest order details.
  */
 async function createPaycrestOrder(userId, amount, asset, chain, bankDetails, returnAddress) {
-  // Implement Paycrest order creation logic
-  // Placeholder implementation
-  const response = await axios.post(`${PAYCREST_API_URL}/create_order`, {
-    userId,
-    amount,
-    asset,
-    chain,
-    bankDetails,
-    returnAddress
-  }, {
-    headers: {
-      'Authorization': `Bearer ${PAYCREST_API_KEY}`,
-      'Content-Type': 'application/json'
+  try {
+    const response = await axios.post(`${PAYCREST_RATE_API_URL}/create_order`, {
+      userId,
+      amount,
+      asset,
+      chain,
+      bankDetails,
+      returnAddress
+    }, {
+      headers: {
+        'Authorization': `Bearer ${PAYCREST_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (response.data.status !== 'success') {
+      throw new Error(response.data.message || 'Failed to create Paycrest order');
     }
-  });
 
-  if (response.data.status !== 'success') {
-    throw new Error(response.data.message || 'Failed to create Paycrest order');
+    return response.data.data; // Assuming the order details are in data.data
+  } catch (error) {
+    logger.error(`Error creating Paycrest order: ${error.response ? error.response.data.message : error.message}`);
+    throw new Error(error.response ? error.response.data.message : 'Failed to create Paycrest order');
   }
-
-  return response.data.data; // Assuming the order details are in data.data
 }
 
 /**
@@ -407,7 +421,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
     const userId = ctx.from.id.toString();
     try {
       const userState = await getUserState(userId);
-      const walletIndex = ctx.session.walletIndex;
+      const walletIndex = ctx.wizard.state.walletIndex;
       
       if (walletIndex === undefined || !userState.wallets[walletIndex]) {
         await ctx.replyWithMarkdown('❌ Invalid wallet selection.');
@@ -790,7 +804,7 @@ async function handleBlockradarDepositSuccess(event, res) {
       `*Cash amount:* NGN ${ngnAmount}\n` +
       `*Exchange Rate:* ₦${exchangeRates[asset] || 'N/A'} per ${asset}\n` +
       `*Network:* ${chainRaw}\n` +
-      `*Date:* ${new Date().toISOString()}\n\n` +
+      `*Date:* ${new Date(txData.timestamp).toISOString()}\n\n` +
       `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`;
 
     try {
@@ -876,7 +890,7 @@ async function handlePaymentOrderSettled(data, res) {
     const displayAmount = isRefund ? amountReturned : amountPaid;
 
     // Determine the payout type
-    const payoutType = isRefund ? 'Refunded' : 'Paid';
+    const payoutType = isRefund ? 'Refunded' : 'Settled';
 
     // Update transaction status accordingly
     const newStatus = isRefund ? 'Refunded' : 'Settled';
@@ -1117,7 +1131,6 @@ const getAdminMenu = () =>
     [Markup.button.callback('📢 Broadcast Message', 'admin_broadcast_message')],
     [Markup.button.callback('🔙 Back to Main Menu', 'admin_back_to_main')],
   ]);
-
 
 // =================== Admin Menu Navigation ===================
 bot.action('admin_back_to_main', async (ctx) => {
@@ -1535,26 +1548,19 @@ bot.action(/settings_(.+)/, async (ctx) => {
     case 'edit_bank':
       // Handle Edit Linked Bank Details from Settings
       try {
-        const userState = await getUserState(userId);
-
-        if (userState.wallets.length === 0) {
-          return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+        const usersSnapshot = await db.collection('users').get();
+        if (usersSnapshot.empty) {
+          return ctx.replyWithMarkdown('❌ No users found to edit bank details.');
         }
 
-        // If only one wallet, proceed to edit bank
-        if (userState.wallets.length === 1) {
-          ctx.session.walletIndex = 0;
-          await ctx.scene.enter('bank_linking_scene');
-        } else {
-          // Multiple wallets, prompt user to select which wallet to edit
-          let keyboard = userState.wallets.map((wallet, index) => [
-            Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_wallet_edit_bank_${index}`)
-          ]);
-          await ctx.reply('Please select the wallet for which you want to edit the bank details:', Markup.inlineKeyboard(keyboard));
-        }
+        // Prompt admin to select a user first
+        let userOptions = usersSnapshot.docs.map(doc => [
+          Markup.button.callback(`User ${doc.id} - ${doc.data().firstName}`, `admin_select_user_${doc.id}`)
+        ]);
+        await ctx.reply('Please select the user whose bank details you want to edit:', Markup.inlineKeyboard(userOptions));
       } catch (error) {
         logger.error(`Error handling Edit Linked Bank Details in Settings for user ${userId}: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ An error occurred while editing your bank details. Please try again later.');
+        await ctx.replyWithMarkdown('⚠️ An error occurred while editing bank details. Please try again later.');
       }
       break;
 
@@ -1570,17 +1576,16 @@ bot.action(/settings_(.+)/, async (ctx) => {
     case 'generate_receipt':
       // Handle Generate Transaction Receipt from Settings
       try {
-        const userState = await getUserState(userId);
-
-        if (userState.wallets.length === 0) {
-          return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+        const usersSnapshot = await db.collection('users').get();
+        if (usersSnapshot.empty) {
+          return ctx.replyWithMarkdown('❌ No users found to generate receipts for.');
         }
 
-        // Prompt user to select which wallet to generate receipt for
-        let keyboard = userState.wallets.map((wallet, index) => [
-          Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_receipt_wallet_${index}`)
+        // Prompt admin to select a user first
+        let userOptions = usersSnapshot.docs.map(doc => [
+          Markup.button.callback(`User ${doc.id} - ${doc.data().firstName}`, `admin_select_receipt_user_${doc.id}`)
         ]);
-        await ctx.reply('Please select the wallet for which you want to generate a transaction receipt:', Markup.inlineKeyboard(keyboard));
+        await ctx.reply('Please select the user for whom you want to generate a transaction receipt:', Markup.inlineKeyboard(userOptions));
       } catch (error) {
         logger.error(`Error handling Generate Transaction Receipt in Settings for user ${userId}: ${error.message}`);
         await ctx.replyWithMarkdown('⚠️ An error occurred while generating the receipt. Please try again later.');
@@ -1597,34 +1602,157 @@ bot.action(/settings_(.+)/, async (ctx) => {
   }
 });
 
-// Handle Wallet Selection for Editing Bank Details
-bot.action(/select_wallet_edit_bank_(\d+)/, async (ctx) => {
+// Handle User Selection for Editing Bank Details
+bot.action(/admin_select_user_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
+  const selectedUserId = ctx.match[1];
 
-  if (isNaN(walletIndex)) {
-    await ctx.replyWithMarkdown('⚠️ Invalid wallet selection. Please try again.');
-    return ctx.answerCbQuery();
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
   }
 
-  ctx.session.walletIndex = walletIndex;
-  await ctx.scene.enter('bank_linking_scene');
-  ctx.answerCbQuery();
+  try {
+    const userDoc = await db.collection('users').doc(selectedUserId).get();
+    if (!userDoc.exists) {
+      await ctx.replyWithMarkdown('❌ Selected user does not exist.');
+      return ctx.answerCbQuery();
+    }
+
+    const userState = userDoc.data();
+
+    if (userState.wallets.length === 0) {
+      await ctx.replyWithMarkdown('❌ The selected user has no wallets.');
+      return ctx.answerCbQuery();
+    }
+
+    // If only one wallet, proceed to edit bank
+    if (userState.wallets.length === 1) {
+      ctx.session.walletIndex = 0;
+      ctx.session.selectedUserId = selectedUserId;
+      await ctx.scene.enter('bank_linking_scene');
+    } else {
+      // Multiple wallets, prompt admin to select which wallet to edit
+      let walletOptions = userState.wallets.map((wallet, index) => [
+        Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `admin_edit_wallet_${selectedUserId}_${index}`)
+      ]);
+      await ctx.reply('Please select the wallet for which you want to edit the bank details:', Markup.inlineKeyboard(walletOptions));
+    }
+
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error selecting user for bank edit: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while selecting the user. Please try again later.');
+    ctx.answerCbQuery();
+  }
+});
+
+// Handle Wallet Selection for Editing Bank Details
+bot.action(/admin_edit_wallet_(.+)_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const selectedUserId = ctx.match[1];
+  const walletIndex = parseInt(ctx.match[2], 10);
+
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
+  }
+
+  try {
+    const userDoc = await db.collection('users').doc(selectedUserId).get();
+    if (!userDoc.exists) {
+      await ctx.replyWithMarkdown('❌ Selected user does not exist.');
+      return ctx.answerCbQuery();
+    }
+
+    const userState = userDoc.data();
+
+    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
+      await ctx.replyWithMarkdown('❌ Invalid wallet selection.');
+      return ctx.answerCbQuery();
+    }
+
+    ctx.session.walletIndex = walletIndex;
+    ctx.session.selectedUserId = selectedUserId;
+    await ctx.scene.enter('bank_linking_scene');
+
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error editing wallet for user ${selectedUserId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while editing the wallet. Please try again later.');
+    ctx.answerCbQuery();
+  }
+});
+
+// Handle User Selection for Generating Receipt
+bot.action(/admin_select_receipt_user_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const selectedUserId = ctx.match[1];
+
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
+  }
+
+  try {
+    const userDoc = await db.collection('users').doc(selectedUserId).get();
+    if (!userDoc.exists) {
+      await ctx.replyWithMarkdown('❌ Selected user does not exist.');
+      return ctx.answerCbQuery();
+    }
+
+    const userState = userDoc.data();
+
+    if (userState.wallets.length === 0) {
+      await ctx.replyWithMarkdown('❌ The selected user has no wallets.');
+      return ctx.answerCbQuery();
+    }
+
+    // Prompt admin to select which wallet to generate receipt for
+    let walletOptions = userState.wallets.map((wallet, index) => [
+      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `admin_generate_receipt_wallet_${selectedUserId}_${index}`)
+    ]);
+    await ctx.reply('Please select the wallet for which you want to generate a transaction receipt:', Markup.inlineKeyboard(walletOptions));
+
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error selecting user for receipt generation: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while selecting the user. Please try again later.');
+    ctx.answerCbQuery();
+  }
 });
 
 // Handle Wallet Selection for Generating Receipt
-bot.action(/select_receipt_wallet_(\d+)/, async (ctx) => {
+bot.action(/admin_generate_receipt_wallet_(.+)_(\d+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
+  const selectedUserId = ctx.match[1];
+  const walletIndex = parseInt(ctx.match[2], 10);
 
-  if (isNaN(walletIndex)) {
-    await ctx.replyWithMarkdown('⚠️ Invalid wallet selection. Please try again.');
-    return ctx.answerCbQuery();
+  if (!isAdmin(userId)) {
+    return ctx.reply('⚠️ Unauthorized access.');
   }
 
-  ctx.session.walletIndex = walletIndex;
-  await ctx.scene.enter('receipt_generation_scene');
-  ctx.answerCbQuery();
+  try {
+    const userDoc = await db.collection('users').doc(selectedUserId).get();
+    if (!userDoc.exists) {
+      await ctx.replyWithMarkdown('❌ Selected user does not exist.');
+      return ctx.answerCbQuery();
+    }
+
+    const userState = userDoc.data();
+
+    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
+      await ctx.replyWithMarkdown('❌ Invalid wallet selection.');
+      return ctx.answerCbQuery();
+    }
+
+    ctx.session.walletIndex = walletIndex;
+    ctx.session.selectedUserId = selectedUserId;
+    await ctx.scene.enter('receipt_generation_scene');
+
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error generating receipt for wallet ${walletIndex} of user ${selectedUserId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred while generating the receipt. Please try again later.');
+    ctx.answerCbQuery();
+  }
 });
 
 // =================== Support Handlers ===================
@@ -2111,11 +2239,6 @@ bot.action(/admin_(.+)/, async (ctx) => {
       }
       break;
 
-    case 'back_to_main':
-      // Return to the main menu
-      await greetUser(ctx);
-      break;
-
     default:
       await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
   }
@@ -2175,22 +2298,7 @@ bot.on('message', async (ctx, next) => {
 });
 
 // =================== Admin Menu Navigation ===================
-bot.action('admin_back_to_main', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  // Edit the admin panel message back to the main admin menu
-  try {
-    await ctx.editMessageText('👨‍💼 **Admin Panel**\n\nSelect an option below:', { reply_markup: getAdminMenu().reply_markup, parse_mode: 'Markdown' });
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error navigating back to admin menu: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while navigating the admin menu.');
-    ctx.answerCbQuery();
-  }
-});
+// (Already handled above; removed duplicate)
 
 // =================== Additional Helper Functions ===================
 
