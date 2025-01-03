@@ -127,12 +127,19 @@ function isValidAddress(address, chain) {
  * @param {string} bankCode - Bank code.
  * @returns {object} - Bank account details.
  */
+const PAYSTACK_API_KEY = process.env.PAYSTACK_API_KEY
+
 async function verifyBankAccount(accountNumber, bankCode) {
-  // Placeholder for bank account verification logic using Paycrest API
-  // Replace with actual API call to Paycrest
-  return {
-    account_name: 'John Doe'
-  };
+  try {
+    const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
+      params: { account_number: accountNumber, bank_code: bankCode },
+      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
+    });
+    return response.data;
+  } catch (error) {
+    logger.error(`Error verifying bank account (${accountNumber}, ${bankCode}): ${error.response ? error.response.data.message : error.message}`);
+    throw new Error('Failed to verify bank account. Please try again later.');
+  }
 }
 
 /**
@@ -1111,241 +1118,6 @@ const getAdminMenu = () =>
     [Markup.button.callback('🔙 Back to Main Menu', 'admin_back_to_main')],
   ]);
 
-/**
- * Handles Admin Menu Actions
- */
-bot.action(/admin_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-
-  if (!isAdmin(userId)) {
-    return ctx.reply('⚠️ Unauthorized access.');
-  }
-
-  const action = ctx.match[1];
-
-  switch (action) {
-    case 'view_transactions':
-      // Handle viewing transactions
-      try {
-        const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(10).get();
-
-        if (transactionsSnapshot.empty) {
-          await ctx.answerCbQuery('No transactions found.', { show_alert: true });
-          return;
-        }
-
-        let message = '📋 **Recent Transactions**:\n\n';
-
-        transactionsSnapshot.forEach((doc) => {
-          const tx = doc.data();
-          message += `*User ID:* ${tx.userId || 'N/A'}\n`;
-          message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-          message += `*Amount Deposited:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-          message += `*Status:* ${tx.status || 'Pending'}\n`;
-          message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
-        });
-
-        // Add a 'Back' button to return to the admin menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all transactions: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch transactions.', { show_alert: true });
-      }
-      break;
-
-    case 'send_message':
-      // Handle sending messages
-      try {
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          await ctx.replyWithMarkdown('⚠️ No users found to send messages.');
-          return ctx.answerCbQuery();
-        }
-
-        await ctx.scene.enter('send_message_scene');
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error initiating send message: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ An error occurred while initiating the message. Please try again later.');
-        ctx.answerCbQuery();
-      }
-      break;
-
-    case 'mark_paid':
-      // Handle marking transactions as paid as a backup for admin 
-      try {
-        const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
-        if (pendingTransactions.empty) {
-          await ctx.answerCbQuery('No pending transactions found.', { show_alert: true });
-          return;
-        }
-
-        const batch = db.batch();
-        pendingTransactions.forEach((transaction) => {
-          const docRef = db.collection('transactions').doc(transaction.id);
-          batch.update(docRef, { status: 'Paid' });
-        });
-
-        await batch.commit();
-
-        // Notify users about their transactions being marked as paid
-        pendingTransactions.forEach(async (transaction) => {
-          const txData = transaction.data();
-          try {
-            const payout = txData.payout || 'N/A';
-            const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
-
-            await bot.telegram.sendMessage(
-              txData.userId,
-              `🎉 *Transaction Successful!*\n\n` +
-              `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n` +
-              `*Amount:* ${txData.amount} ${txData.asset}\n` +
-              `*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n` +
-              `*Account Name:* ${accountName}\n` +
-              `*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n` +
-              `*Payout (NGN):* ₦${payout}\n\n` +
-              `🔹 *Chain:* ${txData.chain}\n` +
-              `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n`,
-              { parse_mode: 'Markdown' }
-            );
-            logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
-          } catch (error) {
-            logger.error(`Error notifying user ${txData.userId}: ${error.message}`);
-          }
-        });
-
-        // Edit the admin panel message to confirm
-        await ctx.editMessageText('✅ All pending transactions have been marked as paid.', { reply_markup: getAdminMenu() });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error marking transactions as paid: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
-      }
-      break;
-
-    case 'view_users':
-      // Handle viewing all users
-      try {
-        const usersSnapshot = await db.collection('users').get();
-
-        if (usersSnapshot.empty) {
-          await ctx.answerCbQuery('No users found.', { show_alert: true });
-          return;
-        }
-
-        let message = '👥 **All Users**:\n\n';
-
-        usersSnapshot.forEach((doc) => {
-          const user = doc.data();
-          message += `*User ID:* ${doc.id}\n`;
-          message += `*First Name:* ${user.firstName || 'N/A'}\n`;
-          message += `*Number of Wallets:* ${user.wallets.length}\n`;
-          message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
-        });
-
-        // Back to main menu
-        const inlineKeyboard = Markup.inlineKeyboard([
-          [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
-        ]);
-
-        // Edit the admin panel message
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all users: ${error.message}`);
-        await ctx.answerCbQuery('⚠️ Unable to fetch users.', { show_alert: true });
-      }
-      break;
-
-    case 'broadcast_message':
-      // Handle sending broadcast messages to all users
-      try {
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          await ctx.replyWithMarkdown('⚠️ No users available to broadcast.');
-          return ctx.answerCbQuery();
-        }
-
-        // Initiate broadcast message collection
-        ctx.session.awaitingBroadcastMessage = true;
-        await ctx.replyWithMarkdown('📢 Please enter the message you want to broadcast to all users. You can also attach an image with your message:');
-        await ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error initiating broadcast message: ${error.message}`);
-        await ctx.replyWithMarkdown('⚠️ An error occurred while initiating the broadcast. Please try again later.');
-        ctx.answerCbQuery();
-      }
-      break;
-
-    case 'back_to_main':
-      // Return to the main menu
-      await greetUser(ctx);
-      break;
-
-    default:
-      await ctx.answerCbQuery('⚠️ Unknown action. Please select an option from the menu.', { show_alert: true });
-  }
-});
-
-// Handle Broadcast Message (After Admin inputs message)
-bot.on('message', async (ctx, next) => {
-  const userId = ctx.from.id.toString();
-  if (isAdmin(userId) && ctx.session.awaitingBroadcastMessage) {
-    const messageContent = ctx.message.text ? ctx.message.text.trim() : '';
-    const photo = ctx.message.photo;
-
-    if (!messageContent && !photo) {
-      await ctx.replyWithMarkdown('❌ Message cannot be empty. Please enter a valid message or attach a photo.');
-      return;
-    }
-
-    const usersSnapshot = await db.collection('users').get();
-    if (usersSnapshot.empty) {
-      await ctx.replyWithMarkdown('⚠️ No users found to send the broadcast message.');
-      ctx.session.awaitingBroadcastMessage = false;
-      return;
-    }
-
-    const sendPromises = [];
-
-    usersSnapshot.forEach((doc) => {
-      const userId = doc.id;
-      if (photo) {
-        const highestResolutionPhoto = photo[photo.length - 1];
-        const fileId = highestResolutionPhoto.file_id;
-        const caption = ctx.message.caption || '';
-
-        sendPromises.push(
-          bot.telegram.sendPhoto(userId, fileId, { caption: `📢 *Broadcast Message:*\n\n${caption}`, parse_mode: 'Markdown' })
-        );
-      } else if (messageContent) {
-        sendPromises.push(
-          bot.telegram.sendMessage(userId, `📢 *Broadcast Message:*\n\n${messageContent}`, { parse_mode: 'Markdown' })
-        );
-      }
-    });
-
-    try {
-      await Promise.all(sendPromises);
-      await ctx.replyWithMarkdown('✅ Broadcast message sent to all users.');
-      logger.info(`Admin ${userId} sent a broadcast message: "${messageContent}" to ${usersSnapshot.size} users.`);
-    } catch (error) {
-      logger.error(`Error sending broadcast message: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast message. Please try again later.');
-    }
-
-    ctx.session.awaitingBroadcastMessage = false;
-  } else {
-    return next();
-  }
-});
 
 // =================== Admin Menu Navigation ===================
 bot.action('admin_back_to_main', async (ctx) => {
