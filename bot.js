@@ -1,7 +1,7 @@
 // Import required modules
 const { Telegraf } = require('telegraf');
-const { WizardScene, Stage } = Scenes;
 const { Scenes, session, Markup } = Telegraf;
+const { WizardScene, Stage } = Scenes;
 const axios = require('axios');
 const admin = require('firebase-admin');
 const express = require('express');
