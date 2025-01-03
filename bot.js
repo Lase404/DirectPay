@@ -1539,15 +1539,6 @@ fetchExchangeRates();
 // **Global bodyParser.json() is applied after webhook routes to prevent interference**
 app.use(bodyParser.json());
 
-// =================== Start Express Server ===================
-app.listen(PORT, () => {
-  logger.info(`Express server listening on port ${PORT}`);
-});
-
-// =================== Shutdown Handlers ===================
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
 // =================== Additional Bot Handlers ===================
 
 /**
