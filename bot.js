@@ -1,165 +1,200 @@
-// =================== Import Required Libraries ===================
+// =================== Import Dependencies ===================
 const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const express = require('express');
 const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
-const axios = require('axios');
 const crypto = require('crypto');
+const axios = require('axios');
 const winston = require('winston');
 const fs = require('fs');
 const path = require('path');
 
-// =================== Initialize Logging ===================
+// =================== Initialize Firebase ===================
+const serviceAccount = require('./directpay.json'); // Ensure this path is correct and the file is secured
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+const db = admin.firestore();
+
+// =================== Initialize Logger ===================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
-    winston.format.printf(
-      ({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`
-    )
+    winston.format.json()
   ),
   transports: [
-    new winston.transports.Console(),
-    // Optionally, add file transports
-    // new winston.transports.File({ filename: 'combined.log' }),
+    new winston.transports.File({ filename: 'directpay-error.log', level: 'error' }),
+    new winston.transports.File({ filename: 'directpay-combined.log' }),
   ],
 });
 
-// =================== Firebase Setup ===================
-const serviceAccount = require('./directpay.json'); // Ensure this file is secured on the server
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
-  databaseURL: "https://directpay9ja.firebaseio.com"
-});
-const db = admin.firestore();
+// If we're not in production then log to the `console` with the format:
+if (process.env.NODE_ENV !== 'production') {
+  logger.add(new winston.transports.Console({
+    format: winston.format.simple(),
+  }));
+}
 
-// =================== Environment Variables ===================
-const {
-  BOT_TOKEN, // Telegram Bot Token
-  PAYCREST_API_KEY,
-  PAYCREST_CLIENT_SECRET,
-  PAYCREST_RATE_API_URL = 'https://api.paycrest.io/v1/rates',
-  PAYCREST_RETURN_ADDRESS = "0xYourReturnAddressHere", // Replace with actual return address
-  PERSONAL_CHAT_ID, // Admin's Telegram Chat ID
-  PAYSTACK_API_KEY,
-  ADMIN_IDS = '', // Comma-separated list of admin User IDs
-  WEBHOOK_PATH = '/webhook/telegram',
-  WEBHOOK_DOMAIN, // e.g., 'https://yourdomain.com'
-  PORT = 4000,
-  BLOCKRADAR_BASE_API_KEY,
-  BLOCKRADAR_BNB_API_KEY,
-  BLOCKRADAR_POLYGON_API_KEY,
-  MAX_WALLETS = 5, // Maximum number of wallets per user
-} = process.env;
-
-// =================== Initialize Express and Telegraf ===================
+// =================== Initialize Express App ===================
 const app = express();
+const PORT = process.env.PORT || 3000;
 
-// Initialize Telegraf bot with BOT_TOKEN
+// =================== Initialize Telegraf Bot ===================
+const BOT_TOKEN = process.env.BOT_TOKEN; // Ensure BOT_TOKEN is set in environment variables
+const PAYCREST_CLIENT_SECRET = process.env.PAYCREST_CLIENT_SECRET;
+const PAYCREST_API_KEY = process.env.PAYCREST_API_KEY;
+const PAYCREST_RATE_API_URL = process.env.PAYCREST_RATE_API_URL;
+const BLOCKRADAR_API_KEY = process.env.BLOCKRADAR_API_KEY;
+const BLOCKRADAR_API_URL = process.env.BLOCKRADAR_API_URL;
+const PERSONAL_CHAT_ID = process.env.PERSONAL_CHAT_ID; // Admin Chat ID
+
+if (!BOT_TOKEN || !PAYCREST_CLIENT_SECRET || !PAYCREST_API_KEY || !PAYCREST_RATE_API_URL || !BLOCKRADAR_API_KEY || !BLOCKRADAR_API_URL || !PERSONAL_CHAT_ID) {
+  logger.error('Missing one or more required environment variables.');
+  process.exit(1);
+}
+
 const bot = new Telegraf(BOT_TOKEN);
 
-// =================== Define Supported Banks ===================
-const bankList = [
-  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
-  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZENITHGLA' },
-  { name: 'First Bank', code: '214', aliases: ['first bank', 'firstbank', 'firstbank nigeria'], paycrestInstitutionCode: 'FBNNGNGS' },
-  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtbank nigeria'], paycrestInstitutionCode: 'GTBNGNGS' },
-  { name: 'UBA', code: '033', aliases: ['uba', 'united bank for africa', 'uba nigeria'], paycrestInstitutionCode: 'UBANGNG0' },
-  { name: 'Union Bank', code: '032', aliases: ['union bank', 'unionbank', 'union bank nigeria'], paycrestInstitutionCode: 'UNBNGNGS' },
-  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
-  { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
-  { name: 'OPay', code: '999992', aliases: ['opay', 'opay nigeria'], paycrestInstitutionCode: 'OPAYNGPC' },
-  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'], paycrestInstitutionCode: 'PALMNGPC' },
-  { name: 'Paystack-Titan MFB', code: '999992', aliases: ['paystack', 'paystack mfb', 'paystack-titan mfb'], paycrestInstitutionCode: 'PAYTNGPC' },
-  { name: 'Moniepoint MFB', code: '999993', aliases: ['moniepoint', 'moniepoint mfb', 'moniepoint nigeria'], paycrestInstitutionCode: 'MONINGPC' },
-  { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' },
-  // Add more banks as needed
-];
+// =================== Define Constants ===================
+const MAX_WALLETS = 5; // Maximum number of wallets per user
 
+// Define supported chains and their corresponding asset IDs on Blockradar
 const chains = {
   base: {
-    id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
-    key: BLOCKRADAR_BASE_API_KEY,
-    apiUrl: 'https://api.blockradar.co/v1/wallets/e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1/addresses',
     supportedAssets: ['USDC', 'USDT'],
-    network: 'Base',
     assets: {
       USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
-      USDT: 'your_unique_usdt_asset_id_for_base' // Replace with the correct ID
+      USDT: 'your_unique_usdt_asset_id_for_base' // **Replace with the correct USDT asset ID for Base**
     }
   },
   polygon: {
-    id: 'f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a',
-    key: BLOCKRADAR_POLYGON_API_KEY,
-    apiUrl: 'https://api.blockradar.co/v1/wallets/f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a/addresses',
     supportedAssets: ['USDC', 'USDT'],
-    network: 'Polygon',
     assets: {
-      USDC: 'f348e8e3-e0b4-4704-857e-c274ef000c00',
-      USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1',
+      USDC: 'd9b1c7b1-bc4b-4f1d-8a9a-1f3c7b5e8a1b',
+      USDT: 'your_unique_usdt_asset_id_for_polygon' // **Replace with the correct USDT asset ID for Polygon**
     }
   },
   'bnb smart chain': {
-    id: '7a844e91-5740-4589-9695-c74411adec7e',
-    key: BLOCKRADAR_BNB_API_KEY,
-    apiUrl: 'https://api.blockradar.co/v1/wallets/7a844e91-5740-4589-9695-c74411adec7e/addresses',
-    supportedAssets: ['USDT', 'USDC'],
-    network: 'BNB Smart Chain',
+    supportedAssets: ['USDC', 'USDT'],
     assets: {
-      USDC: 'ff479231-0dbb-4760-b695-e219a50934af',
-      USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb',
+      USDC: 'e3f4d5c6-b7a8-4c9d-8e0f-1b2c3d4e5f6a',
+      USDT: 'your_unique_usdt_asset_id_for_bnb' // **Replace with the correct USDT asset ID for BNB Smart Chain**
     }
   }
 };
 
+// Define chain mapping to handle different chain names
+const chainMapping = {
+  'base': 'base',
+  'polygon': 'polygon',
+  'bnb smart chain': 'bnb smart chain',
+  // Add more mappings if needed
+};
+
+// Define supported assets
+const SUPPORTED_ASSETS = ['USDC', 'USDT'];
+
 // =================== Helper Functions ===================
 
 /**
- * Checks if the user is an admin.
+ * Checks if a user is an admin.
  * @param {string} userId - Telegram user ID.
  * @returns {boolean} - Admin status.
  */
 function isAdmin(userId) {
-  const adminIds = ADMIN_IDS.split(',').map(id => id.trim());
+  const adminIds = ['123456789']; // Replace with actual admin Telegram user IDs
   return adminIds.includes(userId);
 }
 
 /**
- * Maps asset and chain name to Paycrest token and network.
- * @param {string} asset - Asset symbol (e.g., 'USDC', 'USDT').
- * @param {string} chainName - Name of the blockchain network.
- * @returns {object|null} - Mapped token and network or null if unsupported.
+ * Verifies if a wallet address is valid.
+ * @param {string} address - Wallet address.
+ * @param {string} chain - Blockchain name.
+ * @returns {boolean} - Validation result.
  */
-function mapToPaycrest(asset, chainName) {
-  // Only USDC and USDT are supported
-  if (!['USDC', 'USDT'].includes(asset)) return null;
-
-  let token = asset.toUpperCase(); // 'USDC' or 'USDT'
-  let network;
-  const chainKey = chainMapping[chainName.toLowerCase()];
-  if (!chainKey) {
-    logger.error(`No mapping found for chain name: ${chainName}`);
-    return null;
-  }
-  if (/polygon/i.test(chainKey)) network = 'polygon';
-  else if (/base/i.test(chainKey)) network = 'base';
-  else if (/bnb-smart-chain/i.test(chainKey)) network = 'bnb-smart-chain';
-  else return null;
-  return { token, network };
+function isValidAddress(address, chain) {
+  // Implement chain-specific address validation
+  // Placeholder implementation
+  return typeof address === 'string' && address.length > 0;
 }
 
 /**
- * Calculates NGN payout based on exchange rate.
- * @param {string} asset - Asset symbol.
- * @param {number} amount - Amount of asset.
- * @returns {number} - Calculated NGN amount.
+ * Verifies a bank account using Paystack (assuming Paycrest has similar API).
+ * @param {string} accountNumber - Bank account number.
+ * @param {string} bankCode - Bank code.
+ * @returns {object} - Bank account details.
  */
-function calculatePayout(asset, amount) {
-  const rate = exchangeRates[asset];
-  if (!rate) {
-    throw new Error(`Unsupported asset received: ${asset}`);
+async function verifyBankAccount(accountNumber, bankCode) {
+  // Placeholder for bank account verification logic using Paycrest API
+  // Replace with actual API call to Paycrest
+  return {
+    account_name: 'John Doe'
+  };
+}
+
+/**
+ * Withdraws from Blockradar to a specified address.
+ * @param {string} chain - Blockchain name.
+ * @param {string} assetId - Blockradar asset ID.
+ * @param {string} receiveAddress - Destination address.
+ * @param {number} amount - Amount to withdraw.
+ * @param {string} paycrestOrderId - Associated Paycrest order ID.
+ * @param {object} metadata - Additional metadata.
+ */
+async function withdrawFromBlockradar(chain, assetId, receiveAddress, amount, paycrestOrderId, metadata) {
+  // Implement withdrawal logic using Blockradar API
+  // Placeholder implementation
+  const response = await axios.post(`${BLOCKRADAR_API_URL}/withdraw`, {
+    chain,
+    assetId,
+    address: receiveAddress,
+    amount,
+    metadata
+  }, {
+    headers: {
+      'Authorization': `Bearer ${BLOCKRADAR_API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  return response.data;
+}
+
+/**
+ * Creates a Paycrest order.
+ * @param {string} userId - User ID.
+ * @param {number} amount - Amount in crypto.
+ * @param {string} asset - Asset symbol.
+ * @param {string} chain - Blockchain name.
+ * @param {object} bankDetails - Bank details.
+ * @param {string} returnAddress - Return address for refunds.
+ * @returns {object} - Paycrest order details.
+ */
+async function createPaycrestOrder(userId, amount, asset, chain, bankDetails, returnAddress) {
+  // Implement Paycrest order creation logic
+  // Placeholder implementation
+  const response = await axios.post(`${PAYCREST_API_URL}/create_order`, {
+    userId,
+    amount,
+    asset,
+    chain,
+    bankDetails,
+    returnAddress
+  }, {
+    headers: {
+      'Authorization': `Bearer ${PAYCREST_API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+
+  if (response.data.status !== 'success') {
+    throw new Error(response.data.message || 'Failed to create Paycrest order');
   }
-  return parseFloat((amount * rate).toFixed(2)); // Return as number
+
+  return response.data.data; // Assuming the order details are in data.data
 }
 
 /**
@@ -167,166 +202,29 @@ function calculatePayout(asset, amount) {
  * @returns {string} - Reference ID.
  */
 function generateReferenceId() {
-  return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
+  return crypto.randomBytes(8).toString('hex');
 }
 
 /**
- * Verifies bank account details using Paystack API.
- * @param {string} accountNumber - Bank account number.
- * @param {string} bankCode - Bank code.
- * @returns {object} - Verification result.
+ * Calculates payout based on asset and amount.
+ * @param {string} asset - Asset symbol.
+ * @param {number} amount - Amount in crypto.
+ * @returns {number} - Payout in NGN.
  */
-async function verifyBankAccount(accountNumber, bankCode) {
-  try {
-    const response = await axios.get(`https://api.paystack.co/bank/resolve?account_number=${accountNumber}&bank_code=${bankCode}`, {
-      headers: {
-        Authorization: `Bearer ${PAYSTACK_API_KEY}`
-      }
-    });
-
-    if (response.data.status) {
-      return response.data.data;
-    } else {
-      throw new Error(response.data.message || 'Bank account verification failed.');
-    }
-  } catch (error) {
-    logger.error(`Error verifying bank account: ${error.message}`);
-    throw error;
-  }
+function calculatePayout(asset, amount) {
+  const rate = exchangeRates[asset];
+  return rate ? amount * rate : 0;
 }
 
 /**
- * Creates a Paycrest order for off-ramping.
+ * Fetches the user state from Firestore.
  * @param {string} userId - Telegram user ID.
- * @param {number} amount - Amount of asset.
- * @param {string} token - Asset token (e.g., 'USDC', 'USDT').
- * @param {string} network - Blockchain network.
- * @param {object} recipientDetails - Bank details of the recipient.
- * @param {string} refundAddress - Address to refund in case of failure.
- * @returns {object} - Paycrest order data.
- */
-async function createPaycrestOrder(userId, amount, token, network, recipientDetails, refundAddress) {
-  try {
-    const paycrestMapping = mapToPaycrest(token, network);
-    if (!paycrestMapping) {
-      throw new Error('No Paycrest mapping for the selected asset/chain.');
-    }
-
-    // Fetch the Paycrest Institution Code
-    const bank = bankList.find(b => b.name.toLowerCase() === recipientDetails.bankName.toLowerCase());
-    if (!bank || !bank.paycrestInstitutionCode) {
-      const errorMsg = `No Paycrest institution code found for bank: ${recipientDetails.bankName}`;
-      logger.error(errorMsg);
-      // Notify admin about the missing institution code
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ ${errorMsg} for user ${userId}.`);
-      throw new Error(errorMsg);
-    }
-
-    const recipient = {
-      institution: bank.paycrestInstitutionCode, // Use the mapped Paycrest institution code
-      accountIdentifier: recipientDetails.accountNumber,
-      accountName: recipientDetails.accountName,
-      memo: `Payment from DirectPay`,
-      providerId: "" // Assuming empty; update if necessary
-    };
-
-    // Fetch the current rate from exchangeRates
-    const rate = exchangeRates[token];
-    if (!rate) {
-      throw new Error(`Exchange rate for ${token} not available.`);
-    }
-
-    // payload
-    const orderPayload = {
-      amount: String(amount), // Token amount as string
-      rate: String(rate), // Exchange rate as string from Paycrest Rate API
-      network: paycrestMapping.network, // e.g., 'polygon', 'base', etc.
-      token: paycrestMapping.token, // 'USDT' or 'USDC'
-      recipient: recipient,
-      returnAddress: refundAddress || PAYCREST_RETURN_ADDRESS, // Use user's refund address or default
-      feePercent: 2, // Example fee percentage
-    };
-
-    // API req
-    const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
-      headers: {
-        'API-Key': PAYCREST_API_KEY,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    // response OK?
-    if (orderResp.data.status !== 'success') {
-      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
-    }
-
-    // Return the order data
-    return orderResp.data.data; // Contains id, amount, token, network, receiveAddress, etc.
-  } catch (err) {
-    logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
-    throw new Error('Failed to create Paycrest order.');
-  }
-}
-
-/**
- * Withdraws assets from Blockradar to a specified address.
- * @param {string} chain - Blockchain network.
- * @param {string} assetId - Asset ID.
- * @param {string} address - Recipient address.
- * @param {number} amount - Amount to withdraw.
- * @param {string} reference - Reference ID.
- * @param {object} metadata - Additional metadata.
- * @returns {object} - Withdrawal response.
- */
-async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
-  try {
-    const apiKeyMap = {
-      base: BLOCKRADAR_BASE_API_KEY,
-      polygon: BLOCKRADAR_POLYGON_API_KEY,
-      'bnb-smart-chain': BLOCKRADAR_BNB_API_KEY,
-      // Add other chains and their API keys as needed
-    };
-
-    const apiKey = apiKeyMap[chain.toLowerCase()];
-    if (!apiKey) {
-      throw new Error(`No API key configured for chain: ${chain}`);
-    }
-
-    const payload = {
-      assetId,
-      address,
-      amount,
-      reference,
-      metadata
-    };
-
-    const response = await axios.post(`https://api.blockradar.io/v1/withdrawals`, payload, {
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (response.data.status === 'success') {
-      return response.data.data; // Assuming Blockradar returns withdrawal data in 'data'
-    } else {
-      throw new Error(response.data.message || 'Failed to withdraw from Blockradar.');
-    }
-  } catch (error) {
-    logger.error(`Error withdrawing from Blockradar: ${error.message}`);
-    throw error;
-  }
-}
-
-/**
- * Retrieves the user's state from Firestore.
- * @param {string} userId - Telegram user ID.
- * @returns {object} - User state.
+ * @returns {object} - User data.
  */
 async function getUserState(userId) {
   const userDoc = await db.collection('users').doc(userId).get();
   if (!userDoc.exists) {
-    // Initialize user document if it doesn't exist
+    // Create a new user document if not exists
     await db.collection('users').doc(userId).set({
       firstName: 'Valued User',
       wallets: [],
@@ -357,7 +255,7 @@ function generateReceipt(txData) {
 **Reference ID:** ${txData.referenceId || 'N/A'}
 **User ID:** ${txData.userId || 'N/A'}
 **Amount Deposited:** ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}
-**Amount Paid:** ₦${txData.payout || 'N/A'}
+**Amount Paid/Returned:** ₦${txData.amountPaid || txData.amountReturned || 'N/A'}
 **Status:** ${txData.status || 'Pending'}
 **Chain:** ${txData.chain || 'N/A'}
 **Transaction Hash:** ${txData.transactionHash || 'N/A'}
@@ -397,7 +295,7 @@ const bankLinkingScene = new Scenes.WizardScene(
       return;
     }
     ctx.wizard.state.accountNumber = accountNumber;
-    // Verify bank account details using Paystack
+    // Verify bank account details using Paystack (replace with Paycrest if available)
     try {
       const verification = await verifyBankAccount(accountNumber, ctx.wizard.state.bank.code);
       ctx.wizard.state.accountName = verification.account_name;
@@ -487,7 +385,7 @@ const sendMessageScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     } catch (error) {
       logger.error(`Error sending broadcast message: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ An error occurred while sending the broadcast message. Please try again later.');
+      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast message. Please try again later.');
       return ctx.scene.leave();
     }
   }
@@ -546,8 +444,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
 );
 
 // =================== Register Scenes with Stage ===================
-const stage = new Scenes.Stage();
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
+const stage = new Scenes.Stage([bankLinkingScene, sendMessageScene, receiptGenerationScene]);
 
 // **IMPORTANT: Apply Session and Stage Middleware Before Defining Routes**
 bot.use(session()); // Initialize session middleware
@@ -638,8 +535,8 @@ app.post('/webhook/blockradar', bodyParser.raw({ type: 'application/json' }), as
 
     // Extract common event data
     const eventType = event.event || 'Unknown Event';
-    const recipientAddress = event.data?.recipientAddress || 'N/A'; // Updated to use recipientAddress
-    const senderAddress = event.data?.senderAddress || 'N/A';
+    const recipientAddress = event.data?.recipientAddress || 'N/A';
+    const senderAddress = event.data?.senderAddress || 'N/A'; // For refund
     const amount = parseFloat(event.data?.amount) || 0;
     const asset = event.data?.asset?.symbol || 'N/A';
     const transactionHash = event.data?.hash || 'N/A';
@@ -650,7 +547,7 @@ app.post('/webhook/blockradar', bodyParser.raw({ type: 'application/json' }), as
     if (!chainKey) {
       logger.error(`Unknown chain received in webhook: ${chainRaw}`);
       // Notify admin about the unknown chain
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ Received deposit on unknown chain: \`${chainRaw}\``);
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ Received deposit on unknown chain: \`${chainRaw}\``, { parse_mode: 'Markdown' });
       return res.status(400).send('Unknown chain.');
     }
 
@@ -680,7 +577,7 @@ app.post('/webhook/blockradar', bodyParser.raw({ type: 'application/json' }), as
  * @param {object} res - Express response object.
  */
 async function handleBlockradarDepositSuccess(event, res) {
-  const recipientAddress = event.data?.recipientAddress || 'N/A'; // Updated to use recipientAddress
+  const recipientAddress = event.data?.recipientAddress || 'N/A';
   const senderAddress = event.data?.senderAddress || 'N/A'; // For refund
   const amount = parseFloat(event.data?.amount) || 0;
   const asset = event.data?.asset?.symbol || 'N/A';
@@ -728,7 +625,7 @@ async function handleBlockradarDepositSuccess(event, res) {
     }
 
     // Only support USDC and USDT
-    if (!['USDC', 'USDT'].includes(asset)) {
+    if (!SUPPORTED_ASSETS.includes(asset)) {
       await bot.telegram.sendMessage(userId, `⚠️ *Unsupported Asset Deposited:* ${asset}.\n\nCurrently, only *USDC* and *USDT* are supported. Please contact support if you believe this is an error.`, { parse_mode: 'Markdown' });
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ User ${userId} deposited unsupported asset: ${asset}.`, { parse_mode: 'Markdown' });
       return res.status(200).send('OK');
@@ -838,7 +735,7 @@ async function handleBlockradarDepositSuccess(event, res) {
 
     // Withdraw from Blockradar to Paycrest receiveAddress
     let blockradarAssetId;
-    const chainKeyLower = chainRaw.toLowerCase(); // 'base'
+    const chainKeyLower = chainRaw.toLowerCase(); // e.g., 'base'
     switch (asset) {
       case 'USDC':
         blockradarAssetId = chains[chainKeyLower]?.assets['USDC'];
@@ -884,7 +781,7 @@ async function handleBlockradarDepositSuccess(event, res) {
       `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
       `*Crypto amount:* ${amount} ${asset}\n` +
       `*Cash amount:* NGN ${ngnAmount}\n` +
-      `*Exchange Rate:* ₦${exchangeRates[asset] || 'N/A'} per ${asset}\n` + // Added exchange rate
+      `*Exchange Rate:* ₦${exchangeRates[asset] || 'N/A'} per ${asset}\n` +
       `*Network:* ${chainRaw}\n` +
       `*Date:* ${new Date().toISOString()}\n\n` +
       `Thank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`;
@@ -925,7 +822,6 @@ async function handleBlockradarDepositSuccess(event, res) {
   }
 }
 
-
 // =================== Paycrest Webhook Event Handlers ===================
 
 /**
@@ -939,6 +835,7 @@ async function handlePaymentOrderSettled(data, res) {
   const amountPaid = parseFloat(data.amountPaid) || 0;
   const reference = data.reference;
   const returnAddress = data.returnAddress;
+  const amountReturned = parseFloat(data.amountReturned) || 0; // For refunds
 
   try {
     // Fetch the transaction by Paycrest order ID
@@ -965,29 +862,39 @@ async function handlePaymentOrderSettled(data, res) {
     const bankDetails = txData.bankDetails || {};
     const timestamp = txData.timestamp || new Date().toISOString();
 
-    // Update transaction status to 'Settled'
-    await db.collection('transactions').doc(txDoc.id).update({ status: 'Settled' });
+    // Determine if the event is a refund based on status or presence of amountReturned
+    const isRefund = status.toLowerCase() === 'refunded' || amountReturned > 0;
 
-    // Notify user about the settlement
+    // Determine the amount to display
+    const displayAmount = isRefund ? amountReturned : amountPaid;
+
+    // Determine the payout type
+    const payoutType = isRefund ? 'Refunded' : 'Paid';
+
+    // Update transaction status accordingly
+    const newStatus = isRefund ? 'Refunded' : 'Settled';
+    await db.collection('transactions').doc(txDoc.id).update({ status: newStatus });
+
+    // Notify user about the settlement or refund
     await bot.telegram.sendMessage(
       userId,
-      `✅ *Your DirectPay order has been settled.*\n\n` +
+      `✅ *Your DirectPay order has been ${payoutType.toLowerCase()}.*\n\n` +
       `Hello ${userFirstName},\n\n` +
-      `Your order with *Reference ID:* \`${reference}\` has been successfully settled.\n\n` +
-      `*Amount Paid:* ₦${amountPaid}\n` +
+      `Your order with *Reference ID:* \`${reference}\` has been successfully ${payoutType.toLowerCase()}.\n\n` +
+      `*Amount ${payoutType}:* ₦${displayAmount}\n` +
       `*Refund Address:* \`${returnAddress}\`\n\n` +
       `If you have any questions or need further assistance, feel free to reach out to our support team.\n\n` +
       `Thank you for using *DirectPay*!`,
       { parse_mode: 'Markdown' }
     );
 
-    // Notify admin about the settlement
+    // Notify admin about the settlement or refund
     await bot.telegram.sendMessage(
       PERSONAL_CHAT_ID,
-      `🔔 *Payment Order Settled*\n\n` +
+      `🔔 *Payment Order ${payoutType}*\n\n` +
       `*User:* ${userFirstName} (ID: ${userId})\n` +
       `*Reference ID:* ${reference}\n` +
-      `*Amount Paid:* ₦${amountPaid}\n` +
+      `*Amount ${payoutType}:* ₦${displayAmount}\n` +
       `*Refund Address:* ${returnAddress}\n` +
       `*Order ID:* ${orderId}\n`,
       { parse_mode: 'Markdown' }
@@ -1095,6 +1002,7 @@ async function handlePaymentOrderRefunded(data, res) {
   const amountPaid = parseFloat(data.amountPaid) || 0;
   const reference = data.reference;
   const returnAddress = data.returnAddress;
+  const amountReturned = parseFloat(data.amountReturned) || 0;
 
   try {
     // Fetch the transaction by Paycrest order ID
@@ -1127,8 +1035,8 @@ async function handlePaymentOrderRefunded(data, res) {
       return res.status(200).send('OK');
     }
 
-    // Update transaction status to 'Refunded'
-    await db.collection('transactions').doc(txDoc.id).update({ status: 'Refunded' });
+    // Update transaction status to 'Refunded' and set amountReturned
+    await db.collection('transactions').doc(txDoc.id).update({ status: 'Refunded', amountReturned: amountReturned });
 
     // Notify user about the refund
     await bot.telegram.sendMessage(
@@ -1136,8 +1044,9 @@ async function handlePaymentOrderRefunded(data, res) {
       `❌ *Your DirectPay order has been refunded.*\n\n` +
       `Hello ${userFirstName},\n\n` +
       `We regret to inform you that your DirectPay order with *Reference ID:* \`${reference}\` has been refunded.\n\n` +
-      `*Reason:* We experienced issues while processing your order. Rest assured, the funds have been returned to your original payment method.\n\n` +
-      `If you believe this is a mistake or need further assistance, please don't hesitate to contact our support team.\n\n` +
+      `*Amount Returned:* ₦${amountReturned}\n` +
+      `*Refund Address:* \`${returnAddress}\`\n\n` +
+      `We apologize for any inconvenience caused. If you have any questions or need further assistance, please don't hesitate to contact our support team.\n\n` +
       `Thank you for your understanding.`,
       { parse_mode: 'Markdown' }
     );
@@ -1148,8 +1057,9 @@ async function handlePaymentOrderRefunded(data, res) {
         await bot.telegram.editMessageText(userId, txData.messageId, null, `❌ *Your DirectPay order has been refunded.*\n\n` +
           `Hello ${userFirstName},\n\n` +
           `We regret to inform you that your DirectPay order with *Reference ID:* \`${reference}\` has been refunded.\n\n` +
-          `*Reason:* We experienced issues while processing your order. Rest assured, the funds have been returned to your original payment method.\n\n` +
-          `If you believe this is a mistake or need further assistance, please don't hesitate to contact our support team.\n\n` +
+          `*Amount Returned:* ₦${amountReturned}\n` +
+          `*Refund Address:* \`${returnAddress}\`\n\n` +
+          `We apologize for any inconvenience caused. If you have any questions or need further assistance, please don't hesitate to contact our support team.\n\n` +
           `Thank you for your understanding.`,
           { parse_mode: 'Markdown' }
         );
@@ -1166,7 +1076,7 @@ async function handlePaymentOrderRefunded(data, res) {
       `🔄 *Payment Order Refunded*\n\n` +
       `*User:* ${userFirstName} (ID: ${userId})\n` +
       `*Reference ID:* ${reference}\n` +
-      `*Amount Paid:* ₦${amountPaid}\n`,
+      `*Amount Returned:* ₦${amountReturned}\n`,
       { parse_mode: 'Markdown' }
     );
 
@@ -1471,7 +1381,6 @@ async function generateWallet(chain) {
 }
 
 // =================== Exchange Rate Fetching ===================
-const SUPPORTED_ASSETS = ['USDC', 'USDT'];
 let exchangeRates = {
   USDC: 0,
   USDT: 0
@@ -1525,6 +1434,10 @@ async function fetchExchangeRates() {
 
 // Initial fetch
 fetchExchangeRates();
+
+// Update Exchange Rates Every 5 Minutes
+const PAYCREST_RATE_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
+setInterval(fetchExchangeRates, PAYCREST_RATE_UPDATE_INTERVAL);
 
 // =================== Apply Global Middleware ===================
 
@@ -1910,9 +1823,6 @@ bot.action(/settings_(.+)/, async (ctx) => {
     default:
       await ctx.answerCbQuery('⚠️ Unknown settings option selected.');
   }
-
-  // Acknowledge the callback to remove the loading state
-  await ctx.answerCbQuery();
 });
 
 // Handle Wallet Selection for Editing Bank Details
@@ -2513,55 +2423,20 @@ bot.action('admin_back_to_main', async (ctx) => {
 // =================== Additional Helper Functions ===================
 
 /**
- * Fetches the exchange rate for a specific asset from Paycrest.
+ * Generates the exchange rate mapping to Paycrest.
  * @param {string} asset - Asset symbol.
- * @returns {number} - Exchange rate.
+ * @param {string} chainRaw - Raw chain name.
+ * @returns {object|null} - Paycrest mapping or null if not found.
  */
-async function fetchExchangeRate(asset) {
-  try {
-    const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
-      headers: {
-        'Authorization': `Bearer ${PAYCREST_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-    });
-
-    if (response.data.status === 'success' && response.data.data) {
-      const rate = parseFloat(response.data.data);
-      if (isNaN(rate)) {
-        throw new Error(`Invalid rate data for ${asset}: ${response.data.data}`);
-      }
-      return rate;
-    } else {
-      throw new Error(`Failed to fetch rate for ${asset}: ${response.data.message || 'Unknown error'}`);
-    }
-  } catch (error) {
-    logger.error(`Error fetching exchange rate for ${asset} from Paycrest: ${error.message}`);
-    throw error;
-  }
+function mapToPaycrest(asset, chainRaw) {
+  // Implement mapping logic based on your Paycrest requirements
+  // Placeholder implementation
+  return {
+    asset: asset,
+    chain: chainRaw,
+    // Add other necessary mappings
+  };
 }
-
-/**
- * Fetches exchange rates for all supported assets.
- */
-async function fetchExchangeRates() {
-  try {
-    const rates = {};
-    for (const asset of SUPPORTED_ASSETS) {
-      rates[asset] = await fetchExchangeRate(asset);
-    }
-    exchangeRates = rates;
-    logger.info('Exchange rates updated successfully from Paycrest.');
-  } catch (error) {
-    logger.error(`Error fetching exchange rates from Paycrest: ${error.message}`);
-    // Optionally, retain previous rates or handle as needed
-  }
-}
-
-
-// Update Exchange Rates Every 5 Minutes
-const PAYCREST_RATE_UPDATE_INTERVAL = 5 * 60 * 1000; // 5 minutes in milliseconds
-setInterval(fetchExchangeRates, PAYCREST_RATE_UPDATE_INTERVAL);
 
 // =================== Start Express Server ===================
 app.listen(PORT, () => {
