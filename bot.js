@@ -2473,8 +2473,7 @@ app.post(WEBHOOK_PATH, (req, res) => {
 // Instead, ensure the Express server is running and handling updates
 
 // =================== Start Express Server ===================
-const PORT = process.env.PORT || 4000; // Use the PORT from environment variables
 
-app.listen(SERVER_PORT, () => {
+app.listen(PORT, () => {
   logger.info(`Webhook server running on port ${PORT}`);
 });
