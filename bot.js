@@ -1,5 +1,5 @@
 // Import required modules
-const Telegraf = require('telegraf');
+const { Telegraf } = require('telegraf'); // Corrected Import
 const { Scenes, session, Markup } = Telegraf;
 const axios = require('axios');
 const admin = require('firebase-admin');
@@ -20,6 +20,9 @@ const PORT = process.env.PORT || 4000;
 
 // Initialize Telegraf bot
 const BOT_TOKEN = process.env.BOT_TOKEN;
+if (!BOT_TOKEN) {
+  throw new Error('BOT_TOKEN is not defined in environment variables.');
+}
 const bot = new Telegraf(BOT_TOKEN);
 
 // Configure logging with Winston
@@ -990,36 +993,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     const totalPages = Math.ceil(userState.wallets.length / pageSize);
     ctx.session.walletsPage = 1; // Initialize to first page
 
-    const generateWalletPage = (page) => {
-      const start = (page - 1) * pageSize;
-      const end = start + pageSize;
-      const wallets = userState.wallets.slice(start, end);
-
-      let message = `💼 *Your Wallets* (Page ${page}/${totalPages}):\n\n`;
-      wallets.forEach((wallet, index) => {
-        const walletNumber = start + index + 1;
-        message += `*Wallet ${walletNumber}:*\n`;
-        message += `• *Chain:* ${wallet.chain}\n`;
-        message += `• *Address:* \`${wallet.address}\`\n`;
-        message += `• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n\n`;
-      });
-
-      const navigationButtons = [];
-
-      if (page > 1) {
-        navigationButtons.push(Markup.button.callback('⬅️ Previous', `wallet_page_${page - 1}`));
-      }
-      if (page < totalPages) {
-        navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${page + 1}`));
-      }
-      navigationButtons.push(Markup.button.callback('🔄 Refresh', `wallet_page_${page}`));
-
-      const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-      return { message, inlineKeyboard };
-    };
-
-    const { message, inlineKeyboard } = generateWalletPage(ctx.session.walletsPage);
+    const { message, inlineKeyboard } = generateWalletPage(ctx.session.walletsPage, userState, pageSize, totalPages);
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
     logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
@@ -1036,7 +1010,6 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
     const userState = await getUserState(userId);
     const pageSize = 5;
     const totalPages = Math.ceil(userState.wallets.length / pageSize);
-
     if (requestedPage < 1 || requestedPage > totalPages) {
       return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
     }
@@ -1199,8 +1172,8 @@ bot.action(/select_wallet_edit_bank_(\d+)/, async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// Handle "💬 Support" in Settings
-bot.action('settings_support', async (ctx) => {
+// =================== Support Handlers ===================
+bot.hears(/ℹ️\s*Support/i, async (ctx) => {
   await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
     [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
     [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
@@ -1208,78 +1181,21 @@ bot.action('settings_support', async (ctx) => {
   ]));
 });
 
-// =================== Support Handlers ===================
-const detailedTutorials = {
-  how_it_works: `
-**📘 How DirectPay Works**
+// Support Actions
+bot.action('support_how_it_works', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
+  ctx.answerCbQuery();
+});
 
-1. **Generate Your Wallet:**
-   - Navigate to the "💼 Generate Wallet" option.
-   - Select your preferred network (Base, Polygon, BNB Smart Chain).
-   - Receive a unique wallet address where you can receive crypto payments.
+bot.action('support_not_received', async (ctx) => {
+  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
+  ctx.answerCbQuery();
+});
 
-2. **Link Your Bank Account:**
-   - After generating your wallet, provide your bank details to securely receive payouts directly into your bank account.
-
-3. **Receive Payments:**
-   - Share your wallet address with clients or payment sources.
-   - Once a deposit is made, DirectPay will automatically convert the crypto to NGN at current exchange rates.
-
-4. **Monitor Transactions:**
-   - Use the "💰 Transactions" option to view all your deposit and payout activities.
-
-5. **Support & Assistance:**
-   - Access detailed support tutorials anytime from the "ℹ️ Support" section.
-
-**🔒 Security:**
-Your funds are secure with us. We utilize industry-standard encryption and security protocols to ensure your assets and information remain safe.
-
-**💬 Need Help?**
-Visit the support section or contact our support team at [@maxcswap](https://t.me/maxcswap) for any assistance.
-`,
-  transaction_guide: `
-**💰 Transaction Not Received?**
-
-If you haven't received your transaction, follow these steps to troubleshoot:
-
-1. **Verify Wallet Address:**
-   - Ensure that the sender used the correct wallet address provided by DirectPay.
-
-2. **Check Bank Linking:**
-   - Make sure your bank account is correctly linked.
-   - If not linked, go to "⚙️ Settings" > "🏦 Link Bank Account" to add your bank details.
-
-3. **Monitor Transaction Status:**
-   - Use the "💰 Transactions" section to check the status of your deposit.
-   - Pending status indicates that the deposit is being processed.
-
-4. **Wait for Confirmation:**
-   - Deposits might take a few minutes to reflect depending on the network congestion.
-
-5. **Contact Support:**
-   - If the issue persists after following the above steps, reach out to our support team at [@maxswap](https://t.me/maxcswap) with your transaction details for further assistance.
-`,
-  link_bank_tutorial: `
-**🏦 How to Edit Your Bank Account**
-
-*Editing an Existing Bank Account:*
-
-1. **Navigate to Bank Editing:**
-   - Click on "⚙️ Settings" > "✏️ Edit Linked Bank Details" from the main menu.
-
-2. **Select the Wallet:**
-   - Choose the wallet whose bank account you wish to edit.
-
-3. **Provide New Bank Details:**
-   - Enter the updated bank name or account number as required.
-
-4. **Verify Changes:**
-   - Confirm the updated account holder name.
-
-5. **Completion:**
-   - Your bank account details have been updated successfully.
-`,
-};
+bot.action('support_contact', async (ctx) => {
+  await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
+  ctx.answerCbQuery();
+});
 
 // =================== Learn About Base Handler ===================
 bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
@@ -2367,7 +2283,7 @@ async function handlePaymentOrderSettled(data) {
 async function handlePaymentOrderExpired(data) {
   const orderId = data.id;
   const status = data.status;
-  const refundTxHash = data.refundTxHash || 'N/A'; // Assuming 'refundTxHash' is provided
+  const refundTxHash = data.refundTxHash || 'N/A'; // Assuming 'refundTxHash' is provided for refund
   const reference = data.reference;
 
   // Fetch the transaction by Paycrest order ID
