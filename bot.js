@@ -239,7 +239,7 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
       network: paycrestMapping.network, // e.g., 'polygon', 'base', etc.
       token: paycrestMapping.token, // 'USDT' or 'USDC'
       recipient: recipient,
-      returnAddress: ${senderAddress} || PAYCREST_RETURN_ADDRESS,
+      returnAddress: senderAddress || PAYCREST_RETURN_ADDRESS,
       feePercent: 0.5,
     };
 
