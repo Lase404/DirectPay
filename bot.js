@@ -850,24 +850,6 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
   }
 });
 
-// =================== Settings Handler ===================
-bot.hears('⚙️ Settings', async (ctx) => {
-  await ctx.reply('⚙️ *Settings Menu*', getSettingsMenu());
-});
-
-/**
- * Generates the Settings Menu Inline Keyboard.
- * @returns {Markup} - Inline Keyboard Markup.
- */
-const getSettingsMenu = () =>
-  Markup.inlineKeyboard([
-    [Markup.button.callback('🔄 Generate New Wallet', 'settings_generate_wallet')],
-    [Markup.button.callback('✏️ Edit Linked Bank Details', 'settings_edit_bank')],
-    [Markup.button.callback('💬 Support', 'settings_support')],
-    [Markup.button.callback('🧾 Generate Transaction Receipt', 'settings_generate_receipt')],
-    [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
-  ]);
-
 // =================== Rating Handlers ===================
 // NEW SECTION START: Rating and Feedback Handlers
 
@@ -924,42 +906,6 @@ bot.action('leave_feedback', async (ctx) => {
   await ctx.reply('Thank you for using DirectPay! If you have any suggestions or need assistance, feel free to reach out.');
   await ctx.answerCbQuery();
 });
-
-// NEW SECTION END: Rating and Feedback Handlers
-
-/**
- * =================== Receipt Generation Scene ===================
- */
-// (Already defined above; no changes needed)
-
-// =================== Register Scenes with Stage ===================
-// (Already done above)
-
-// =================== Apply Middlewares ===================
-// (Already done above)
-
-// =================== Exchange Rate Fetching ===================
-// (Already done above)
-
-// =================== Main Menu ===================
-// (Already done above)
-
-// =================== Check if User is Admin ===================
-// (Already done above)
-
-// =================== /start Command ===================
-// (Already done above)
-
-// =================== Generate Wallet Handler ===================
-// (Already done above)
-
-// =================== View Wallet Handler ===================
-// (Already done above)
-
-// =================== Settings Handler ===================
-// (Already done above)
-
-// =================== Support Handlers ===================
 
 const detailedTutorials = {
   how_it_works: `
