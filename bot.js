@@ -2256,8 +2256,8 @@ app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
 });
 
 // launch bot
-app.listen(SERVER_PORT, () => {
-  logger.info(`Webhook server running on port ${SERVER_PORT}`);
+app.listen(PORT, () => {
+  logger.info(`Webhook server running on port ${PORT}`);
 });
 
 // =================== Shutdown Handlers ===================
