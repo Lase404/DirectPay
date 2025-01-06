@@ -2221,7 +2221,13 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
   }
 });
 
-
+/**
+ * Verifies Paycrest webhook signature.
+ * @param {Buffer} requestBody - Raw request body.
+ * @param {string} signatureHeader - Signature from headers.
+ * @param {string} secretKey - Paycrest client secret.
+ * @returns {boolean} - Verification result.
+ */
 function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
   const hmac = crypto.createHmac('sha256', secretKey);
   hmac.update(requestBody);
