@@ -2239,7 +2239,7 @@ function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
     // If buffer lengths are not equal, timingSafeEqual throws an error
     return false;
   }
-});
+}
 
 // =================== Start Express Server ===================
 app.use(WEBHOOK_PATH, bodyParser.json());
