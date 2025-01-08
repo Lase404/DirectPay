@@ -2513,8 +2513,10 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     return;
   }
 
-  // Update the wallet with bank details
+  // Fetch the latest user state
   const userState = await getUserState(userId);
+
+  // Update the selected wallet with bank details
   if (!userState.wallets[walletIndex]) {
     await ctx.reply('❌ Selected wallet does not exist.');
     ctx.scene.leave();
@@ -2534,11 +2536,17 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       wallets: userState.wallets,
     });
     await ctx.reply('✅ *Bank account linked successfully!*');
-    
+
     // Prompt user to set a PIN if not already set
     if (!userState.pin) {
       await ctx.reply('🔒 To enhance security, please set a 4-digit PIN using the "⚙️ Settings" menu.');
     }
+
+    // **Refresh the Main Menu**
+    // Fetch updated user state
+    const updatedUserState = await getUserState(userId);
+    const walletExists = updatedUserState.wallets.length > 0;
+    const hasBankLinked = updatedUserState.wallets.some(wallet => wallet.bank);
 
     ctx.scene.leave();
   } catch (error) {
@@ -2546,17 +2554,4 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     await ctx.reply('⚠️ An error occurred while linking your bank account. Please try again later.');
     ctx.scene.leave();
   }
-});
-
-bankLinkingScene.action('confirm_bank_no', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  await ctx.reply('❌ *Bank account details have not been saved.* You can restart the linking process using "🏦 Link Bank Account" in the main menu.');
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
-  await ctx.reply('❌ Bank linking process has been canceled.');
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
 });
