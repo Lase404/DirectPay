@@ -202,7 +202,16 @@ async function verifyBankAccount(accountNumber, bankCode) {
   }
 }
 
-
+/**
+ * Creates a Paycrest order for off-ramping.
+ * @param {string} userId - Telegram user ID.
+ * @param {number} amount - Amount in asset.
+ * @param {string} token - Asset token.
+ * @param {string} network - Blockchain network.
+ * @param {object} recipientDetails - Bank details.
+ * @param {string} userSendAddress - User's send address.
+ * @returns {object} - Paycrest order data.
+ */
 async function createPaycrestOrder(userId, amount, token, network, recipientDetails, userSendAddress) {
   try {
     const paycrestMapping = mapToPaycrest(token, network);
@@ -259,7 +268,16 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
   }
 }
 
-
+/**
+ * Withdraws from Blockradar to Paycrest receive address.
+ * @param {string} chain - Blockchain network.
+ * @param {string} assetId - Asset ID in Blockradar.
+ * @param {string} address - Destination address.
+ * @param {number} amount - Amount to withdraw.
+ * @param {string} reference - Reference ID.
+ * @param {object} metadata - Additional metadata.
+ * @returns {object} - Withdrawal response.
+ */
 async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
   try {
     const chainKey = chainMapping[chain.toLowerCase()];
@@ -337,7 +355,11 @@ async function getUserState(userId) {
   }
 }
 
-
+/**
+ * Updates user state in Firestore.
+ * @param {string} userId - Telegram user ID.
+ * @param {object} newState - New state data.
+ */
 async function updateUserState(userId, newState) {
   try {
     await db.collection('users').doc(userId).update(newState);
@@ -347,7 +369,11 @@ async function updateUserState(userId, newState) {
   }
 }
 
-
+/**
+ * Generates a wallet address using Blockradar API.
+ * @param {string} chain - Blockchain network.
+ * @returns {string} - Generated wallet address.
+ */
 async function generateWallet(chain) {
   try {
     const chainData = chains[chain];
@@ -566,7 +592,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
         `🏦 *New Bank Account Verification*\n\n` +
         `Please confirm your new bank details:\n` +
         `- *Bank Name:* ${ctx.session.editBankData.newBankName}\n` +
-        `- *Account Number:* ${ctx.session.editBankData.newAccountNumber}\n` +
+        `- *Account Number:* \`${ctx.session.editBankData.newAccountNumber}\`\n` +
         `- *Account Holder:* ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
@@ -701,7 +727,7 @@ const bankLinkingScene = new Scenes.WizardScene(
     const walletIndex = ctx.session.walletIndex;
 
     if (walletIndex === undefined || walletIndex === null) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first.');
+      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first using the "💼 Generate Wallet" option.');
       return ctx.scene.leave();
     }
 
@@ -769,7 +795,7 @@ const bankLinkingScene = new Scenes.WizardScene(
         `🏦 *Bank Account Verification*\n\n` +
         `Please confirm your bank details:\n` +
         `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
-        `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
+        `- *Account Number:* \`${ctx.session.bankData.accountNumber}\`\n` +
         `- *Account Holder:* ${accountName}\n\n` +
         `Is this information correct?`,
         Markup.inlineKeyboard([
@@ -1209,8 +1235,6 @@ bot.action('open_admin_panel', async (ctx) => {
 
   const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
   ctx.session.adminMessageId = sentMessage.message_id;
-
-  // Removed the inactivity timeout as per user request
 });
 
 /**
@@ -2445,4 +2469,4 @@ app.listen(PORT, () => {
 
 // =================== Shutdown Handlers ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));`
+process.once('SIGTERM', () => bot.stop('SIGTERM'));
