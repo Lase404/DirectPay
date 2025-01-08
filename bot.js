@@ -8,7 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const winston = require('winston');
 const bodyParser = require('body-parser');
-const bcrypt = require('bcrypt'); // Added for PIN hashing
+const bcrypt = require('bcrypt'); // For PIN hashing
 require('dotenv').config();
 
 // =================== Logger Setup ===================
@@ -202,16 +202,7 @@ async function verifyBankAccount(accountNumber, bankCode) {
   }
 }
 
-/**
- * Creates a Paycrest order for off-ramping.
- * @param {string} userId - Telegram user ID.
- * @param {number} amount - Amount in asset.
- * @param {string} token - Asset token.
- * @param {string} network - Blockchain network.
- * @param {object} recipientDetails - Bank details.
- * @param {string} userSendAddress - User's send address.
- * @returns {object} - Paycrest order data.
- */
+
 async function createPaycrestOrder(userId, amount, token, network, recipientDetails, userSendAddress) {
   try {
     const paycrestMapping = mapToPaycrest(token, network);
@@ -268,16 +259,7 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
   }
 }
 
-/**
- * Withdraws from Blockradar to Paycrest receive address.
- * @param {string} chain - Blockchain network.
- * @param {string} assetId - Asset ID in Blockradar.
- * @param {string} address - Destination address.
- * @param {number} amount - Amount to withdraw.
- * @param {string} reference - Reference ID.
- * @param {object} metadata - Additional metadata.
- * @returns {object} - Withdrawal response.
- */
+
 async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
   try {
     const chainKey = chainMapping[chain.toLowerCase()];
@@ -355,11 +337,7 @@ async function getUserState(userId) {
   }
 }
 
-/**
- * Updates user state in Firestore.
- * @param {string} userId - Telegram user ID.
- * @param {object} newState - New state data.
- */
+
 async function updateUserState(userId, newState) {
   try {
     await db.collection('users').doc(userId).update(newState);
@@ -369,11 +347,7 @@ async function updateUserState(userId, newState) {
   }
 }
 
-/**
- * Generates a wallet address using Blockradar API.
- * @param {string} chain - Blockchain network.
- * @returns {string} - Generated wallet address.
- */
+
 async function generateWallet(chain) {
   try {
     const chainData = chains[chain];
@@ -598,7 +572,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
         Markup.inlineKeyboard([
           [Markup.button.callback('✅ Yes, Confirm', 'confirm_new_bank_yes')],
           [Markup.button.callback('❌ No, Edit Details', 'confirm_new_bank_no')],
-          [Markup.button.callback('❌ Cancel Editing', 'cancel_edit_bank')],
+          [Markup.button.callback('❌ Cancel Editing', 'cancel_edit_bank')]
         ])
       );
       return ctx.wizard.next();
@@ -823,9 +797,10 @@ const stage = new Scenes.Stage();
 stage.register(
   createPinScene,
   enterPinScene,
-  bankLinkingScene, 
-  sendMessageScene, 
-  receiptGenerationScene, 
+  editBankDetailsScene,
+  bankLinkingScene,
+  sendMessageScene,
+  receiptGenerationScene,
   feedbackScene // Register the feedback scene
 );
 bot.use(session());
@@ -1220,69 +1195,6 @@ const getSettingsMenu = () =>
     [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
   ]);
 
-// =================== Rating Handlers ===================
-// Define the feedback options after rating
-const feedbackOptions = Markup.inlineKeyboard([
-  [Markup.button.callback('💬 Give Feedback', 'give_feedback')],
-  [Markup.button.callback('❌ Leave', 'leave_feedback')],
-]);
-
-// Handle rating selections (1-5 stars) with vertical inline menu
-bot.action(/rate_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const rating = parseInt(ctx.match[1], 10);
-  
-  // Log the rating
-  logger.info(`User ${userId} rated the service with ${rating} star(s).`);
-  
-  // Store rating in Firestore (optional)
-  try {
-    await db.collection('ratings').add({
-      userId: userId,
-      rating: rating,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
-  } catch (error) {
-    logger.error(`Error storing rating for user ${userId}: ${error.message}`);
-  }
-  
-  // Delete the rating message
-  try {
-    await ctx.deleteMessage();
-  } catch (error) {
-    logger.error(`Error deleting rating message for user ${userId}: ${error.message}`);
-  }
-  
-  // Thank the user
-  await ctx.reply('🙏 Thank you for your rating!');
-  
-  // Ask if they want to provide additional feedback
-  await ctx.reply('Would you like to provide additional feedback?', feedbackOptions);
-  
-  // Acknowledge the callback to remove the loading state
-  await ctx.answerCbQuery();
-});
-
-// Handle 'Give Feedback' button
-bot.action('give_feedback', async (ctx) => {
-  await ctx.scene.enter('feedback_scene'); // Enter the feedback collection scene
-  await ctx.answerCbQuery();
-});
-
-// Handle 'Leave' button
-bot.action('leave_feedback', async (ctx) => {
-  await ctx.reply('Thank you for using DirectPay! If you have any suggestions or need assistance, feel free to reach out.');
-  await ctx.answerCbQuery();
-});
-
-// =================== Send Message Scene ===================
-sendMessageScene.on('message', async (ctx) => {
-  // Implementation handled within the sendMessageScene definition
-});
-
-// =================== Edit Bank Details Scene ===================
-// Already defined above
-
 // =================== Admin Panel ===================
 
 // Entry point for Admin Panel
@@ -1448,7 +1360,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
           message += `*User ID:* ${doc.id}\n`;
           message += `*First Name:* ${user.firstName || 'N/A'}\n`;
           message += `*Number of Wallets:* ${user.wallets.length}\n`;
-          message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
+          message += `• *Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
         });
 
         // Add a 'Back' button to return to the admin menu
@@ -1842,13 +1754,67 @@ bot.action('settings_generate_wallet', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// =================== Support Scene ===================
-// Already handled above
+// =================== Rating Handlers ===================
+// Define the feedback options after rating
+const feedbackOptions = Markup.inlineKeyboard([
+  [Markup.button.callback('💬 Give Feedback', 'give_feedback')],
+  [Markup.button.callback('❌ Leave', 'leave_feedback')],
+]);
+
+// Handle rating selections (1-5 stars) with vertical inline menu
+bot.action(/rate_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const rating = parseInt(ctx.match[1], 10);
+  
+  // Log the rating
+  logger.info(`User ${userId} rated the service with ${rating} star(s).`);
+  
+  // Store rating in Firestore (optional)
+  try {
+    await db.collection('ratings').add({
+      userId: userId,
+      rating: rating,
+      timestamp: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (error) {
+    logger.error(`Error storing rating for user ${userId}: ${error.message}`);
+  }
+  
+  // Delete the rating message
+  try {
+    await ctx.deleteMessage();
+  } catch (error) {
+    logger.error(`Error deleting rating message for user ${userId}: ${error.message}`);
+  }
+  
+  // Thank the user
+  await ctx.reply('🙏 Thank you for your rating!');
+  
+  // Ask if they want to provide additional feedback
+  await ctx.reply('Would you like to provide additional feedback?', feedbackOptions);
+  
+  // Acknowledge the callback to remove the loading state
+  await ctx.answerCbQuery();
+});
+
+// Handle 'Give Feedback' button
+bot.action('give_feedback', async (ctx) => {
+  await ctx.scene.enter('feedback_scene'); // Enter the feedback collection scene
+  await ctx.answerCbQuery();
+});
+
+// Handle 'Leave' button
+bot.action('leave_feedback', async (ctx) => {
+  await ctx.reply('Thank you for using DirectPay! If you have any suggestions or need assistance, feel free to reach out.');
+  await ctx.answerCbQuery();
+});
 
 // =================== Admin Panel ===================
-// Already handled above
 
-// =================== Transactions Handler ===================
+// Handle Admin Menu Navigation Actions (Already defined above)
+// Ensure that these handlers are after scene definitions to avoid ReferenceError
+
+// =================== Support Scene ===================
 // Already handled above
 
 // =================== Learn About Base Handler ===================
@@ -1864,26 +1830,144 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   await ctx.replyWithMarkdown(ratesMessage);
 });
 
-// =================== Feedback Scene ===================
-// Already defined above
+// =================== PIN Digit Selection and Cancellation Handlers ===================
 
-// =================== Additional Helper Functions ===================
-/**
- * Calculates payout amount after fees.
- * @param {string} asset - Asset symbol (USDC/USDT).
- * @param {number} amount - Amount in asset.
- * @returns {number} - Amount earned in Naira after fee.
- */
-function calculateAmountEarnedInNaira(asset, amount, feePercentage = 0.005) {
-  const rate = exchangeRates[asset];
-  if (!rate) {
-    throw new Error(`Exchange rate for ${asset} not available.`);
+// Handle PIN digits for Create PIN Scene
+createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
+  const digit = ctx.match[1];
+  ctx.session.pinDigits.push(digit);
+  await ctx.answerCbQuery();
+
+  // Check if 4 digits have been entered
+  if (ctx.session.pinDigits.length === 4) {
+    await ctx.wizard.next(); // Move to confirmation step
   }
-  const total = amount * rate;
-  const fee = total * feePercentage;
-  const amountEarned = total - fee;
-  return parseFloat(amountEarned.toFixed(2));
-}
+});
+
+// Handle PIN cancellation for Create PIN Scene
+createPinScene.action('pin_cancel', async (ctx) => {
+  await ctx.reply('❌ PIN creation has been canceled.');
+  ctx.session.pinDigits = [];
+  ctx.session.tempPin = null;
+  ctx.scene.leave();
+  await ctx.answerCbQuery();
+});
+
+// Handle PIN digits for Enter PIN Scene
+enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
+  const digit = ctx.match[1];
+  ctx.session.enterPinDigits.push(digit);
+  await ctx.answerCbQuery();
+
+  // Check if 4 digits have been entered
+  if (ctx.session.enterPinDigits.length === 4) {
+    await ctx.wizard.next(); // Move to verification step
+  }
+});
+
+// Handle PIN cancellation for Enter PIN Scene
+enterPinScene.action('pin_cancel', async (ctx) => {
+  await ctx.reply('❌ PIN entry has been canceled.');
+  ctx.session.enterPinDigits = [];
+  ctx.scene.leave();
+  await ctx.answerCbQuery();
+});
+
+// =================== Bank Linking Scene Handlers ===================
+
+// Handle confirmation of bank linking
+bot.action('confirm_bank_yes', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const bankData = ctx.session.bankData;
+  const walletIndex = ctx.session.walletIndex;
+
+  try {
+    let userState = await getUserState(userId);
+
+    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
+      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first.');
+      await ctx.answerCbQuery();
+      return ctx.scene.leave();
+    }
+
+    // Update Bank Details for the Selected Wallet
+    userState.wallets[walletIndex].bank = {
+      bankName: bankData.bankName,
+      bankCode: bankData.bankCode,
+      accountNumber: bankData.accountNumber,
+      accountName: bankData.accountName,
+    };
+
+    // Update User State in Firestore
+    await updateUserState(userId, {
+      wallets: userState.wallets,
+    });
+
+    // Prepare Confirmation Message with Wallet Details
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(userState.wallets[walletIndex].address)}&size=200x200`;
+    let confirmationMessage = `✅ *Bank Account Linked Successfully!*\n\n`;
+    confirmationMessage += `*Bank Name:* ${bankData.bankName}\n`;
+    confirmationMessage += `*Account Number:* \`${bankData.accountNumber}\`\n`;
+    confirmationMessage += `*Account Holder:* ${bankData.accountName}\n\n`;
+    confirmationMessage += `📂 *Linked Wallet Details:*\n`;
+    confirmationMessage += `• *Chain:* ${userState.wallets[walletIndex].chain}\n`;
+    confirmationMessage += `• *Address:* \`${userState.wallets[walletIndex].address}\`\n\n`;
+    confirmationMessage += `You can now receive payouts to this bank account.`;
+    confirmationMessage += `\n\n📱 *Scan the QR code to copy your wallet address:*`;
+
+    await ctx.replyWithMarkdown(confirmationMessage, Markup.inlineKeyboard([
+      [Markup.button.url('📱 View QR Code', qrCodeUrl)]
+    ]));
+
+    // Display QR Code as a photo
+    await ctx.replyWithPhoto(qrCodeUrl, { caption: 'Scan the QR code to copy the address.' });
+
+    // Log to Admin
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
+      `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
+      `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
+      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
+    logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
+
+    // **Immediately Enter the Create PIN Scene**
+    await ctx.scene.enter('create_pin_scene');
+
+    // Acknowledge the Callback to Remove Loading State
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('❌ An error occurred while confirming your bank details. Please try again later.');
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  }
+});
+
+// Handle 'No, Edit Details' button
+bot.action('confirm_bank_no', async (ctx) => {
+  await ctx.reply('✏️ *Edit your bank details.* Please enter your bank name again:');
+  ctx.scene.reenter(); // Restart the bank linking scene
+  await ctx.answerCbQuery();
+});
+
+// Handle 'Cancel Linking' button
+bot.action('cancel_bank_linking', async (ctx) => {
+  await ctx.reply('❌ Bank linking has been canceled.');
+  ctx.session.bankData = {};
+  ctx.scene.leave();
+  await ctx.answerCbQuery();
+});
+
+// =================== PIN Keyboard ===================
+/**
+ * Generates the PIN Input Inline Keyboard (0-9 arranged in a grid)
+ * @returns {Markup} - Inline Keyboard Markup
+ */
+const getPinKeyboard = () => Markup.inlineKeyboard([
+  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
+  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
+  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
+  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
+]);
 
 // =================== Webhook Handlers ===================
 
@@ -2361,175 +2445,4 @@ app.listen(PORT, () => {
 
 // =================== Shutdown Handlers ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-// =================== PIN Keyboard ===================
-/**
- * Generates the PIN Input Inline Keyboard (0-9 arranged in a grid)
- * @returns {Markup} - Inline Keyboard Markup
- */
-const getPinKeyboard = () => Markup.inlineKeyboard([
-  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
-  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
-  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
-  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
-]);
-
-// =================== PIN Digit Selection and Cancellation Handlers ===================
-
-// Handle PIN digits for Create PIN Scene
-createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
-  const digit = ctx.match[1];
-  ctx.session.pinDigits.push(digit);
-  await ctx.answerCbQuery();
-
-  // Check if 4 digits have been entered
-  if (ctx.session.pinDigits.length === 4) {
-    await ctx.wizard.next(); // Move to confirmation step
-  }
-});
-
-createPinScene.action('pin_cancel', async (ctx) => {
-  await ctx.reply('❌ PIN creation has been canceled.');
-  ctx.session.pinDigits = [];
-  ctx.session.tempPin = null;
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// Handle PIN digits for Enter PIN Scene
-enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
-  const digit = ctx.match[1];
-  ctx.session.enterPinDigits.push(digit);
-  await ctx.answerCbQuery();
-
-  // Check if 4 digits have been entered
-  if (ctx.session.enterPinDigits.length === 4) {
-    await ctx.wizard.next(); // Move to verification step
-  }
-});
-
-enterPinScene.action('pin_cancel', async (ctx) => {
-  await ctx.reply('❌ PIN entry has been canceled.');
-  ctx.session.enterPinDigits = [];
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// =================== Bank Linking Scene Handlers ===================
-
-// Handle confirmation of bank linking
-bot.action('confirm_bank_yes', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const bankData = ctx.session.bankData;
-  const walletIndex = ctx.session.walletIndex;
-
-  try {
-    let userState = await getUserState(userId);
-
-    if (walletIndex === undefined || walletIndex === null || !userState.wallets[walletIndex]) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first.');
-      await ctx.answerCbQuery();
-      return ctx.scene.leave();
-    }
-
-    // Update Bank Details for the Selected Wallet
-    userState.wallets[walletIndex].bank = {
-      bankName: bankData.bankName,
-      bankCode: bankData.bankCode,
-      accountNumber: bankData.accountNumber,
-      accountName: bankData.accountName,
-    };
-
-    // Update User State in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-    });
-
-    // Prepare Confirmation Message with Wallet Details
-    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?data=${encodeURIComponent(userState.wallets[walletIndex].address)}&size=200x200`;
-    let confirmationMessage = `✅ *Bank Account Linked Successfully!*\n\n`;
-    confirmationMessage += `*Bank Name:* ${bankData.bankName}\n`;
-    confirmationMessage += `*Account Number:* \`${bankData.accountNumber}\`\n`;
-    confirmationMessage += `*Account Holder:* ${bankData.accountName}\n\n`;
-    confirmationMessage += `📂 *Linked Wallet Details:*\n`;
-    confirmationMessage += `• *Chain:* ${userState.wallets[walletIndex].chain}\n`;
-    confirmationMessage += `• *Address:* \`${userState.wallets[walletIndex].address}\`\n\n`;
-    confirmationMessage += `You can now receive payouts to this bank account.`;
-    confirmationMessage += `\n\n📱 *Scan the QR code to copy your wallet address:*`;
-
-    await ctx.replyWithMarkdown(confirmationMessage, Markup.inlineKeyboard([
-      [Markup.button.url('📱 View QR Code', qrCodeUrl)]
-    ]));
-
-    // Display QR Code as a photo
-    await ctx.replyWithPhoto(qrCodeUrl, { caption: 'Scan the QR code to copy the address.' });
-
-    // Log to Admin
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
-      `*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n` +
-      `*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n` +
-      `*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
-    logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
-
-    // **Immediately Enter the Create PIN Scene**
-    await ctx.scene.enter('create_pin_scene');
-
-    // Acknowledge the Callback to Remove Loading State
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ An error occurred while confirming your bank details. Please try again later.');
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  }
-});
-
-// Handle 'No, Edit Details' button
-bot.action('confirm_bank_no', async (ctx) => {
-  await ctx.reply('✏️ *Edit your bank details.* Please enter your bank name again:');
-  ctx.scene.reenter(); // Restart the bank linking scene
-  await ctx.answerCbQuery();
-});
-
-// Handle 'Cancel Linking' button
-bot.action('cancel_bank_linking', async (ctx) => {
-  await ctx.reply('❌ Bank linking has been canceled.');
-  ctx.session.bankData = {};
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// =================== Admin Panel ===================
-
-// Handle Admin Menu Navigation Actions (Already defined above)
-// Ensure that these handlers are after scene definitions to avoid ReferenceError
-
-// =================== Webhook Handlers ===================
-
-// ... (Webhook handlers remain unchanged)
-
-// =================== Final Steps ===================
-
-// =================== Start Express Server ===================
-app.use(WEBHOOK_PATH, bodyParser.json());
-
-app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
-  if (!req.body) {
-    logger.error('No body found in Telegram webhook request.');
-    return res.status(400).send('No body found.');
-  }
-
-  logger.info(`Received Telegram update: ${JSON.stringify(req.body, null, 2)}`); // Debugging
-
-  bot.handleUpdate(req.body, res);
-});
-
-// Start the server
-app.listen(PORT, () => {
-  logger.info(`Webhook server running on port ${PORT}`);
-});
-
-// =================== Shutdown Handlers ===================
-process.once('SIGINT', () => bot.stop('SIGINT'));
-process.once('SIGTERM', () => bot.stop('SIGTERM'));
+process.once('SIGTERM', () => bot.stop('SIGTERM'));`
