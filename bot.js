@@ -449,9 +449,8 @@ const bankLinkingScene = new Scenes.WizardScene(
   },
   // Step 2: Enter Bank Name or Handle Wallet Selection
   async (ctx) => {
-    // Check if user selected a wallet
     if (ctx.session.bankLinkingWalletIndex === undefined) {
-      // User selected a wallet via callback
+      // User selected a wallet
       const selectedWalletIndex = parseInt(ctx.match[1], 10);
       ctx.session.bankLinkingWalletIndex = selectedWalletIndex;
       await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${selectedWalletIndex + 1} (${ctx.session.selectedChain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
@@ -479,7 +478,7 @@ const bankLinkingScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
     return ctx.wizard.next();
   },
-  // Step 3: Enter Account Number
+  // Step 3: Enter Account Number and Verify
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
@@ -585,6 +584,25 @@ const createPinScene = new Scenes.WizardScene(
       await updateUserState(userId, { pin: hashedPin });
       await ctx.reply('✅ *PIN has been set successfully!* Your PIN is required to edit bank details.');
       ctx.scene.leave();
+
+      // After setting PIN, show wallet details and bank linked
+      const userState = await getUserState(userId);
+      const walletIndex = ctx.session.bankLinkingWalletIndex;
+      const wallet = userState.wallets[walletIndex];
+      if (wallet) {
+        const walletDetails = `💼 *Wallet Details:*\n\n` +
+          `• *Chain:* ${wallet.chain}\n` +
+          `• *Address:* \`${wallet.address}\`\n` +
+          `• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}`;
+
+        await ctx.replyWithMarkdown(walletDetails);
+
+        // Refresh the main menu to replace "Link Bank Account" with "Settings"
+        const walletExists = userState.wallets.length > 0;
+        const hasBankLinked = userState.wallets.some(w => w.bank);
+
+        await ctx.reply('🔄 *Main Menu Updated:*', getMainMenu(walletExists, hasBankLinked));
+      }
     } catch (error) {
       logger.error(`Error storing PIN for user ${userId}: ${error.message}`);
       await ctx.reply('⚠️ An error occurred while setting your PIN. Please try again later.');
@@ -654,7 +672,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown('🏦 *Edit Bank Account*\n\nPlease enter your new bank name (e.g., Access Bank):');
     return ctx.wizard.next();
   },
-  // Step 2: Enter New Bank Name
+  // Step 2: Enter New Account Number
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
@@ -676,7 +694,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown('🔢 Please enter your new 10-digit bank account number:');
     return ctx.wizard.next();
   },
-  // Step 3: Enter New Account Number
+  // Step 3: Enter New Account Number and Verify
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
@@ -847,8 +865,7 @@ stage.register(
   bankLinkingScene, 
   sendMessageScene, 
   receiptGenerationScene, 
-  feedbackScene,
-  // Add other scenes here as needed
+  feedbackScene // Register the feedback scene
 );
 bot.use(session());
 bot.use(stage.middleware());
@@ -925,6 +942,15 @@ const getMainMenu = (walletExists, hasBankLinked) =>
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
     ['📈 View Current Rates'], // Added Refresh Rates Button
   ]).resize();
+
+// =================== Check if User is Admin ===================
+
+/**
+ * Checks if a user is an admin based on their user ID.
+ * @param {string} userId - Telegram user ID.
+ * @returns {boolean} - Whether the user is an admin.
+ */
+const isAdmin = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
 
 // =================== /start Command ===================
 bot.start(async (ctx) => {
@@ -1045,7 +1071,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
       chain: chain || 'N/A',
       supportedAssets: chains[chain].supportedAssets ? [...chains[chain].supportedAssets] : [],
       bank: null,
-      transactions: [], // Initialize transactions array
+      amount: 0 // Initialize amount if needed
     });
 
     // Also, Add the Wallet Address to walletAddresses Array
@@ -1145,7 +1171,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
     logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while fetching your wallets. Please try again later.');
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch your wallets. Please try again later.');
   }
 });
 
@@ -1227,9 +1253,8 @@ bot.hears('⚙️ Settings', async (ctx) => {
  */
 const getSettingsMenu = () =>
   Markup.inlineKeyboard([
-    [Markup.button.callback('🔄 Generate New Wallet', 'settings_generate_wallet')],
     [Markup.button.callback('✏️ Edit Linked Bank Details', 'settings_edit_bank')],
-    [Markup.button.callback('🔐 Set PIN', 'settings_set_pin')], // Added Set PIN button
+    [Markup.button.callback('🔄 Generate New Wallet', 'settings_generate_wallet')],
     [Markup.button.callback('💬 Support', 'settings_support')],
     [Markup.button.callback('🧾 Generate Transaction Receipt', 'settings_generate_receipt')],
     [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
@@ -1242,14 +1267,14 @@ const getSettingsMenu = () =>
  * @param {string} userId - Telegram user ID.
  * @returns {boolean} - Whether the user is an admin.
  */
-const isAdmin = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
+const isAdminUser = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
 
 // =================== Admin Panel ===================
 
 // Entry point for Admin Panel
 bot.action('open_admin_panel', async (ctx) => {
   const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
+  if (!isAdminUser(userId)) {
     return ctx.reply('⚠️ Unauthorized access.');
   }
 
@@ -1280,7 +1305,7 @@ const getAdminMenu = () =>
 bot.action(/admin_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
 
-  if (!isAdmin(userId)) {
+  if (!isAdminUser(userId)) {
     return ctx.reply('⚠️ Unauthorized access.');
   }
 
@@ -1303,10 +1328,10 @@ bot.action(/admin_(.+)/, async (ctx) => {
           const tx = doc.data();
           message += `*User ID:* ${tx.userId || 'N/A'}\n`;
           message += `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-          message += `*Amount Deposited:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-          message += `*Status:* ${tx.status || 'Pending'}\n`;
-          message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
+          message += `• *Amount Deposited:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
+          message += `• *Status:* ${tx.status || 'Pending'}\n`;
+          message += `• *Chain:* ${tx.chain || 'N/A'}\n`;
+          message += `• *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
         });
 
         // Add a 'Back' button to return to the admin menu
@@ -1373,7 +1398,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
               `*Cash amount:* ₦${payout}\n` +
               `*Network:* ${txData.chain}\n` +
-              `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
+              `*Date:* ${txData.timestamp ? new Date(txData.timestamp).toLocaleString() : 'N/A'}\n\n` + 
               `Thank you for using *DirectPay*!`,
               { parse_mode: 'Markdown' }
             );
@@ -1435,7 +1460,8 @@ bot.action(/admin_(.+)/, async (ctx) => {
           return ctx.answerCbQuery();
         }
 
-        // Initiate broadcast message scene
+        // Initiate a separate broadcast scene or handle directly
+        // For simplicity, using the sendMessageScene to handle individual admin messages
         await ctx.scene.enter('broadcast_message_scene');
         ctx.answerCbQuery();
       } catch (error) {
@@ -1508,239 +1534,101 @@ const broadcastMessageScene = new Scenes.WizardScene(
 // =================== Register Broadcast Scene ===================
 stage.register(broadcastMessageScene);
 
-// =================== PIN Keyboard ===================
-/**
- * Generates the PIN Input Inline Keyboard (0-9 arranged in a grid)
- * @returns {Markup} - Inline Keyboard Markup
- */
-const getPinKeyboard = () => Markup.inlineKeyboard([
-  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
-  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
-  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
-  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
-]);
-
-// =================== PIN Scene Handlers ===================
-
-// Handle digit presses in createPinScene
-createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
-  const digit = ctx.match[1];
-  ctx.session.pinDigits.push(digit);
-  await ctx.answerCbQuery();
-  
-  // Check if 4 digits have been entered
-  if (ctx.session.pinDigits.length === 4) {
-    await ctx.wizard.next(); // Move to confirmation step
-    await ctx.scene.step(1); // Trigger the next step
-  }
-});
-
-// Handle cancel in createPinScene
-createPinScene.action('pin_cancel', async (ctx) => {
-  await ctx.reply('❌ PIN creation has been canceled.');
-  ctx.session.pinDigits = [];
-  ctx.session.tempPin = null;
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// Handle digit presses in enterPinScene
-enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
-  const digit = ctx.match[1];
-  ctx.session.enterPinDigits.push(digit);
-  await ctx.answerCbQuery();
-  
-  // Check if 4 digits have been entered
-  if (ctx.session.enterPinDigits.length === 4) {
-    await ctx.wizard.next(); // Move to verification step
-    await ctx.scene.step(1); // Trigger the next step
-  }
-});
-
-// Handle cancel in enterPinScene
-enterPinScene.action('pin_cancel', async (ctx) => {
-  await ctx.reply('❌ PIN entry has been canceled.');
-  ctx.session.enterPinDigits = [];
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// =================== Bank Linking Scene Handlers ===================
-
-// Handle selecting a wallet to link bank account
-bankLinkingScene.action(/select_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  try {
-    const userState = await getUserState(userId);
-    const wallet = userState.wallets[walletIndex];
-    if (!wallet) {
-      await ctx.replyWithMarkdown('⚠️ Invalid wallet selection.');
-      return ctx.answerCbQuery();
-    }
-
-    ctx.session.bankLinkingWalletIndex = walletIndex;
-    await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${walletIndex + 1} (${wallet.chain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error selecting wallet for bank edit for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    ctx.answerCbQuery();
-  }
-});
-
-// Handle confirmation in bankLinkingScene
-bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = ctx.session.bankLinkingWalletIndex;
-  const bankData = ctx.session.bankData;
-
-  if (walletIndex === undefined || walletIndex === null) {
-    await ctx.reply('❌ No wallet selected for linking. Please try again.');
-    ctx.scene.leave();
-    return;
-  }
-
-  // Fetch the latest user state
-  const userState = await getUserState(userId);
-
-  // Update the selected wallet with bank details
-  if (!userState.wallets[walletIndex]) {
-    await ctx.reply('❌ Selected wallet does not exist.');
-    ctx.scene.leave();
-    return;
-  }
-
-  userState.wallets[walletIndex].bank = {
-    bankName: bankData.bankName,
-    bankCode: bankData.bankCode,
-    accountNumber: bankData.accountNumber,
-    accountName: bankData.accountName,
-  };
-
-  // Update user state in Firestore
-  try {
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-    });
-    await ctx.reply('✅ *Bank account linked successfully!*');
-
-    // Prompt user to set a PIN if not already set
-    if (!userState.pin) {
-      await ctx.reply('🔒 To enhance security, please set a 4-digit PIN using the "⚙️ Settings" menu.');
-    }
-
-    // **Refresh the Main Menu**
-    // Fetch updated user state
-    const updatedUserState = await getUserState(userId);
-    const walletExists = updatedUserState.wallets.length > 0;
-    const hasBankLinked = updatedUserState.wallets.some(wallet => wallet.bank);
-
-    // Send the updated main menu
-    await ctx.reply('🔄 *Main Menu Updated:*', getMainMenu(walletExists, hasBankLinked));
-
-    ctx.scene.leave();
-  } catch (error) {
-    logger.error(`Error storing bank details for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while linking your bank account. Please try again later.');
-    ctx.scene.leave();
-  }
-});
-
-// Handle "No, Edit Details" in bankLinkingScene
-bankLinkingScene.action('confirm_bank_no', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  await ctx.reply('❌ *Bank account details have not been saved.* You can restart the linking process using "🏦 Link Bank Account" in the main menu.');
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// Handle "Cancel Linking" in bankLinkingScene
-bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
-  await ctx.reply('❌ Bank linking process has been canceled.');
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// =================== Edit Bank Details Scene Handlers ===================
-
-// Handle confirmation for editing bank details
-editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = ctx.session.editBankData.walletIndex;
-  const newBankData = ctx.session.editBankData;
-
-  if (walletIndex === undefined || walletIndex === null) {
-    await ctx.reply('❌ No wallet selected for editing. Please try again.');
-    ctx.scene.leave();
-    return;
-  }
-
-  // Fetch the latest user state
-  const userState = await getUserState(userId);
-
-  // Update the selected wallet with new bank details
-  if (!userState.wallets[walletIndex]) {
-    await ctx.reply('❌ Selected wallet does not exist.');
-    ctx.scene.leave();
-    return;
-  }
-
-  userState.wallets[walletIndex].bank = {
-    bankName: newBankData.newBankName,
-    bankCode: newBankData.newBankCode,
-    accountNumber: newBankData.newAccountNumber,
-    accountName: newBankData.newAccountName,
-  };
-
-  // Update user state in Firestore
-  try {
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-    });
-    await ctx.reply('✅ *Bank account updated successfully!*');
-
-    // Refresh the main menu
-    const updatedUserState = await getUserState(userId);
-    const walletExists = updatedUserState.wallets.length > 0;
-    const hasBankLinked = updatedUserState.wallets.some(wallet => wallet.bank);
-
-    await ctx.reply('🔄 *Main Menu Updated:*', getMainMenu(walletExists, hasBankLinked));
-
-    ctx.scene.leave();
-  } catch (error) {
-    logger.error(`Error updating bank details for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while updating your bank account. Please try again later.');
-    ctx.scene.leave();
-  }
-});
-
-// Handle "No, Edit Details" in editBankDetailsScene
-editBankDetailsScene.action('confirm_new_bank_no', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  await ctx.reply('❌ *Bank account details have not been updated.* You can restart the editing process using "⚙️ Settings" > "✏️ Edit Linked Bank Details".');
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// Handle "Cancel Editing" in editBankDetailsScene
-editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
-  await ctx.reply('❌ Bank editing process has been canceled.');
-  ctx.scene.leave();
-  await ctx.answerCbQuery();
-});
-
-// =================== Admin Panel ===================
-
-// Already handled above
-
-// =================== Broadcast Message Scene Handlers ===================
-
-// Already handled above
-
 // =================== Learn About Base Handler ===================
 
+/**
+ * Handles the 'Learn About Base' command.
+ */
+bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
+  await sendBaseContent(ctx, 0, true);
+});
+
+/**
+ * Base content pages.
+ */
+const baseContent = [
+  {
+    title: 'Welcome to Base',
+    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
+  },
+  {
+    title: 'Why Choose Base?',
+    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
+  },
+  {
+    title: 'Getting Started',
+    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
+  },
+  {
+    title: 'Learn More',
+    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
+  },
+];
+
+/**
+ * Sends content pages for 'Learn About Base'.
+ * @param {TelegrafContext} ctx - Telegraf context.
+ * @param {number} index - Current page index.
+ * @param {boolean} isNew - Whether it's a new message or an edit.
+ */
+async function sendBaseContent(ctx, index, isNew = true) {
+  const content = baseContent[index];
+  const totalPages = baseContent.length;
+
+  const navigationButtons = [];
+
+  if (index > 0) {
+    navigationButtons.push(Markup.button.callback('⬅️ Back', `base_page_${index - 1}`));
+  }
+
+  if (index < totalPages - 1) {
+    navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
+  }
+
+  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
+
+  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
+
+  if (isNew) {
+    const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
+    // Store the message ID in session
+    ctx.session.baseMessageId = sentMessage.message_id;
+  } else {
+    try {
+      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
+        parse_mode: 'Markdown',
+        reply_markup: inlineKeyboard.reply_markup,
+      });
+    } catch (error) {
+      // If editing message fails, send a new message and update session
+      const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
+      ctx.session.baseMessageId = sentMessage.message_id;
+    }
+  }
+}
+
+// Base Content Pagination
+bot.action(/base_page_(\d+)/, async (ctx) => {
+  const index = parseInt(ctx.match[1], 10);
+  if (isNaN(index) || index < 0 || index >= baseContent.length) {
+    return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
+  }
+  await sendBaseContent(ctx, index, false);
+  ctx.answerCbQuery(); // Acknowledge the callback
+});
+
+// Exit Base Content
+bot.action('exit_base', async (ctx) => {
+  // Delete the message and clear session
+  if (ctx.session.baseMessageId) {
+    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
+    ctx.session.baseMessageId = null;
+  }
+  await ctx.replyWithMarkdown('Thank you for learning about Base!');
+  ctx.answerCbQuery();
+});
+
+// =================== Support Handlers ===================
 const detailedTutorials = {
   how_it_works: `
 **📘 How DirectPay Works**
@@ -1819,28 +1707,6 @@ If you haven't received your transaction, follow these steps to troubleshoot:
 bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
   await sendBaseContent(ctx, 0, true);
 });
-
-/**
- * Base content pages.
- */
-const baseContent = [
-  {
-    title: 'Welcome to Base',
-    text: 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
-  },
-  {
-    title: 'Why Choose Base?',
-    text: '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
-  },
-  {
-    title: 'Getting Started',
-    text: 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
-  },
-  {
-    title: 'Learn More',
-    text: 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
-  },
-];
 
 /**
  * Sends content pages for 'Learn About Base'.
@@ -2111,18 +1977,18 @@ bot.action('settings_edit_bank', async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
     const userState = await getUserState(userId);
-    const unlinkedWallets = userState.wallets.filter(wallet => !wallet.bank);
+    const unlinkedWallets = userState.wallets.filter(wallet => wallet.bank);
 
     if (unlinkedWallets.length === 0) {
       await ctx.replyWithMarkdown('✅ *All your wallets have linked bank accounts.*');
       return ctx.answerCbQuery();
     }
 
-    // Prompt user to select a wallet to link
+    // Prompt user to select a wallet to edit
     let keyboard = unlinkedWallets.map((wallet, index) => [
-      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `link_bank_wallet_${index}`)
+      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `edit_bank_wallet_${index}`)
     ]);
-    await ctx.reply('🔧 *Select the wallet you want to link your bank account to:*', Markup.inlineKeyboard(keyboard));
+    await ctx.reply('✏️ *Select the wallet whose bank account you want to edit:*', Markup.inlineKeyboard(keyboard));
   } catch (error) {
     logger.error(`Error initiating bank details edit for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
@@ -2144,67 +2010,41 @@ bot.action('settings_generate_receipt', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// =================== View Wallets and Co Handlers ===================
-// Ensured above in '💼 View Wallet' handler
-
-// =================== Rating Handlers ===================
-const feedbackOptions = Markup.inlineKeyboard([
-  [Markup.button.callback('💬 Give Feedback', 'give_feedback')],
-  [Markup.button.callback('❌ Leave', 'leave_feedback')],
-]);
-
-// Handle rating selections (1-5 stars) with vertical inline menu
-bot.action(/rate_(\d+)/, async (ctx) => {
+// =================== Wallet Editing Handler ===================
+bot.action(/edit_bank_wallet_(\d+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
-  const rating = parseInt(ctx.match[1], 10);
-  
-  // Log the rating
-  logger.info(`User ${userId} rated the service with ${rating} star(s).`);
-  
-  // Store rating in Firestore (optional)
+  const walletIndex = parseInt(ctx.match[1], 10);
+
   try {
-    await db.collection('ratings').add({
-      userId: userId,
-      rating: rating,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
-    });
+    const userState = await getUserState(userId);
+    const wallet = userState.wallets[walletIndex];
+    if (!wallet || !wallet.bank) {
+      await ctx.replyWithMarkdown('⚠️ Selected wallet does not exist or has no linked bank account.');
+      return ctx.answerCbQuery();
+    }
+
+    // Prompt user to enter PIN
+    await ctx.reply('🔒 Please enter your 4-digit PIN to edit your bank details:');
+    await ctx.scene.enter('enter_pin_scene', { walletIndex });
+    ctx.answerCbQuery();
   } catch (error) {
-    logger.error(`Error storing rating for user ${userId}: ${error.message}`);
+    logger.error(`Error initiating bank edit for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    ctx.answerCbQuery();
   }
-  
-  // Delete the rating message
-  try {
-    await ctx.deleteMessage();
-  } catch (error) {
-    logger.error(`Error deleting rating message for user ${userId}: ${error.message}`);
-  }
-  
-  // Thank the user
-  await ctx.reply('🙏 Thank you for your rating!');
-  
-  // Ask if they want to provide additional feedback
-  await ctx.reply('Would you like to provide additional feedback?', feedbackOptions);
-  
-  // Acknowledge the callback to remove the loading state
-  await ctx.answerCbQuery();
 });
 
-// Handle 'Give Feedback' button
-bot.action('give_feedback', async (ctx) => {
-  await ctx.scene.enter('feedback_scene'); // Enter the feedback collection scene
-  await ctx.answerCbQuery();
-});
-
-// Handle 'Leave' button
-bot.action('leave_feedback', async (ctx) => {
-  await ctx.reply('Thank you for using DirectPay! If you have any suggestions or need assistance, feel free to reach out.');
-  await ctx.answerCbQuery();
-});
-
-// =================== Send Message Scene Handlers ===================
-sendMessageScene.on('message', async (ctx) => {
-  // Implementation handled within the sendMessageScene definition
-});
+// =================== PIN Input Keyboard ===================
+/**
+ * Generates the PIN Input Inline Keyboard (0-9 arranged in a grid)
+ * @returns {Markup} - Inline Keyboard Markup
+ */
+const getPinKeyboard = () => Markup.inlineKeyboard([
+  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
+  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
+  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
+  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
+]);
 
 // =================== PIN Scene Handlers ===================
 
@@ -2315,18 +2155,24 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     // Prompt user to set a PIN if not already set
     if (!userState.pin) {
       await ctx.reply('🔒 To enhance security, please set a 4-digit PIN using the "⚙️ Settings" menu.');
+      await ctx.scene.enter('create_pin_scene');
+    } else {
+      // If PIN already set, show wallet details and refresh main menu
+      const wallet = userState.wallets[walletIndex];
+      const walletDetails = `💼 *Wallet Details:*\n\n` +
+        `• *Chain:* ${wallet.chain}\n` +
+        `• *Address:* \`${wallet.address}\`\n` +
+        `• *Bank Linked:* ✅ Yes`;
+
+      await ctx.replyWithMarkdown(walletDetails);
+
+      // Refresh the main menu to replace "Link Bank Account" with "Settings"
+      const walletExists = userState.wallets.length > 0;
+      const hasBankLinked = userState.wallets.some(w => w.bank);
+
+      await ctx.reply('🔄 *Main Menu Updated:*', getMainMenu(walletExists, hasBankLinked));
+      ctx.scene.leave();
     }
-
-    // **Refresh the Main Menu**
-    // Fetch updated user state
-    const updatedUserState = await getUserState(userId);
-    const walletExists = updatedUserState.wallets.length > 0;
-    const hasBankLinked = updatedUserState.wallets.some(wallet => wallet.bank);
-
-    // Send the updated main menu
-    await ctx.reply('🔄 *Main Menu Updated:*', getMainMenu(walletExists, hasBankLinked));
-
-    ctx.scene.leave();
   } catch (error) {
     logger.error(`Error storing bank details for user ${userId}: ${error.message}`);
     await ctx.reply('⚠️ An error occurred while linking your bank account. Please try again later.');
@@ -2351,7 +2197,7 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
 
 // =================== Edit Bank Details Scene Handlers ===================
 
-// Handle confirmation for editing bank details
+// Confirmation for editing bank details
 editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const walletIndex = ctx.session.editBankData.walletIndex;
@@ -2415,33 +2261,4 @@ editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   await ctx.reply('❌ Bank editing process has been canceled.');
   ctx.scene.leave();
   await ctx.answerCbQuery();
-});
-
-
-// =================== Current Rates Handler ===================
-bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
-  let ratesMessage = '*📈 Current Exchange Rates:*\n\n';
-  for (const [asset, rate] of Object.entries(exchangeRates)) {
-    ratesMessage += `• *${asset}*: ₦${rate}\n`;
-  }
-  ratesMessage += `\n*These rates are updated every 5 minutes.*`;
-  await ctx.replyWithMarkdown(ratesMessage);
-});
-
-// =================== Start Bot ===================
-bot.launch().then(() => {
-  logger.info('Bot started successfully.');
-}).catch(error => {
-  logger.error(`Error launching bot: ${error.message}`);
-  process.exit(1);
-});
-
-// Enable graceful stop
-process.once('SIGINT', () => {
-  bot.stop('SIGINT');
-  process.exit(0);
-});
-process.once('SIGTERM', () => {
-  bot.stop('SIGTERM');
-  process.exit(0);
 });
