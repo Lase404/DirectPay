@@ -420,23 +420,44 @@ function generateReceipt(txData) {
 // Define bankLinkingScene first to avoid ReferenceError
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
-  // Step 1: Enter Bank Name
+  // Step 1: Select Wallet to Link (if multiple unlinked wallets)
   async (ctx) => {
     const userId = ctx.from.id.toString();
-    const walletIndex = ctx.session.walletIndex;
+    const userState = await getUserState(userId);
+    const unlinkedWallets = userState.wallets
+      .map((wallet, index) => ({ wallet, index }))
+      .filter(w => !w.wallet.bank);
 
-    if (walletIndex === undefined || walletIndex === null) {
-      await ctx.replyWithMarkdown('⚠️ No wallet selected for linking. Please generate a wallet first.');
+    if (unlinkedWallets.length === 0) {
+      await ctx.replyWithMarkdown('✅ *All your wallets have linked bank accounts.*');
       return ctx.scene.leave();
     }
 
-    ctx.session.bankData = {};
-    ctx.session.bankData.step = 1;
-    await ctx.replyWithMarkdown('🏦 Please enter your bank name (e.g., Access Bank):');
+    if (unlinkedWallets.length === 1) {
+      ctx.session.bankLinkingWalletIndex = unlinkedWallets[0].index;
+      await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${unlinkedWallets[0].index + 1} (${unlinkedWallets[0].wallet.chain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
+      return ctx.wizard.next();
+    }
+
+    // If multiple unlinked wallets, ask user to select one
+    const walletButtons = unlinkedWallets.map(w => [
+      Markup.button.callback(`Wallet ${w.index + 1} - ${w.wallet.chain}`, `select_wallet_${w.index}`)
+    ]);
+
+    await ctx.replyWithMarkdown('🏦 *You have multiple unlinked wallets.*\n\nPlease select a wallet to link your bank account:', Markup.inlineKeyboard(walletButtons));
     return ctx.wizard.next();
   },
-  // Step 2: Enter Account Number
+  // Step 2: Enter Bank Name
   async (ctx) => {
+    if (ctx.session.bankLinkingWalletIndex === undefined) {
+      // User selected a wallet
+      const selectedWalletIndex = parseInt(ctx.match[1], 10);
+      ctx.session.bankLinkingWalletIndex = selectedWalletIndex;
+      await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${selectedWalletIndex + 1} (${ctx.session.selectedChain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
+      return ctx.wizard.next();
+    }
+
+    // User entering bank name
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
     logger.info(`User ${userId} entered bank name: ${input}`);
@@ -449,14 +470,15 @@ const bankLinkingScene = new Scenes.WizardScene(
       return; // Stay on the same step
     }
 
-    ctx.session.bankData.bankName = bank.name;
-    ctx.session.bankData.bankCode = bank.code;
-    ctx.session.bankData.step = 2;
+    ctx.session.bankData = {
+      bankName: bank.name,
+      bankCode: bank.code,
+    };
 
     await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
     return ctx.wizard.next();
   },
-  // Step 3: Verify Account Number
+  // Step 3: Enter Account Number
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
@@ -468,7 +490,6 @@ const bankLinkingScene = new Scenes.WizardScene(
     }
 
     ctx.session.bankData.accountNumber = input;
-    ctx.session.bankData.step = 3;
 
     // Verify Bank Account
     await ctx.replyWithMarkdown('🔄 Verifying your bank details...');
@@ -487,7 +508,6 @@ const bankLinkingScene = new Scenes.WizardScene(
       }
 
       ctx.session.bankData.accountName = accountName;
-      ctx.session.bankData.step = 4;
 
       // Ask for Confirmation
       await ctx.replyWithMarkdown(
@@ -517,7 +537,7 @@ const bankLinkingScene = new Scenes.WizardScene(
   }
 );
 
-// Define createPinScene
+// =================== Create PIN Scene ===================
 const createPinScene = new Scenes.WizardScene(
   'create_pin_scene',
   // Step 1: Enter PIN
@@ -572,7 +592,7 @@ const createPinScene = new Scenes.WizardScene(
   }
 );
 
-// Define enterPinScene
+// =================== Enter PIN Scene ===================
 const enterPinScene = new Scenes.WizardScene(
   'enter_pin_scene',
   // Step 1: Enter PIN
@@ -621,7 +641,7 @@ const enterPinScene = new Scenes.WizardScene(
   }
 );
 
-// Define edit_bank_details_scene
+// =================== Edit Bank Details Scene ===================
 const editBankDetailsScene = new Scenes.WizardScene(
   'edit_bank_details_scene',
   // Step 1: Enter New Bank Name
@@ -637,6 +657,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
+
     logger.info(`User ${userId} entered new bank name: ${input}`);
 
     const bankNameInput = input.toLowerCase();
@@ -654,10 +675,11 @@ const editBankDetailsScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown('🔢 Please enter your new 10-digit bank account number:');
     return ctx.wizard.next();
   },
-  // Step 3: Verify New Account Number
+  // Step 3: Enter New Account Number
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
+
     logger.info(`User ${userId} entered new account number: ${input}`);
 
     if (!/^\d{10}$/.test(input)) {
@@ -666,7 +688,6 @@ const editBankDetailsScene = new Scenes.WizardScene(
     }
 
     ctx.session.editBankData.newAccountNumber = input;
-    ctx.session.editBankData.step = 3;
 
     // Verify Bank Account
     await ctx.replyWithMarkdown('🔄 Verifying your new bank details...');
@@ -685,7 +706,6 @@ const editBankDetailsScene = new Scenes.WizardScene(
       }
 
       ctx.session.editBankData.newAccountName = accountName;
-      ctx.session.editBankData.step = 4;
 
       // Ask for Confirmation
       await ctx.replyWithMarkdown(
@@ -715,7 +735,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
   }
 );
 
-// Define sendMessageScene
+// =================== Send Message Scene ===================
 const sendMessageScene = new Scenes.WizardScene(
   'send_message_scene',
   // Step 1: Ask for User ID
@@ -756,7 +776,7 @@ const sendMessageScene = new Scenes.WizardScene(
   }
 );
 
-// Define receiptGenerationScene
+// =================== Receipt Generation Scene ===================
 const receiptGenerationScene = new Scenes.WizardScene(
   'receipt_generation_scene',
   // Step 1: Ask for Reference ID
@@ -789,7 +809,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
-// Define feedbackScene
+// =================== Feedback Scene ===================
 const feedbackScene = new Scenes.WizardScene(
   'feedback_scene',
   // Step 1: Ask for Feedback
@@ -1220,6 +1240,14 @@ const getSettingsMenu = () =>
     [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
   ]);
 
+// =================== Check if User is Admin ===================
+/**
+ * Checks if a user is an admin based on their user ID.
+ * @param {string} userId - Telegram user ID.
+ * @returns {boolean} - Whether the user is an admin.
+ */
+const isAdmin = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
+
 // =================== Rating Handlers ===================
 // Define the feedback options after rating
 const feedbackOptions = Markup.inlineKeyboard([
@@ -1281,8 +1309,6 @@ sendMessageScene.on('message', async (ctx) => {
 });
 
 // =================== Edit Bank Details Scene ===================
-// Define the edit_bank_details_scene after enterPinScene
-
 /**
  * =================== Bank Editing Handler ===================
  */
@@ -1290,15 +1316,17 @@ bot.action('settings_edit_bank', async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
     const userState = await getUserState(userId);
-    if (userState.wallets.length === 0) {
-      return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first.');
+    const unlinkedWallets = userState.wallets.filter(wallet => !wallet.bank);
+
+    if (unlinkedWallets.length === 0) {
+      return ctx.replyWithMarkdown('✅ *All your wallets have linked bank accounts.*');
     }
 
-    // Prompt user to select a wallet to edit
-    let keyboard = userState.wallets.map((wallet, index) => [
-      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `edit_bank_wallet_${index}`)
+    // Prompt user to select a wallet to link
+    let keyboard = unlinkedWallets.map((wallet, index) => [
+      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `link_bank_wallet_${index}`)
     ]);
-    await ctx.reply('🔧 Select the wallet whose bank details you want to edit:', Markup.inlineKeyboard(keyboard));
+    await ctx.reply('🔧 *Select the wallet you want to link your bank account to:*', Markup.inlineKeyboard(keyboard));
   } catch (error) {
     logger.error(`Error initiating bank details edit for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
@@ -1306,7 +1334,7 @@ bot.action('settings_edit_bank', async (ctx) => {
 });
 
 // Handle Wallet Selection for Bank Edit
-bot.action(/edit_bank_wallet_(\d+)/, async (ctx) => {
+bot.action(/link_bank_wallet_(\d+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
   const walletIndex = parseInt(ctx.match[1], 10);
 
@@ -1456,7 +1484,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `Hello ${accountName},\n\n` +
               `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
               `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
-              `*Cash amount:* NGN ${payout}\n` +
+              `*Cash amount:* ₦${payout}\n` +
               `*Network:* ${txData.chain}\n` +
               `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
               `Thank you for using *DirectPay*!`,
@@ -1497,7 +1525,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
           message += `*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
         });
 
-        // Back to main menu
+        // Add a 'Back' button to return to the admin menu
         const inlineKeyboard = Markup.inlineKeyboard([
           [Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]
         ]);
@@ -1520,10 +1548,11 @@ bot.action(/admin_(.+)/, async (ctx) => {
           return ctx.answerCbQuery();
         }
 
-        await ctx.reply('📢 Please enter the message you want to broadcast to all users. You can also attach an image (receipt) with your message:');
-        // Implement a separate scene or handler if needed
-        // For simplicity, this example does not implement it
-        await ctx.answerCbQuery();
+        // Initiate a separate broadcast scene or handle directly
+        // For simplicity, using the sendMessageScene to handle individual admin messages
+        await ctx.reply('📢 Please enter the message you want to broadcast to all users:');
+        await ctx.scene.enter('send_broadcast_message_scene'); // Implement this scene if needed
+        ctx.answerCbQuery();
       } catch (error) {
         logger.error(`Error initiating broadcast message: ${error.message}`);
         await ctx.replyWithMarkdown('⚠️ An error occurred while initiating the broadcast. Please try again later.');
@@ -1712,8 +1741,6 @@ bot.action('exit_base', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// =================== Learn About Base Handler ===================
-
 // =================== Support Handlers ===================
 bot.hears(/ℹ️\s*Support/i, async (ctx) => {
   await ctx.replyWithMarkdown('🛠️ *Support Section*\n\nSelect an option below:', Markup.inlineKeyboard([
@@ -1810,8 +1837,8 @@ bot.action(/transaction_page_(\d+)/, async (ctx) => {
   const requestedPage = parseInt(ctx.match[1], 10);
 
   try {
-    const pageSize = 5;
     const userState = await getUserState(userId);
+    const pageSize = 5;
     const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
 
     if (requestedPage < 1 || requestedPage > totalPages) {
@@ -1886,20 +1913,26 @@ bot.action('settings_back_main', async (ctx) => {
 bot.action('settings_generate_wallet', async (ctx) => {
   await ctx.scene.leave();
   await ctx.reply('💼 Generating a new wallet...');
-  await ctx.scene.enter('generate_wallet_scene'); // Implement if needed
+  await ctx.scene.enter('bank_linking_scene'); // Directly entering bank linking after wallet generation
   ctx.answerCbQuery();
 });
 
-// =================== Support Scene ===================
+// =================== Admin Panel ===================
+
 // Already handled above
 
 // =================== Admin Panel ===================
+
+// =================== Support Handlers ===================
+
 // Already handled above
 
 // =================== Transactions Handler ===================
+
 // Already handled above
 
 // =================== Learn About Base Handler ===================
+
 // Already handled above
 
 // =================== Current Rates Handler ===================
@@ -1913,7 +1946,7 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
 });
 
 // =================== Feedback Scene ===================
-// Already defined above
+// Already handled above
 
 // =================== Additional Helper Functions ===================
 /**
@@ -2247,8 +2280,8 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
           PERSONAL_CHAT_ID, 
           `🔄 *Payment Order Pending*\n\n` +
           `*User:* ${userFirstName} (ID: ${userId})\n` +
-          `*Reference ID:* ${referenceId}}\n` +
-          `*Amount Paid:* ${amountPaid} ${txData.asset}\n`, 
+          `*Reference ID:* ${reference}\n` +
+          `*Amount Paid:* ₦${amountPaid}\n`, 
           { parse_mode: 'Markdown' }
         );
         break;
@@ -2265,7 +2298,7 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
           `• *Cash Amount:* ₦${amountEarnedNaira}\n` +
           `• *Network:* ${txData.chain}\n` +
           `• *Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
-          `Thank you 💙.`,
+          `Thank you for using *DirectPay*!`,
           { parse_mode: 'Markdown' }
         );
 
@@ -2342,6 +2375,7 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
           `• *Refund Amount:* ₦${txData.amount || 'N/A'}\n` +
           `• *Date:* ${new Date(txData.timestamp).toLocaleString()}\n` +
           `• *Transaction Hash:* \`${txHash}\`\n` +
+          `• *Explorer Link:* (${getExplorerLink(txData.chain, txHash)})\n\n` +
           `If you believe this is a mistake or need further assistance, please don't hesitate to contact our support team.\n\n` +
           `Thank you for your understanding.`,
           { parse_mode: 'Markdown' }
@@ -2396,13 +2430,9 @@ app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
   bot.handleUpdate(req.body, res);
 });
 
-
-const getPinKeyboard = () => Markup.inlineKeyboard([
-  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
-  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
-  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
-  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
-]);
+// =================== Broadcast Message Handler ===================
+// You can implement a separate scene for broadcasting messages if needed.
+// For simplicity, this example uses the sendMessageScene to handle individual admin messages.
 
 // =================== Start Express Server ===================
 app.listen(PORT, () => {
@@ -2412,3 +2442,129 @@ app.listen(PORT, () => {
 // =================== Shutdown Handlers ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+
+// =================== PIN Keyboard ===================
+/**
+ * Generates the PIN Input Inline Keyboard (0-9 arranged in a grid)
+ * @returns {Markup} - Inline Keyboard Markup
+ */
+const getPinKeyboard = () => Markup.inlineKeyboard([
+  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
+  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
+  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
+  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
+]);
+
+// =================== PIN Scene Handlers ===================
+
+// =================== Create PIN Scene Handlers ===================
+createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
+  const digit = ctx.match[1];
+  ctx.session.pinDigits.push(digit);
+  await ctx.answerCbQuery();
+  
+  // Check if 4 digits have been entered
+  if (ctx.session.pinDigits.length === 4) {
+    await ctx.wizard.next(); // Move to confirmation step
+    await ctx.scene.step(1); // Trigger the next step
+  }
+});
+
+createPinScene.action('pin_cancel', async (ctx) => {
+  await ctx.reply('❌ PIN creation has been canceled.');
+  ctx.session.pinDigits = [];
+  ctx.session.tempPin = null;
+  ctx.scene.leave();
+  await ctx.answerCbQuery();
+});
+
+// =================== Enter PIN Scene Handlers ===================
+enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
+  const digit = ctx.match[1];
+  ctx.session.enterPinDigits.push(digit);
+  await ctx.answerCbQuery();
+  
+  // Check if 4 digits have been entered
+  if (ctx.session.enterPinDigits.length === 4) {
+    await ctx.wizard.next(); // Move to verification step
+    await ctx.scene.step(1); // Trigger the next step
+  }
+});
+
+enterPinScene.action('pin_cancel', async (ctx) => {
+  await ctx.reply('❌ PIN entry has been canceled.');
+  ctx.session.enterPinDigits = [];
+  ctx.scene.leave();
+  await ctx.answerCbQuery();
+});
+
+// =================== Bank Linking Scene Handlers ===================
+
+// Handle selecting a wallet to link bank account
+bot.action(/select_wallet_(\d+)/, async (ctx) => {
+  const walletIndex = parseInt(ctx.match[1], 10);
+  ctx.session.bankLinkingWalletIndex = walletIndex;
+  await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${walletIndex + 1} (${ctx.session.bankData.chain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
+  await ctx.scene.step(1); // Move to next step in the scene
+  ctx.answerCbQuery();
+});
+
+// Handle confirmation in bankLinkingScene
+bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = ctx.session.bankLinkingWalletIndex;
+  const bankData = ctx.session.bankData;
+
+  if (walletIndex === undefined || walletIndex === null) {
+    await ctx.reply('❌ No wallet selected for linking. Please try again.');
+    ctx.scene.leave();
+    return;
+  }
+
+  // Update the wallet with bank details
+  const userState = await getUserState(userId);
+  if (!userState.wallets[walletIndex]) {
+    await ctx.reply('❌ Selected wallet does not exist.');
+    ctx.scene.leave();
+    return;
+  }
+
+  userState.wallets[walletIndex].bank = {
+    bankName: bankData.bankName,
+    bankCode: bankData.bankCode,
+    accountNumber: bankData.accountNumber,
+    accountName: bankData.accountName,
+  };
+
+  // Update user state in Firestore
+  try {
+    await updateUserState(userId, {
+      wallets: userState.wallets,
+    });
+    await ctx.reply('✅ *Bank account linked successfully!*');
+    
+    // Prompt user to set a PIN if not already set
+    if (!userState.pin) {
+      await ctx.reply('🔒 To enhance security, please set a 4-digit PIN using the "⚙️ Settings" menu.');
+    }
+
+    ctx.scene.leave();
+  } catch (error) {
+    logger.error(`Error storing bank details for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while linking your bank account. Please try again later.');
+    ctx.scene.leave();
+  }
+});
+
+bankLinkingScene.action('confirm_bank_no', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  await ctx.reply('❌ *Bank account details have not been saved.* You can restart the linking process using "🏦 Link Bank Account" in the main menu.');
+  ctx.scene.leave();
+  await ctx.answerCbQuery();
+});
+
+bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
+  await ctx.reply('❌ Bank linking process has been canceled.');
+  ctx.scene.leave();
+  await ctx.answerCbQuery();
+});
