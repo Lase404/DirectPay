@@ -2247,8 +2247,8 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
           PERSONAL_CHAT_ID, 
           `🔄 *Payment Order Pending*\n\n` +
           `*User:* ${userFirstName} (ID: ${userId})\n` +
-          `*Reference ID:* ${reference}\n` +
-          `*Amount Paid:* ₦${amountPaid}\n`, 
+          `*Reference ID:* ${referenceId}}\n` +
+          `*Amount Paid:* ${amountPaid} ${txData.asset}\n`, 
           { parse_mode: 'Markdown' }
         );
         break;
@@ -2342,7 +2342,6 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
           `• *Refund Amount:* ₦${txData.amount || 'N/A'}\n` +
           `• *Date:* ${new Date(txData.timestamp).toLocaleString()}\n` +
           `• *Transaction Hash:* \`${txHash}\`\n` +
-          `• *Explorer Link:* (${getExplorerLink(txData.chain, txHash)})\n\n` +
           `If you believe this is a mistake or need further assistance, please don't hesitate to contact our support team.\n\n` +
           `Thank you for your understanding.`,
           { parse_mode: 'Markdown' }
