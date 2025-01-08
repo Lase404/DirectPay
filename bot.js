@@ -1461,52 +1461,6 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
-// =================== Broadcast Message Scene ===================
-const broadcastMessageScene = new Scenes.WizardScene(
-  'broadcast_message_scene',
-  // Step 1: Ask for Message Content
-  async (ctx) => {
-    await ctx.reply('📢 *Broadcast Message*\n\nPlease enter the message you want to broadcast to all users:');
-    return ctx.wizard.next();
-  },
-  // Step 2: Confirm and Send Broadcast
-  async (ctx) => {
-    const broadcastMessage = ctx.message.text.trim();
-    const userId = ctx.from.id.toString();
-
-    try {
-      const usersSnapshot = await db.collection('users').get();
-      if (usersSnapshot.empty) {
-        await ctx.replyWithMarkdown('⚠️ No users found to send the broadcast.');
-        return ctx.scene.leave();
-      }
-
-      let successCount = 0;
-      let failureCount = 0;
-
-      for (const doc of usersSnapshot.docs) {
-        const user = doc.data();
-        try {
-          await bot.telegram.sendMessage(doc.id, broadcastMessage, { parse_mode: 'Markdown' });
-          successCount++;
-        } catch (error) {
-          logger.error(`Error sending broadcast to user ${doc.id}: ${error.message}`);
-          failureCount++;
-        }
-      }
-
-      await ctx.replyWithMarkdown(`📢 *Broadcast Sent!*\n\n✅ Successful: ${successCount}\n❌ Failed: ${failureCount}`);
-    } catch (error) {
-      logger.error(`Error during broadcast: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast. Please try again later.');
-    }
-
-    ctx.scene.leave();
-  }
-);
-
-// =================== Register Broadcast Scene ===================
-stage.register(broadcastMessageScene);
 
 // =================== Receipt Generation Scene Continued ===================
 // Already handled above
