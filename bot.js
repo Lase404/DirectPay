@@ -447,11 +447,11 @@ const bankLinkingScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown('🏦 *You have multiple unlinked wallets.*\n\nPlease select a wallet to link your bank account:', Markup.inlineKeyboard(walletButtons));
     return ctx.wizard.next();
   },
-  // Step 2: Enter Bank Name
+  // Step 2: Enter Bank Name or Handle Wallet Selection
   async (ctx) => {
     // Check if user selected a wallet
     if (ctx.session.bankLinkingWalletIndex === undefined) {
-      // User selected a wallet
+      // User selected a wallet via callback
       const selectedWalletIndex = parseInt(ctx.match[1], 10);
       ctx.session.bankLinkingWalletIndex = selectedWalletIndex;
       await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${selectedWalletIndex + 1} (${ctx.session.selectedChain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
@@ -654,7 +654,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown('🏦 *Edit Bank Account*\n\nPlease enter your new bank name (e.g., Access Bank):');
     return ctx.wizard.next();
   },
-  // Step 2: Enter New Account Number
+  // Step 2: Enter New Bank Name
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
@@ -847,7 +847,8 @@ stage.register(
   bankLinkingScene, 
   sendMessageScene, 
   receiptGenerationScene, 
-  feedbackScene // Register the feedback scene
+  feedbackScene,
+  // Add other scenes here as needed
 );
 bot.use(session());
 bot.use(stage.middleware());
@@ -1044,7 +1045,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
       chain: chain || 'N/A',
       supportedAssets: chains[chain].supportedAssets ? [...chains[chain].supportedAssets] : [],
       bank: null,
-      amount: 0 // Initialize amount if needed
+      transactions: [], // Initialize transactions array
     });
 
     // Also, Add the Wallet Address to walletAddresses Array
@@ -1228,6 +1229,7 @@ const getSettingsMenu = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('🔄 Generate New Wallet', 'settings_generate_wallet')],
     [Markup.button.callback('✏️ Edit Linked Bank Details', 'settings_edit_bank')],
+    [Markup.button.callback('🔐 Set PIN', 'settings_set_pin')], // Added Set PIN button
     [Markup.button.callback('💬 Support', 'settings_support')],
     [Markup.button.callback('🧾 Generate Transaction Receipt', 'settings_generate_receipt')],
     [Markup.button.callback('🔙 Back to Main Menu', 'settings_back_main')],
@@ -1433,10 +1435,8 @@ bot.action(/admin_(.+)/, async (ctx) => {
           return ctx.answerCbQuery();
         }
 
-        // Initiate a separate broadcast scene or handle directly
-        // For simplicity, using the sendMessageScene to handle individual admin messages
-        await ctx.reply('📢 Please enter the message you want to broadcast to all users:');
-        await ctx.scene.enter('broadcast_message_scene'); // Implement this scene if needed
+        // Initiate broadcast message scene
+        await ctx.scene.enter('broadcast_message_scene');
         ctx.answerCbQuery();
       } catch (error) {
         logger.error(`Error initiating broadcast message: ${error.message}`);
@@ -1461,12 +1461,52 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
+// =================== Broadcast Message Scene ===================
+const broadcastMessageScene = new Scenes.WizardScene(
+  'broadcast_message_scene',
+  // Step 1: Ask for Message Content
+  async (ctx) => {
+    await ctx.reply('📢 *Broadcast Message*\n\nPlease enter the message you want to broadcast to all users:');
+    return ctx.wizard.next();
+  },
+  // Step 2: Confirm and Send Broadcast
+  async (ctx) => {
+    const broadcastMessage = ctx.message.text.trim();
+    const userId = ctx.from.id.toString();
 
-// =================== Receipt Generation Scene Continued ===================
-// Already handled above
+    try {
+      const usersSnapshot = await db.collection('users').get();
+      if (usersSnapshot.empty) {
+        await ctx.replyWithMarkdown('⚠️ No users found to send the broadcast.');
+        return ctx.scene.leave();
+      }
 
-// =================== Feedback Scene Handlers ===================
-// Already handled above
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const doc of usersSnapshot.docs) {
+        const user = doc.data();
+        try {
+          await bot.telegram.sendMessage(doc.id, broadcastMessage, { parse_mode: 'Markdown' });
+          successCount++;
+        } catch (error) {
+          logger.error(`Error sending broadcast to user ${doc.id}: ${error.message}`);
+          failureCount++;
+        }
+      }
+
+      await ctx.replyWithMarkdown(`📢 *Broadcast Sent!*\n\n✅ Successful: ${successCount}\n❌ Failed: ${failureCount}`);
+    } catch (error) {
+      logger.error(`Error during broadcast: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast. Please try again later.');
+    }
+
+    ctx.scene.leave();
+  }
+);
+
+// =================== Register Broadcast Scene ===================
+stage.register(broadcastMessageScene);
 
 // =================== PIN Keyboard ===================
 /**
@@ -1625,7 +1665,7 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
 
 // =================== Edit Bank Details Scene Handlers ===================
 
-// Confirmation for editing bank details
+// Handle confirmation for editing bank details
 editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const walletIndex = ctx.session.editBankData.walletIndex;
@@ -1691,17 +1731,15 @@ editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// =================== Admin Panel Continued ===================
-
-// =================== Broadcast Message Scene Handlers ===================
-
-// Already defined above
-
-// =================== Admin Panel Handlers ===================
+// =================== Admin Panel ===================
 
 // Already handled above
 
-// =================== Support Handlers ===================
+// =================== Broadcast Message Scene Handlers ===================
+
+// Already handled above
+
+// =================== Learn About Base Handler ===================
 
 const detailedTutorials = {
   how_it_works: `
@@ -2379,60 +2417,6 @@ editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// =================== Admin Panel ===================
-
-// Already handled above
-
-// =================== Broadcast Message Scene ===================
-const broadcastMessageScene = new Scenes.WizardScene(
-  'broadcast_message_scene',
-  // Step 1: Ask for Message Content
-  async (ctx) => {
-    await ctx.reply('📢 *Broadcast Message*\n\nPlease enter the message you want to broadcast to all users:');
-    return ctx.wizard.next();
-  },
-  // Step 2: Confirm and Send Broadcast
-  async (ctx) => {
-    const broadcastMessage = ctx.message.text.trim();
-    const userId = ctx.from.id.toString();
-
-    try {
-      const usersSnapshot = await db.collection('users').get();
-      if (usersSnapshot.empty) {
-        await ctx.replyWithMarkdown('⚠️ No users found to send the broadcast.');
-        return ctx.scene.leave();
-      }
-
-      let successCount = 0;
-      let failureCount = 0;
-
-      for (const doc of usersSnapshot.docs) {
-        const user = doc.data();
-        try {
-          await bot.telegram.sendMessage(doc.id, broadcastMessage, { parse_mode: 'Markdown' });
-          successCount++;
-        } catch (error) {
-          logger.error(`Error sending broadcast to user ${doc.id}: ${error.message}`);
-          failureCount++;
-        }
-      }
-
-      await ctx.replyWithMarkdown(`📢 *Broadcast Sent!*\n\n✅ Successful: ${successCount}\n❌ Failed: ${failureCount}`);
-    } catch (error) {
-      logger.error(`Error during broadcast: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast. Please try again later.');
-    }
-
-    ctx.scene.leave();
-  }
-);
-
-// =================== Register Broadcast Scene ===================
-stage.register(broadcastMessageScene);
-
-// =================== Learn About Base Handler ===================
-
-// Already handled above
 
 // =================== Current Rates Handler ===================
 bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
@@ -2442,4 +2426,22 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   }
   ratesMessage += `\n*These rates are updated every 5 minutes.*`;
   await ctx.replyWithMarkdown(ratesMessage);
+});
+
+// =================== Start Bot ===================
+bot.launch().then(() => {
+  logger.info('Bot started successfully.');
+}).catch(error => {
+  logger.error(`Error launching bot: ${error.message}`);
+  process.exit(1);
+});
+
+// Enable graceful stop
+process.once('SIGINT', () => {
+  bot.stop('SIGINT');
+  process.exit(0);
+});
+process.once('SIGTERM', () => {
+  bot.stop('SIGTERM');
+  process.exit(0);
 });
