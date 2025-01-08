@@ -1,7 +1,7 @@
 // =================== Import Dependencies ===================
 const express = require('express');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
-const admin = require('firebase-admin');
+const admin = require('firebase-admin');is
 const axios = require('axios');
 const crypto = require('crypto');
 const path = require('path');
@@ -924,14 +924,6 @@ const getMainMenu = (walletExists, hasBankLinked) =>
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
     ['📈 View Current Rates'], // Added Refresh Rates Button
   ]).resize();
-
-// =================== Check if User is Admin ===================
-/**
- * Checks if a user is an admin based on their user ID.
- * @param {string} userId - Telegram user ID.
- * @returns {boolean} - Whether the user is an admin.
- */
-const isAdmin = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
 
 // =================== /start Command ===================
 bot.start(async (ctx) => {
