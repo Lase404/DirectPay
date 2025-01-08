@@ -1,7 +1,7 @@
 // =================== Import Dependencies ===================
 const express = require('express');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
-const admin = require('firebase-admin');is
+const admin = require('firebase-admin');
 const axios = require('axios');
 const crypto = require('crypto');
 const path = require('path');
