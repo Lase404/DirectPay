@@ -976,6 +976,39 @@ stage.register(
 bot.use(session());
 bot.use(stage.middleware());
 
+// =================== Receipt Generation Scene ===================
+const receiptGenerationScene = new Scenes.WizardScene(
+  'receipt_generation_scene',
+  // Step 1: Ask for Reference ID
+  async (ctx) => {
+    await ctx.reply('🧾 *Generate Transaction Receipt*\n\nPlease enter the Reference ID of the transaction:');
+    return ctx.wizard.next();
+  },
+  // Step 2: Fetch and Send Receipt
+  async (ctx) => {
+    const referenceId = ctx.message.text.trim();
+    const userId = ctx.from.id.toString();
+
+    try {
+      const txSnapshot = await db.collection('transactions').where('referenceId', '==', referenceId).limit(1).get();
+      if (txSnapshot.empty) {
+        await ctx.replyWithMarkdown('❌ No transaction found with the provided Reference ID.');
+        return ctx.scene.leave();
+      }
+
+      const txData = txSnapshot.docs[0].data();
+      const receipt = generateReceipt(txData);
+
+      await ctx.replyWithMarkdown(receipt);
+    } catch (error) {
+      logger.error(`Error generating receipt for Reference ID ${referenceId}: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while generating the receipt. Please try again later.');
+    }
+
+    ctx.scene.leave();
+  }
+);
+
 // =================== Exchange Rate Fetching ===================
 const SUPPORTED_ASSETS = ['USDC', 'USDT'];
 let exchangeRates = {
@@ -2528,38 +2561,8 @@ app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
 
   bot.handleUpdate(req.body, res);
 });
-// =================== Receipt Generation Scene ===================
-const receiptGenerationScene = new Scenes.WizardScene(
-  'receipt_generation_scene',
-  // Step 1: Ask for Reference ID
-  async (ctx) => {
-    await ctx.reply('🧾 *Generate Transaction Receipt*\n\nPlease enter the Reference ID of the transaction:');
-    return ctx.wizard.next();
-  },
-  // Step 2: Fetch and Send Receipt
-  async (ctx) => {
-    const referenceId = ctx.message.text.trim();
-    const userId = ctx.from.id.toString();
 
-    try {
-      const txSnapshot = await db.collection('transactions').where('referenceId', '==', referenceId).limit(1).get();
-      if (txSnapshot.empty) {
-        await ctx.replyWithMarkdown('❌ No transaction found with the provided Reference ID.');
-        return ctx.scene.leave();
-      }
 
-      const txData = txSnapshot.docs[0].data();
-      const receipt = generateReceipt(txData);
-
-      await ctx.replyWithMarkdown(receipt);
-    } catch (error) {
-      logger.error(`Error generating receipt for Reference ID ${referenceId}: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while generating the receipt. Please try again later.');
-    }
-
-    ctx.scene.leave();
-  }
-);
 
 // =================== Feedback Scene ===================
 // Already defined above
