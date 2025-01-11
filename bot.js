@@ -2528,54 +2528,6 @@ app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
 
   bot.handleUpdate(req.body, res);
 });
-
-// =================== Broadcast Message Scene ===================
-const broadcastMessageScene = new Scenes.WizardScene(
-  'broadcast_message_scene',
-  // Step 1: Enter Broadcast Message
-  async (ctx) => {
-    await ctx.reply('📢 *Broadcast Message*\n\nPlease enter the message you want to send to all users:');
-    return ctx.wizard.next();
-  },
-  // Step 2: Confirm and Send Broadcast
-  async (ctx) => {
-    const messageContent = ctx.message.text.trim();
-    const adminId = ctx.from.id.toString();
-
-    try {
-      const usersSnapshot = await db.collection('users').get();
-      if (usersSnapshot.empty) {
-        await ctx.replyWithMarkdown('⚠️ No users found to send messages.');
-        return ctx.scene.leave();
-      }
-
-      let successCount = 0;
-      let failureCount = 0;
-
-      for (const userDoc of usersSnapshot.docs) {
-        const userId = userDoc.id;
-        try {
-          await bot.telegram.sendMessage(userId, messageContent, { parse_mode: 'Markdown' });
-          successCount++;
-        } catch (error) {
-          logger.error(`Error sending broadcast message to user ${userId}: ${error.message}`);
-          failureCount++;
-        }
-      }
-
-      await ctx.replyWithMarkdown(`✅ Broadcast completed.\n\n*Successful:* ${successCount}\n*Failed:* ${failureCount}`);
-    } catch (error) {
-      logger.error(`Error during broadcast message: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast message. Please try again later.');
-    }
-
-    ctx.scene.leave();
-  }
-);
-
-// Register Broadcast Message Scene
-stage.register(broadcastMessageScene);
-
 // =================== Receipt Generation Scene ===================
 const receiptGenerationScene = new Scenes.WizardScene(
   'receipt_generation_scene',
