@@ -8,7 +8,7 @@ const path = require('path');
 const fs = require('fs');
 const winston = require('winston');
 const bodyParser = require('body-parser');
-const bcrypt = require('bcrypt'); // Added for PIN hashing
+const bcrypt = require('bcrypt'); // For PIN hashing
 require('dotenv').config();
 
 // =================== Logger Setup ===================
@@ -173,6 +173,16 @@ function calculatePayout(asset, amount) {
     throw new Error(`Unsupported asset received: ${asset}`);
   }
   return parseFloat((amount * rate).toFixed(2)); // Return as number
+}
+
+/**
+ * Calculates the amount earned in Naira based on asset and amount.
+ * @param {string} asset - Asset symbol.
+ * @param {number} amount - Amount in asset.
+ * @returns {number} - Amount earned in Naira.
+ */
+function calculateAmountEarnedInNaira(asset, amount) {
+  return calculatePayout(asset, amount);
 }
 
 /**
@@ -417,7 +427,36 @@ function generateReceipt(txData) {
 
 // =================== Define Scenes ===================
 
-// Create PIN Scene
+// =================== Feedback Scene ===================
+const feedbackScene = new Scenes.WizardScene(
+  'feedback_scene',
+  // Step 1: Ask for Feedback
+  async (ctx) => {
+    await ctx.reply('💬 *We Value Your Feedback*\n\nPlease share your thoughts or suggestions to help us improve DirectPay:');
+    return ctx.wizard.next();
+  },
+  // Step 2: Confirm Receipt of Feedback
+  async (ctx) => {
+    const feedback = ctx.message.text.trim();
+    const userId = ctx.from.id.toString();
+
+    try {
+      await db.collection('feedback').add({
+        userId,
+        feedback,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+      await ctx.reply('🙏 Thank you for your feedback!');
+    } catch (error) {
+      logger.error(`Error storing feedback from user ${userId}: ${error.message}`);
+      await ctx.reply('⚠️ An error occurred while saving your feedback. Please try again later.');
+    }
+
+    ctx.scene.leave();
+  }
+);
+
+// =================== Create PIN Scene ===================
 const createPinScene = new Scenes.WizardScene(
   'create_pin_scene',
   // Step 1: Enter PIN
@@ -492,7 +531,7 @@ createPinScene.action('pin_cancel', async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// Enter PIN Scene
+// =================== Enter PIN Scene ===================
 const enterPinScene = new Scenes.WizardScene(
   'enter_pin_scene',
   // Step 1: Enter PIN
@@ -561,7 +600,7 @@ enterPinScene.action('pin_cancel', async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// Bank Linking Scene
+// =================== Bank Linking Scene ===================
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   // Step 1: Select Wallet to Link (if multiple unlinked wallets)
@@ -618,7 +657,7 @@ bot.action(/select_wallet_(\d+)/, async (ctx) => {
     const wallet = userState.wallets[walletIndex];
     if (!wallet) {
       await ctx.replyWithMarkdown('❌ Selected wallet does not exist.');
-      return ctx.answerCbQuery();
+      return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
     }
 
     ctx.session.bankLinkingWalletIndex = walletIndex;
@@ -707,7 +746,7 @@ bankLinkingScene.on('text', async (ctx) => {
   }
 });
 
-// Handle confirmation "Yes, Confirm"
+// Handle confirmation "Yes, Confirm" for bank details
 bot.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const walletIndex = ctx.session.bankLinkingWalletIndex;
@@ -757,7 +796,7 @@ bot.action('confirm_bank_yes', async (ctx) => {
   }
 });
 
-// Handle confirmation "No, Edit Details"
+// Handle confirmation "No, Edit Details" for bank details
 bot.action('confirm_bank_no', async (ctx) => {
   await ctx.reply('🔄 *Let\'s try entering your bank details again.*\n\nPlease enter your bank name (e.g., Access Bank):');
   ctx.session.bankData = {}; // Reset bank data
@@ -768,6 +807,149 @@ bot.action('confirm_bank_no', async (ctx) => {
 // Handle "Cancel Linking"
 bot.action('cancel_bank_linking', async (ctx) => {
   await ctx.reply('❌ *Bank linking has been canceled.*');
+  ctx.scene.leave();
+  ctx.answerCbQuery();
+});
+
+// =================== Edit Bank Details Scene ===================
+const editBankDetailsScene = new Scenes.WizardScene(
+  'edit_bank_details_scene',
+  // Step 1: Enter New Bank Name
+  async (ctx) => {
+    const { walletIndex } = ctx.scene.state;
+    ctx.session.editBankData = {};
+    ctx.session.editBankData.walletIndex = walletIndex;
+    ctx.session.editBankData.step = 1;
+    await ctx.replyWithMarkdown('🏦 *Edit Bank Account*\n\nPlease enter your new bank name (e.g., Access Bank):');
+    return ctx.wizard.next();
+  },
+  // Step 2: Enter New Bank Name
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const input = ctx.message.text.trim();
+
+    logger.info(`User ${userId} entered new bank name: ${input}`);
+
+    const bankNameInput = input.toLowerCase();
+    const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
+
+    if (!bank) {
+      await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list:\n\n' + bankList.map(b => `• ${b.name}`).join('\n'));
+      return; // Stay on the same step
+    }
+
+    ctx.session.editBankData.newBankName = bank.name;
+    ctx.session.editBankData.newBankCode = bank.code;
+    ctx.session.editBankData.step = 2;
+
+    await ctx.replyWithMarkdown('🔢 Please enter your new 10-digit bank account number:');
+    return ctx.wizard.next();
+  },
+  // Step 3: Enter New Account Number
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const input = ctx.message.text.trim();
+
+    logger.info(`User ${userId} entered new account number: ${input}`);
+
+    if (!/^\d{10}$/.test(input)) {
+      await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
+      return; // Stay on the same step
+    }
+
+    ctx.session.editBankData.newAccountNumber = input;
+
+    // Verify Bank Account
+    await ctx.replyWithMarkdown('🔄 Verifying your new bank details...');
+
+    try {
+      const verificationResult = await verifyBankAccount(ctx.session.editBankData.newAccountNumber, ctx.session.editBankData.newBankCode);
+
+      if (!verificationResult || !verificationResult.data) {
+        throw new Error('Invalid verification response.');
+      }
+
+      const accountName = verificationResult.data.account_name;
+
+      if (!accountName) {
+        throw new Error('Unable to retrieve account name.');
+      }
+
+      ctx.session.editBankData.newAccountName = accountName;
+
+      // Ask for Confirmation
+      await ctx.replyWithMarkdown(
+        `🏦 *New Bank Account Verification*\n\n` +
+        `Please confirm your new bank details:\n` +
+        `- *Bank Name:* ${ctx.session.editBankData.newBankName}\n` +
+        `- *Account Number:* ${ctx.session.editBankData.newAccountNumber}\n` +
+        `- *Account Holder:* ${accountName}\n\n` +
+        `Is this information correct?`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Yes, Confirm', 'confirm_new_bank_yes')],
+          [Markup.button.callback('❌ No, Edit Details', 'confirm_new_bank_no')],
+          [Markup.button.callback('❌ Cancel Editing', 'cancel_edit_bank')],
+        ])
+      );
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown('❌ Failed to verify your new bank account. Please ensure your details are correct or try again later.');
+      return ctx.scene.leave();
+    }
+  }
+);
+
+// Handle confirmation "Yes, Confirm" for new bank details
+bot.action('confirm_new_bank_yes', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = ctx.session.editBankData.walletIndex;
+  const newBankData = ctx.session.editBankData;
+
+  try {
+    const userState = await getUserState(userId);
+
+    // Update the selected wallet with new bank details
+    if (!userState.wallets[walletIndex]) {
+      await ctx.reply('❌ Selected wallet does not exist.');
+      ctx.scene.leave();
+      return ctx.answerCbQuery();
+    }
+
+    userState.wallets[walletIndex].bank = {
+      bankName: newBankData.newBankName,
+      bankCode: newBankData.newBankCode,
+      accountNumber: newBankData.newAccountNumber,
+      accountName: newBankData.newAccountName,
+    };
+
+    // Update user state in Firestore
+    await updateUserState(userId, {
+      wallets: userState.wallets,
+    });
+
+    await ctx.reply('✅ *Bank account updated successfully!*');
+    ctx.scene.leave();
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error updating bank details for user ${userId}: ${error.message}`);
+    await ctx.reply('⚠️ An error occurred while updating your bank account. Please try again later.');
+    ctx.scene.leave();
+    ctx.answerCbQuery();
+  }
+});
+
+// Handle confirmation "No, Edit Details" for new bank details
+bot.action('confirm_new_bank_no', async (ctx) => {
+  await ctx.reply('🔄 *Let\'s try entering your new bank details again.*\n\nPlease enter your new bank name (e.g., Access Bank):');
+  ctx.session.editBankData = {}; // Reset bank data
+  ctx.scene.reenter();
+  ctx.answerCbQuery();
+});
+
+// Handle "Cancel Editing"
+bot.action('cancel_edit_bank', async (ctx) => {
+  await ctx.reply('❌ *Bank editing has been canceled.*');
   ctx.scene.leave();
   ctx.answerCbQuery();
 });
@@ -843,6 +1025,70 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
+// =================== Broadcast Message Scene ===================
+const broadcastMessageScene = new Scenes.WizardScene(
+  'broadcast_message_scene',
+  // Step 1: Ask for Broadcast Message
+  async (ctx) => {
+    await ctx.reply('📢 *Broadcast Message*\n\nPlease enter the message you want to send to all users:');
+    return ctx.wizard.next();
+  },
+  // Step 2: Confirm and Send Broadcast
+  async (ctx) => {
+    const message = ctx.message.text.trim();
+    try {
+      const usersSnapshot = await db.collection('users').get();
+      if (usersSnapshot.empty) {
+        await ctx.replyWithMarkdown('⚠️ No users found to send messages.');
+        return ctx.scene.leave();
+      }
+
+      let successCount = 0;
+      let failureCount = 0;
+
+      for (const userDoc of usersSnapshot.docs) {
+        const userId = userDoc.id;
+        try {
+          await bot.telegram.sendMessage(userId, message, { parse_mode: 'Markdown' });
+          successCount++;
+        } catch (error) {
+          logger.error(`Error sending broadcast to user ${userId}: ${error.message}`);
+          failureCount++;
+        }
+      }
+
+      await ctx.replyWithMarkdown(`✅ Broadcast sent successfully!\n\n• *Success:* ${successCount}\n• *Failed:* ${failureCount}`);
+    } catch (error) {
+      logger.error(`Error during broadcast: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast. Please try again later.');
+    }
+
+    ctx.scene.leave();
+  }
+);
+
+// =================== Define Other Scenes (e.g., Feedback) ===================
+// Feedback scene is already defined above
+
+// =================== Register All Scenes with Stage ===================
+const stage = new Scenes.Stage();
+
+// Registering all defined scenes
+stage.register(
+  feedbackScene,
+  createPinScene,
+  enterPinScene,
+  bankLinkingScene,
+  sendMessageScene,
+  receiptGenerationScene,
+  editBankDetailsScene,
+  broadcastMessageScene // Ensure this is defined before registration
+);
+
+// Apply session and stage middleware
+bot.use(session());
+bot.use(stage.middleware());
+
 // =================== Exchange Rate Fetching ===================
 const SUPPORTED_ASSETS = ['USDC', 'USDT'];
 let exchangeRates = {
@@ -915,6 +1161,18 @@ const getMainMenu = (walletExists, hasBankLinked) =>
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
     ['📈 View Current Rates'], // Added Refresh Rates Button
   ]).resize();
+
+// =================== PIN Keyboard ===================
+/**
+ * Generates the PIN Input Inline Keyboard (0-9 arranged in a grid)
+ * @returns {Markup} - Inline Keyboard Markup
+ */
+const getPinKeyboard = () => Markup.inlineKeyboard([
+  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
+  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
+  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
+  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
+]);
 
 // =================== /start Command ===================
 bot.start(async (ctx) => {
@@ -1135,7 +1393,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
     logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred while fetching your wallets. Please try again later.');
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch your wallets. Please try again later.');
   }
 });
 
@@ -1288,198 +1546,6 @@ bot.action('leave_feedback', async (ctx) => {
 });
 
 // =================== Edit Bank Details Scene ===================
-const editBankDetailsScene = new Scenes.WizardScene(
-  'edit_bank_details_scene',
-  // Step 1: Enter New Bank Name
-  async (ctx) => {
-    const { walletIndex } = ctx.scene.state;
-    ctx.session.editBankData = {};
-    ctx.session.editBankData.walletIndex = walletIndex;
-    ctx.session.editBankData.step = 1;
-    await ctx.replyWithMarkdown('🏦 *Edit Bank Account*\n\nPlease enter your new bank name (e.g., Access Bank):');
-    return ctx.wizard.next();
-  },
-  // Step 2: Enter New Bank Name
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const input = ctx.message.text.trim();
-
-    logger.info(`User ${userId} entered new bank name: ${input}`);
-
-    const bankNameInput = input.toLowerCase();
-    const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
-
-    if (!bank) {
-      await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list:\n\n' + bankList.map(b => `• ${b.name}`).join('\n'));
-      return; // Stay on the same step
-    }
-
-    ctx.session.editBankData.newBankName = bank.name;
-    ctx.session.editBankData.newBankCode = bank.code;
-    ctx.session.editBankData.step = 2;
-
-    await ctx.replyWithMarkdown('🔢 Please enter your new 10-digit bank account number:');
-    return ctx.wizard.next();
-  },
-  // Step 3: Enter New Account Number
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const input = ctx.message.text.trim();
-
-    logger.info(`User ${userId} entered new account number: ${input}`);
-
-    if (!/^\d{10}$/.test(input)) {
-      await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
-      return; // Stay on the same step
-    }
-
-    ctx.session.editBankData.newAccountNumber = input;
-
-    // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 Verifying your new bank details...');
-
-    try {
-      const verificationResult = await verifyBankAccount(ctx.session.editBankData.newAccountNumber, ctx.session.editBankData.newBankCode);
-
-      if (!verificationResult || !verificationResult.data) {
-        throw new Error('Invalid verification response.');
-      }
-
-      const accountName = verificationResult.data.account_name;
-
-      if (!accountName) {
-        throw new Error('Unable to retrieve account name.');
-      }
-
-      ctx.session.editBankData.newAccountName = accountName;
-
-      // Ask for Confirmation
-      await ctx.replyWithMarkdown(
-        `🏦 *New Bank Account Verification*\n\n` +
-        `Please confirm your new bank details:\n` +
-        `- *Bank Name:* ${ctx.session.editBankData.newBankName}\n` +
-        `- *Account Number:* ${ctx.session.editBankData.newAccountNumber}\n` +
-        `- *Account Holder:* ${accountName}\n\n` +
-        `Is this information correct?`,
-        Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Yes, Confirm', 'confirm_new_bank_yes')],
-          [Markup.button.callback('❌ No, Edit Details', 'confirm_new_bank_no')],
-          [Markup.button.callback('❌ Cancel Editing', 'cancel_edit_bank')],
-        ])
-      );
-      return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Failed to verify your new bank account. Please ensure your details are correct or try again later.');
-      return ctx.scene.leave();
-    }
-  },
-  // Step 4: Confirmation
-  async (ctx) => {
-    // Confirmation handled by action handlers below
-    return;
-  }
-);
-
-// Handle confirmation "Yes, Confirm" for new bank details
-bot.action('confirm_new_bank_yes', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = ctx.session.editBankData.walletIndex;
-  const newBankData = ctx.session.editBankData;
-
-  try {
-    const userState = await getUserState(userId);
-
-    // Update the selected wallet with new bank details
-    if (!userState.wallets[walletIndex]) {
-      await ctx.reply('❌ Selected wallet does not exist.');
-      ctx.scene.leave();
-      return ctx.answerCbQuery();
-    }
-
-    userState.wallets[walletIndex].bank = {
-      bankName: newBankData.newBankName,
-      bankCode: newBankData.newBankCode,
-      accountNumber: newBankData.newAccountNumber,
-      accountName: newBankData.newAccountName,
-    };
-
-    // Update user state in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-    });
-
-    await ctx.reply('✅ *Bank account updated successfully!*');
-    ctx.scene.leave();
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error updating bank details for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while updating your bank account. Please try again later.');
-    ctx.scene.leave();
-    ctx.answerCbQuery();
-  }
-});
-
-// Handle confirmation "No, Edit Details" for new bank details
-bot.action('confirm_new_bank_no', async (ctx) => {
-  await ctx.reply('🔄 *Let\'s try entering your new bank details again.*\n\nPlease enter your new bank name (e.g., Access Bank):');
-  ctx.session.editBankData = {}; // Reset bank data
-  ctx.scene.reenter();
-  ctx.answerCbQuery();
-});
-
-// Handle "Cancel Editing"
-bot.action('cancel_edit_bank', async (ctx) => {
-  await ctx.reply('❌ *Bank editing has been canceled.*');
-  ctx.scene.leave();
-  ctx.answerCbQuery();
-});
-
-// =================== Send Message Scene ===================
-// Already defined above
-
-// =================== Register Scenes with Stage ===================
-const stage = new Scenes.Stage();
-stage.register(
-  createPinScene,
-  enterPinScene,
-  bankLinkingScene, 
-  sendMessageScene, 
-  receiptGenerationScene, 
-  feedbackScene,
-  editBankDetailsScene
-);
-bot.use(session());
-bot.use(stage.middleware());
-
-// =================== Receipt Generation Scene ===================
-// Already defined above
-
-// =================== Exchange Rate Fetching ===================
-// Already defined above
-
-// =================== Main Menu ===================
-// Already defined above
-
-// =================== /start Command ===================
-// Already defined above
-
-// =================== Generate Wallet Handler ===================
-// Already defined above
-
-// =================== View Wallet Handler ===================
-// Already defined above
-
-// =================== Settings Handler ===================
-// Already defined above
-
-// =================== Check if User is Admin ===================
-// Already defined above
-
-// =================== Rating Handlers ===================
-// Already defined above
-
-// =================== Edit Bank Details Scene ===================
 // Already defined above
 
 // =================== Admin Panel ===================
@@ -1609,9 +1675,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
               `Hello ${accountName},\n\n` +
               `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
               `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
-              `*Cash amount:* ₦${payout}\n` +
-              `*Network:* ${txData.chain}\n` +
-              `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
+              `• *Cash amount:* ₦${payout}\n` +
+              `• *Network:* ${txData.chain}\n` +
+              `• *Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
               `Thank you for using *DirectPay*!`,
               { parse_mode: 'Markdown' }
             );
@@ -1894,8 +1960,14 @@ bot.action('support_contact', async (ctx) => {
 bot.hears(/💰\s*Transactions/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
-    const pageSize = 5; // Number of transactions per page
     const userState = await getUserState(userId);
+    
+    if (userState.wallets.length === 0) {
+      return ctx.replyWithMarkdown('❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.');
+    }
+
+    // Implement Pagination
+    const pageSize = 5; // Number of transactions per page
     const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
     ctx.session.transactionsPage = 1; // Initialize to first page
 
@@ -1955,7 +2027,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
   }
 });
 
-// Transaction Page Navigation
+// Handle Transaction Page Navigation
 bot.action(/transaction_page_(\d+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
   const requestedPage = parseInt(ctx.match[1], 10);
@@ -2063,97 +2135,12 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   await ctx.replyWithMarkdown(ratesMessage);
 });
 
-// =================== Feedback Scene ===================
-const feedbackScene = new Scenes.WizardScene(
-  'feedback_scene',
-  // Step 1: Ask for Feedback
-  async (ctx) => {
-    await ctx.reply('💬 *We Value Your Feedback*\n\nPlease share your thoughts or suggestions to help us improve DirectPay:');
-    return ctx.wizard.next();
-  },
-  // Step 2: Confirm Receipt of Feedback
-  async (ctx) => {
-    const feedback = ctx.message.text.trim();
-    const userId = ctx.from.id.toString();
-
-    try {
-      await db.collection('feedback').add({
-        userId,
-        feedback,
-        timestamp: admin.firestore.FieldValue.serverTimestamp(),
-      });
-      await ctx.reply('🙏 Thank you for your feedback!');
-    } catch (error) {
-      logger.error(`Error storing feedback from user ${userId}: ${error.message}`);
-      await ctx.reply('⚠️ An error occurred while saving your feedback. Please try again later.');
-    }
-
-    ctx.scene.leave();
-  }
-);
-
-// =================== Broadcast Message Scene ===================
-const broadcastMessageScene = new Scenes.WizardScene(
-  'broadcast_message_scene',
-  // Step 1: Ask for Broadcast Message
-  async (ctx) => {
-    await ctx.reply('📢 *Broadcast Message*\n\nPlease enter the message you want to send to all users:');
-    return ctx.wizard.next();
-  },
-  // Step 2: Confirm and Send Broadcast
-  async (ctx) => {
-    const message = ctx.message.text.trim();
-    try {
-      const usersSnapshot = await db.collection('users').get();
-      if (usersSnapshot.empty) {
-        await ctx.replyWithMarkdown('⚠️ No users found to send messages.');
-        return ctx.scene.leave();
-      }
-
-      let successCount = 0;
-      let failureCount = 0;
-
-      for (const userDoc of usersSnapshot.docs) {
-        const userId = userDoc.id;
-        try {
-          await bot.telegram.sendMessage(userId, message, { parse_mode: 'Markdown' });
-          successCount++;
-        } catch (error) {
-          logger.error(`Error sending broadcast to user ${userId}: ${error.message}`);
-          failureCount++;
-        }
-      }
-
-      await ctx.replyWithMarkdown(`✅ Broadcast sent successfully!\n\n• *Success:* ${successCount}\n• *Failed:* ${failureCount}`);
-    } catch (error) {
-      logger.error(`Error during broadcast: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while sending the broadcast. Please try again later.');
-    }
-
-    ctx.scene.leave();
-  }
-);
-
-// =================== Feedback Scene ===================
-// Already defined above
-
-// =================== Admin Panel ===================
+// =================== Rating Handlers ===================
 // Already handled above
 
-// =================== Support Handlers ===================
-// Already handled above
-
-// =================== Transactions Handler ===================
-// Already handled above
-
-// =================== Learn About Base Handler ===================
-// Already handled above
-
-// =================== Current Rates Handler ===================
-// Already handled above
-
-// =================== Receipt Generation Scene ===================
-// Already handled above
+// =================== Final Registration and Server Start ===================
+// Ensure all scenes are properly registered before starting the server
+// (Scenes are already registered above)
 
 // =================== Webhook Handlers ===================
 
@@ -2177,7 +2164,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, bodyParser.json(), async (req, res) => {
     const transactionHash = event.data?.hash || 'N/A';
     const chainRaw = event.data?.blockchain?.name || 'N/A';
     const senderAddress = event.data?.senderAddress || 'N/A'; 
-    
+
     // Normalize and map the chain name for ease
     const chainKey = chainMapping[chainRaw.toLowerCase()];
     if (!chainKey) {
@@ -2607,56 +2594,21 @@ app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
   bot.handleUpdate(req.body, res);
 });
 
-// =================== Broadcast Message Scene ===================
+// =================== Exit Broadcast Message Scene ===================
 /**
- * Navigates the user back to the main menu from settings.
+ * Handles exiting the broadcast message scene.
  */
-bot.action('admin_back_to_main', async (ctx) => {
-  await greetUser(ctx);
-  // Delete the admin panel message
-  if (ctx.session.adminMessageId) {
-    await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-    ctx.session.adminMessageId = null;
-  }
+bot.action('cancel_broadcast', async (ctx) => {
+  await ctx.reply('❌ Broadcast has been canceled.');
+  ctx.scene.leave();
   ctx.answerCbQuery();
+});
+
+// =================== Start Express Server ===================
+app.listen(PORT, () => {
+  logger.info(`Webhook server running on port ${PORT}`);
 });
 
 // =================== Shutdown Handlers ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
-
-// =================== PIN Keyboard ===================
-/**
- * Generates the PIN Input Inline Keyboard (0-9 arranged in a grid)
- * @returns {Markup} - Inline Keyboard Markup
- */
-const getPinKeyboard = () => Markup.inlineKeyboard([
-  [Markup.button.callback('1', 'pin_digit_1'), Markup.button.callback('2', 'pin_digit_2'), Markup.button.callback('3', 'pin_digit_3')],
-  [Markup.button.callback('4', 'pin_digit_4'), Markup.button.callback('5', 'pin_digit_5'), Markup.button.callback('6', 'pin_digit_6')],
-  [Markup.button.callback('7', 'pin_digit_7'), Markup.button.callback('8', 'pin_digit_8'), Markup.button.callback('9', 'pin_digit_9')],
-  [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
-]);
-
-// =================== Final Registration and Server Start ===================
-// Ensure all scenes are properly registered before starting the server
-app.use(bodyParser.json());
-app.use(bodyParser.raw({ type: 'application/json' }));
-
-// Register all scenes, including broadcast_message_scene
-stage.register(
-  createPinScene,
-  enterPinScene,
-  bankLinkingScene,
-  sendMessageScene,
-  receiptGenerationScene,
-  feedbackScene,
-  editBankDetailsScene,
-  broadcastMessageScene // Ensure broadcast_message_scene is defined and registered
-);
-bot.use(session());
-bot.use(stage.middleware());
-
-// Start Express Server
-app.listen(PORT, () => {
-  logger.info(`Webhook server running on port ${PORT}`);
-});
