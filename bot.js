@@ -1,5 +1,3 @@
-// bot.js
-
 // =================== Import Dependencies ===================
 const express = require('express');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
@@ -711,7 +709,7 @@ enterPinScene.action('pin_cancel', async (ctx) => {
 // =================== Bank Linking Scene ===================
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
-  // Step 1: Select Wallet to Link (if multiple unlinked wallets)
+  // Step 0: Select Wallet to Link (if multiple unlinked wallets)
   async (ctx) => {
     try {
       const userId = ctx.from.id.toString();
@@ -739,24 +737,24 @@ const bankLinkingScene = new Scenes.WizardScene(
       await ctx.replyWithMarkdown('🏦 *You have multiple unlinked wallets.*\n\nPlease select a wallet to link your bank account:', Markup.inlineKeyboard(walletButtons));
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Error in bank_linking_scene Step 1: ${error.message}`);
+      logger.error(`Error in bank_linking_scene Step 0: ${error.message}`);
       await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
       ctx.scene.leave();
     }
   },
-  // Step 2: Enter Bank Name
+  // Step 1: Enter Bank Name
   async (ctx) => {
-    // This step is handled by action handlers below
+    // This step is handled by the 'text' handler below
     return;
   },
-  // Step 3: Enter Account Number
+  // Step 2: Enter Account Number
   async (ctx) => {
-    // This step is handled by action handlers below
+    // This step is handled by the 'text' handler below
     return;
   },
-  // Step 4: Confirmation
+  // Step 3: Confirmation
   async (ctx) => {
-    // This step is handled by action handlers below
+    // This step is handled by the 'text' handler below
     return;
   }
 );
@@ -784,97 +782,101 @@ bot.action(/select_wallet_(\d+)/, async (ctx) => {
   }
 });
 
-// Handle bank name entry
+// Handle bank name and account number inputs based on the current step
 bankLinkingScene.on('text', async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
+    const currentStep = ctx.wizard.cursor; // 0-based index
     const input = ctx.message.text.trim();
-    logger.info(`User ${userId} entered bank name: "${input}"`);
 
-    // Check if the input is purely numeric (likely an account number)
-    if (/^\d+$/.test(input)) {
-      await ctx.replyWithMarkdown(
-        '❌ *Invalid input.* You entered a numeric value, which appears to be an account number. Please enter a valid bank name (e.g., Access Bank):'
-      );
-      return; // Remain in the current step
+    if (currentStep === 1) { // Step 1: Enter Bank Name
+      logger.info(`User ${userId} entered bank name: "${input}"`);
+
+      // Check if the input is purely numeric (likely an account number)
+      if (/^\d+$/.test(input)) {
+        await ctx.replyWithMarkdown(
+          '❌ *Invalid input.* You entered a numeric value, which appears to be an account number. Please enter a valid bank name (e.g., Access Bank):'
+        );
+        return; // Remain in the current step
+      }
+
+      const matchedBank = matchBank(input);
+
+      if (!matchedBank) {
+        await ctx.replyWithMarkdown(
+          '❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' +
+          bankList.map(b => `• ${b.name}`).join('\n')
+        );
+        return; // Remain in the current step
+      }
+
+      ctx.session.bankData = {
+        bankName: matchedBank.name,
+        bankCode: matchedBank.code,
+        paycrestInstitutionCode: matchedBank.paycrestInstitutionCode,
+      };
+
+      await ctx.replyWithMarkdown('🔢 *Please enter your 10-digit bank account number:*');
+      return ctx.wizard.next();
     }
 
-    const matchedBank = matchBank(input);
+    if (currentStep === 2) { // Step 2: Enter Account Number
+      logger.info(`User ${userId} entered account number: "${input}"`);
 
-    if (!matchedBank) {
+      if (!/^\d{10}$/.test(input)) {
+        await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
+        return; // Remain in the same step
+      }
+
+      ctx.session.bankData.accountNumber = input;
+
+      // Verify Bank Account
+      await ctx.replyWithMarkdown('🔄 *Verifying your bank details...*');
+
+      const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
+
+      if (!verificationResult || !verificationResult.data) {
+        throw new Error('Invalid verification response.');
+      }
+
+      const accountName = verificationResult.data.account_name;
+
+      if (!accountName) {
+        throw new Error('Unable to retrieve account name.');
+      }
+
+      ctx.session.bankData.accountName = accountName;
+
+      // Ask for Confirmation
       await ctx.replyWithMarkdown(
-        '❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' +
-        bankList.map(b => `• ${b.name}`).join('\n')
+        `🏦 *Bank Account Verification*\n\n` +
+        `Please confirm your bank details:\n` +
+        `• *Bank Name:* ${ctx.session.bankData.bankName}\n` +
+        `• *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
+        `• *Account Holder:* ${accountName}\n\n` +
+        `Is this information correct?`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
+          [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
+          [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')],
+        ])
       );
-      return; // Remain in the current step
+      return ctx.wizard.next();
     }
 
-    ctx.session.bankData = {
-      bankName: matchedBank.name,
-      bankCode: matchedBank.code,
-      paycrestInstitutionCode: matchedBank.paycrestInstitutionCode,
-    };
-
-    await ctx.replyWithMarkdown('🔢 *Please enter your 10-digit bank account number:*');
-    return ctx.wizard.next();
+    if (currentStep === 3) { // Step 3: Confirmation
+      // No text input expected in this step
+      await ctx.replyWithMarkdown('❌ *Invalid input.* Please use the buttons to confirm or cancel.');
+      return;
+    }
   } catch (error) {
-    logger.error(`Error in bank_linking_scene Step 2: ${error.message}`);
+    logger.error(`Error in bank_linking_scene on 'text': ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
     ctx.scene.leave();
   }
 });
 
-// Handle account number entry
-bankLinkingScene.on('text', async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    const input = ctx.message.text.trim();
-
-    if (!/^\d{10}$/.test(input)) {
-      await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
-      return; // Remain in the same step
-    }
-
-    ctx.session.bankData.accountNumber = input;
-
-    // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 *Verifying your bank details...*');
-
-    const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
-
-    if (!verificationResult || !verificationResult.data) {
-      throw new Error('Invalid verification response.');
-    }
-
-    const accountName = verificationResult.data.account_name;
-
-    if (!accountName) {
-      throw new Error('Unable to retrieve account name.');
-    }
-
-    ctx.session.bankData.accountName = accountName;
-
-    // Ask for Confirmation
-    await ctx.replyWithMarkdown(
-      `🏦 *Bank Account Verification*\n\n` +
-      `Please confirm your bank details:\n` +
-      `• *Bank Name:* ${ctx.session.bankData.bankName}\n` +
-      `• *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
-      `• *Account Holder:* ${accountName}\n\n` +
-      `Is this information correct?`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
-        [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
-        [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')],
-      ])
-    );
-    return ctx.wizard.next();
-  } catch (error) {
-    logger.error(`Error in bank_linking_scene Step 3: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ *Failed to verify your bank account.* Please ensure your details are correct or try again later.');
-    return ctx.scene.leave();
-  }
-});
+// =================== Confirmation Handlers ===================
 
 // Handle confirmation "Yes, Confirm" for bank details
 bot.action('confirm_bank_yes', async (ctx) => {
@@ -1229,7 +1231,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
 
       if (!referenceId) {
         await ctx.replyWithMarkdown('❌ Reference ID cannot be empty. Please enter the Reference ID of the transaction:');
-        return; // Remain in the same step
+        return; // Remain on the same step
       }
 
       const txSnapshot = await db.collection('transactions').where('referenceId', '==', referenceId).limit(1).get();
@@ -1785,7 +1787,7 @@ bot.action(/rate_(\d+)/, async (ctx) => {
   } catch (error) {
     logger.error(`Error handling rating action: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    ctx.answerCbQuery();
+    await ctx.answerCbQuery();
   }
 });
 
@@ -2942,6 +2944,9 @@ bot.action('cancel_broadcast', async (ctx) => {
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
   }
 });
+
+// =================== Admin Panel ===================
+// Already handled above
 
 // =================== Final Server Start ===================
 // Start Express Server
