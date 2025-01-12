@@ -526,7 +526,7 @@ const createPinScene = new Scenes.WizardScene(
   // Step 1: Enter PIN
   async (ctx) => {
     try {
-      ctx.wizard.state.pinDigits = [];
+      ctx.scene.state.pinDigits = [];
       await ctx.replyWithMarkdown('🔒 *Create a 4-digit PIN*', getPinKeyboard());
       return ctx.wizard.next();
     } catch (error) {
@@ -538,12 +538,12 @@ const createPinScene = new Scenes.WizardScene(
   // Step 2: Confirm PIN
   async (ctx) => {
     try {
-      if (ctx.wizard.state.pinDigits.length < 4) {
+      if (ctx.scene.state.pinDigits.length < 4) {
         return; // Wait until 4 digits are entered
       }
 
-      ctx.wizard.state.tempPin = ctx.wizard.state.pinDigits.join('');
-      ctx.wizard.state.pinDigits = []; // Reset for confirmation
+      ctx.scene.state.tempPin = ctx.scene.state.pinDigits.join('');
+      ctx.scene.state.pinDigits = []; // Reset for confirmation
 
       await ctx.replyWithMarkdown('🔄 *Please confirm your 4-digit PIN*', getPinKeyboard());
       return ctx.wizard.next();
@@ -556,17 +556,17 @@ const createPinScene = new Scenes.WizardScene(
   // Step 3: Verify PIN
   async (ctx) => {
     try {
-      if (ctx.wizard.state.pinDigits.length < 4) {
+      if (ctx.scene.state.pinDigits.length < 4) {
         return; // Wait until 4 digits are entered
       }
 
-      const confirmedPin = ctx.wizard.state.pinDigits.join('');
-      const originalPin = ctx.wizard.state.tempPin;
+      const confirmedPin = ctx.scene.state.pinDigits.join('');
+      const originalPin = ctx.scene.state.tempPin;
 
       if (confirmedPin !== originalPin) {
         await ctx.reply('❌ *PINs do not match.* Please start the PIN creation process again.');
-        ctx.wizard.state.pinDigits = [];
-        ctx.wizard.state.tempPin = null;
+        ctx.scene.state.pinDigits = [];
+        ctx.scene.state.tempPin = null;
         ctx.scene.leave();
         return;
       }
@@ -592,11 +592,11 @@ const createPinScene = new Scenes.WizardScene(
 createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
   try {
     const digit = ctx.match[1];
-    ctx.wizard.state.pinDigits.push(digit);
+    ctx.scene.state.pinDigits.push(digit);
     await ctx.answerCbQuery();
 
     // Check if 4 digits have been entered
-    if (ctx.wizard.state.pinDigits.length === 4) {
+    if (ctx.scene.state.pinDigits.length === 4) {
       await ctx.wizard.next(); // Move to confirmation step
       await ctx.scene.step(1); // Trigger the next step
     }
@@ -610,7 +610,7 @@ createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
 createPinScene.action('pin_cancel', async (ctx) => {
   try {
     await ctx.reply('❌ PIN creation has been canceled.');
-    ctx.wizard.state.pinDigits = [];
+    ctx.scene.state.pinDigits = [];
     ctx.scene.leave();
     await ctx.answerCbQuery();
   } catch (error) {
@@ -625,7 +625,7 @@ const enterPinScene = new Scenes.WizardScene(
   // Step 1: Enter PIN
   async (ctx) => {
     try {
-      ctx.wizard.state.enterPinDigits = [];
+      ctx.scene.state.enterPinDigits = [];
       await ctx.reply('🔒 *Enter your 4-digit PIN*', getPinKeyboard());
       return ctx.wizard.next();
     } catch (error) {
@@ -637,12 +637,12 @@ const enterPinScene = new Scenes.WizardScene(
   // Step 2: Verify PIN
   async (ctx) => {
     try {
-      if (ctx.wizard.state.enterPinDigits.length < 4) {
+      if (ctx.scene.state.enterPinDigits.length < 4) {
         return; // Wait until 4 digits are entered
       }
 
-      const enteredPin = ctx.wizard.state.enterPinDigits.join('');
-      ctx.wizard.state.enterPinDigits = []; // Reset
+      const enteredPin = ctx.scene.state.enterPinDigits.join('');
+      ctx.scene.state.enterPinDigits = []; // Reset
 
       const userId = ctx.from.id.toString();
       const userState = await getUserState(userId);
@@ -655,10 +655,10 @@ const enterPinScene = new Scenes.WizardScene(
 
       const isMatch = await bcrypt.compare(enteredPin, userState.pin);
       if (isMatch) {
-        ctx.wizard.state.pinVerified = true;
+        ctx.scene.state.pinVerified = true;
         await ctx.reply('✅ *PIN verified successfully.* You can now edit your bank details.');
         // Proceed to edit bank details if applicable
-        const walletIndex = ctx.wizard.state.editBankWalletIndex;
+        const walletIndex = ctx.scene.state.editBankWalletIndex;
         if (walletIndex !== undefined && walletIndex !== null) {
           await ctx.scene.enter('edit_bank_details_scene', { walletIndex });
         }
@@ -679,11 +679,11 @@ const enterPinScene = new Scenes.WizardScene(
 enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
   try {
     const digit = ctx.match[1];
-    ctx.wizard.state.enterPinDigits.push(digit);
+    ctx.scene.state.enterPinDigits.push(digit);
     await ctx.answerCbQuery();
 
     // Check if 4 digits have been entered
-    if (ctx.wizard.state.enterPinDigits.length === 4) {
+    if (ctx.scene.state.enterPinDigits.length === 4) {
       await ctx.wizard.next(); // Move to verification step
       await ctx.scene.step(1); // Trigger the next step
     }
@@ -697,7 +697,7 @@ enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
 enterPinScene.action('pin_cancel', async (ctx) => {
   try {
     await ctx.reply('❌ PIN entry has been canceled.');
-    ctx.wizard.state.enterPinDigits = [];
+    ctx.scene.state.enterPinDigits = [];
     ctx.scene.leave();
     await ctx.answerCbQuery();
   } catch (error) {
@@ -724,7 +724,7 @@ const bankLinkingScene = new Scenes.WizardScene(
       }
 
       if (unlinkedWallets.length === 1) {
-        ctx.wizard.state.bankLinkingWalletIndex = unlinkedWallets[0].index;
+        ctx.scene.state.bankLinkingWalletIndex = unlinkedWallets[0].index;
         await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${unlinkedWallets[0].index + 1} (${unlinkedWallets[0].wallet.chain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
         return ctx.wizard.next();
       }
@@ -772,7 +772,7 @@ bankLinkingScene.action(/select_wallet_(\d+)/, async (ctx) => {
       return ctx.answerCbQuery(); // Acknowledge the callback to remove loading state
     }
 
-    ctx.wizard.state.bankLinkingWalletIndex = walletIndex;
+    ctx.scene.state.bankLinkingWalletIndex = walletIndex;
     await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${walletIndex + 1} (${wallet.chain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
     return ctx.wizard.next();
   } catch (error) {
@@ -811,7 +811,7 @@ bankLinkingScene.on('text', async (ctx) => {
         return; // Remain in the current step
       }
 
-      ctx.wizard.state.bankData = {
+      ctx.scene.state.bankData = {
         bankName: matchedBank.name,
         bankCode: matchedBank.code,
         paycrestInstitutionCode: matchedBank.paycrestInstitutionCode,
@@ -829,13 +829,13 @@ bankLinkingScene.on('text', async (ctx) => {
         return; // Remain in the same step
       }
 
-      ctx.wizard.state.bankData.accountNumber = input;
+      ctx.scene.state.bankData.accountNumber = input;
 
       // Verify Bank Account
       await ctx.replyWithMarkdown('🔄 *Verifying your bank details...*');
 
       try {
-        const verificationResult = await verifyBankAccount(ctx.wizard.state.bankData.accountNumber, ctx.wizard.state.bankData.bankCode);
+        const verificationResult = await verifyBankAccount(ctx.scene.state.bankData.accountNumber, ctx.scene.state.bankData.bankCode);
 
         if (!verificationResult || !verificationResult.data) {
           throw new Error('Invalid verification response.');
@@ -847,14 +847,14 @@ bankLinkingScene.on('text', async (ctx) => {
           throw new Error('Unable to retrieve account name.');
         }
 
-        ctx.wizard.state.bankData.accountName = accountName;
+        ctx.scene.state.bankData.accountName = accountName;
 
         // Ask for Confirmation
         await ctx.replyWithMarkdown(
           `🏦 *Bank Account Verification*\n\n` +
           `Please confirm your bank details:\n` +
-          `• *Bank Name:* ${ctx.wizard.state.bankData.bankName}\n` +
-          `• *Account Number:* ${ctx.wizard.state.bankData.accountNumber}\n` +
+          `• *Bank Name:* ${ctx.scene.state.bankData.bankName}\n` +
+          `• *Account Number:* ${ctx.scene.state.bankData.accountNumber}\n` +
           `• *Account Holder:* ${accountName}\n\n` +
           `Is this information correct?`,
           Markup.inlineKeyboard([
@@ -888,8 +888,8 @@ bankLinkingScene.on('text', async (ctx) => {
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    const walletIndex = ctx.wizard.state.bankLinkingWalletIndex;
-    const bankData = ctx.wizard.state.bankData;
+    const walletIndex = ctx.scene.state.bankLinkingWalletIndex;
+    const bankData = ctx.scene.state.bankData;
 
     if (walletIndex === undefined || walletIndex === null) {
       await ctx.reply('❌ No wallet selected for linking. Please try again.');
@@ -938,7 +938,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 bankLinkingScene.action('confirm_bank_no', async (ctx) => {
   try {
     await ctx.reply('🔄 *Let\'s try entering your bank details again.*\n\nPlease enter your bank name (e.g., Access Bank):');
-    ctx.wizard.state.bankData = {}; // Reset bank data
+    ctx.scene.state.bankData = {}; // Reset bank data
     ctx.wizard.back(); // Go back to bank name input
     ctx.answerCbQuery();
   } catch (error) {
@@ -968,10 +968,10 @@ const editBankDetailsScene = new Scenes.WizardScene(
   // Step 1: Enter New Bank Name
   async (ctx) => {
     try {
-      const { walletIndex } = ctx.wizard.state;
-      ctx.wizard.state.editBankData = {};
-      ctx.wizard.state.editBankData.walletIndex = walletIndex;
-      ctx.wizard.state.editBankData.step = 1;
+      const { walletIndex } = ctx.scene.state;
+      ctx.scene.state.editBankData = {};
+      ctx.scene.state.editBankData.walletIndex = walletIndex;
+      ctx.scene.state.editBankData.step = 1;
       await ctx.replyWithMarkdown('🏦 *Edit Bank Account*\n\nPlease enter your new bank name (e.g., Access Bank):');
       return ctx.wizard.next();
     } catch (error) {
@@ -1020,9 +1020,9 @@ editBankDetailsScene.on('text', async (ctx) => {
         return; // Remain in the current step
       }
 
-      ctx.wizard.state.editBankData.newBankName = matchedBank.name;
-      ctx.wizard.state.editBankData.newBankCode = matchedBank.code;
-      ctx.wizard.state.editBankData.step = 2;
+      ctx.scene.state.editBankData.newBankName = matchedBank.name;
+      ctx.scene.state.editBankData.newBankCode = matchedBank.code;
+      ctx.scene.state.editBankData.step = 2;
 
       await ctx.replyWithMarkdown('🔢 Please enter your new 10-digit bank account number:');
       return ctx.wizard.next();
@@ -1036,13 +1036,13 @@ editBankDetailsScene.on('text', async (ctx) => {
         return; // Remain in the same step
       }
 
-      ctx.wizard.state.editBankData.newAccountNumber = input;
+      ctx.scene.state.editBankData.newAccountNumber = input;
 
       // Verify Bank Account
       await ctx.replyWithMarkdown('🔄 *Verifying your new bank details...*');
 
       try {
-        const verificationResult = await verifyBankAccount(ctx.wizard.state.editBankData.newAccountNumber, ctx.wizard.state.editBankData.newBankCode);
+        const verificationResult = await verifyBankAccount(ctx.scene.state.editBankData.newAccountNumber, ctx.scene.state.editBankData.newBankCode);
 
         if (!verificationResult || !verificationResult.data) {
           throw new Error('Invalid verification response.');
@@ -1054,14 +1054,14 @@ editBankDetailsScene.on('text', async (ctx) => {
           throw new Error('Unable to retrieve account name.');
         }
 
-        ctx.wizard.state.editBankData.newAccountName = accountName;
+        ctx.scene.state.editBankData.newAccountName = accountName;
 
         // Ask for Confirmation
         await ctx.replyWithMarkdown(
           `🏦 *New Bank Account Verification*\n\n` +
           `Please confirm your new bank details:\n` +
-          `- *Bank Name:* ${ctx.wizard.state.editBankData.newBankName}\n` +
-          `- *Account Number:* ${ctx.wizard.state.editBankData.newAccountNumber}\n` +
+          `- *Bank Name:* ${ctx.scene.state.editBankData.newBankName}\n` +
+          `- *Account Number:* ${ctx.scene.state.editBankData.newAccountNumber}\n` +
           `- *Account Holder:* ${accountName}\n\n` +
           `Is this information correct?`,
           Markup.inlineKeyboard([
@@ -1093,8 +1093,8 @@ editBankDetailsScene.on('text', async (ctx) => {
 editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
-    const walletIndex = ctx.wizard.state.editBankData.walletIndex;
-    const newBankData = ctx.wizard.state.editBankData;
+    const walletIndex = ctx.scene.state.editBankData.walletIndex;
+    const newBankData = ctx.scene.state.editBankData;
 
     if (walletIndex === undefined || walletIndex === null) {
       await ctx.reply('❌ No wallet selected for editing. Please try again.');
@@ -1138,7 +1138,7 @@ editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
 editBankDetailsScene.action('confirm_new_bank_no', async (ctx) => {
   try {
     await ctx.reply('🔄 *Let\'s try entering your new bank details again.*\n\nPlease enter your new bank name (e.g., Access Bank):');
-    ctx.wizard.state.editBankData = {}; // Reset bank data
+    ctx.scene.state.editBankData = {}; // Reset bank data
     ctx.scene.reenter();
     ctx.answerCbQuery();
   } catch (error) {
@@ -1186,7 +1186,7 @@ const sendMessageScene = new Scenes.WizardScene(
         return; // Remain on the same step
       }
 
-      ctx.wizard.state.adminSendMessage = { recipientId };
+      ctx.scene.state.adminSendMessage = { recipientId };
       await ctx.reply('✍️ *Please enter the message you want to send:*');
       return ctx.wizard.next();
     } catch (error) {
@@ -1199,7 +1199,7 @@ const sendMessageScene = new Scenes.WizardScene(
   async (ctx) => {
     try {
       const messageContent = ctx.message.text.trim();
-      const recipientId = ctx.wizard.state.adminSendMessage.recipientId;
+      const recipientId = ctx.scene.state.adminSendMessage.recipientId;
 
       if (!messageContent) {
         await ctx.replyWithMarkdown('❌ *Message content cannot be empty.* Please enter the message you want to send:');
@@ -1211,7 +1211,7 @@ const sendMessageScene = new Scenes.WizardScene(
       ctx.scene.leave();
     } catch (error) {
       logger.error(`Error in send_message_scene Step 3: ${error.message}`);
-      await ctx.replyWithMarkdown(`❌ Failed to send message to user ID: ${ctx.wizard.state.adminSendMessage.recipientId}. Please ensure the User ID is correct and the user has interacted with the bot.`);
+      await ctx.replyWithMarkdown(`❌ Failed to send message to user ID: ${ctx.scene.state.adminSendMessage.recipientId}. Please ensure the User ID is correct and the user has interacted with the bot.`);
       ctx.scene.leave();
     }
   }
@@ -1568,7 +1568,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
 
       // Set walletIndex to the newly created wallet
       const newWalletIndex = userState.wallets.length - 1;
-      ctx.wizard.state.walletIndex = newWalletIndex;
+      ctx.scene.state.walletIndex = newWalletIndex;
 
       // Delete the Progress Message
       await ctx.deleteMessage(progressMessage.message_id);
@@ -1602,7 +1602,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     // Implement Pagination
     const pageSize = 5; // Number of wallets per page
     const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
-    ctx.wizard.state.walletsPage = 1; // Initialize to first page
+    ctx.scene.state.walletsPage = 1; // Initialize to first page
 
     const generateWalletPage = (page) => {
       const start = (page - 1) * pageSize;
@@ -1650,7 +1650,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
       return { message, inlineKeyboard };
     };
 
-    const { message, inlineKeyboard } = generateWalletPage(ctx.wizard.state.walletsPage);
+    const { message, inlineKeyboard } = generateWalletPage(ctx.scene.state.walletsPage);
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
     logger.error(`Error fetching wallets for user ${userId}: ${error.message}`);
@@ -1672,7 +1672,7 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
       return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
     }
 
-    ctx.wizard.state.walletsPage = requestedPage;
+    ctx.scene.state.walletsPage = requestedPage;
 
     const start = (requestedPage - 1) * pageSize;
     const end = start + pageSize;
@@ -1842,10 +1842,10 @@ bot.action('open_admin_panel', async (ctx) => {
     }
 
     // Reset session variables if necessary
-    ctx.wizard.state.adminMessageId = null;
+    ctx.scene.state.adminMessageId = null;
 
     const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
-    ctx.wizard.state.adminMessageId = sentMessage.message_id;
+    ctx.scene.state.adminMessageId = sentMessage.message_id;
   } catch (error) {
     logger.error(`Error opening admin panel for user ${ctx.from.id}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred while opening the admin panel.');
@@ -2041,9 +2041,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
         // Return to the main menu
         await greetUser(ctx);
         // Delete the admin panel message
-        if (ctx.wizard.state.adminMessageId) {
-          await ctx.deleteMessage(ctx.wizard.state.adminMessageId).catch(() => {});
-          ctx.wizard.state.adminMessageId = null;
+        if (ctx.scene.state.adminMessageId) {
+          await ctx.deleteMessage(ctx.scene.state.adminMessageId).catch(() => {});
+          ctx.scene.state.adminMessageId = null;
         }
         ctx.answerCbQuery();
         break;
@@ -2193,7 +2193,7 @@ async function sendBaseContent(ctx, index, isNew = true) {
     if (isNew) {
       const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
       // Store the message ID in session
-      ctx.wizard.state.baseMessageId = sentMessage.message_id;
+      ctx.scene.state.baseMessageId = sentMessage.message_id;
     } else {
       try {
         await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
@@ -2203,7 +2203,7 @@ async function sendBaseContent(ctx, index, isNew = true) {
       } catch (error) {
         // If editing message fails, send a new message and update session
         const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-        ctx.wizard.state.baseMessageId = sentMessage.message_id;
+        ctx.scene.state.baseMessageId = sentMessage.message_id;
       }
     }
   } catch (error) {
@@ -2232,9 +2232,9 @@ bot.action(/base_page_(\d+)/, async (ctx) => {
 bot.action('exit_base', async (ctx) => {
   try {
     // Delete the message and clear session
-    if (ctx.wizard.state.baseMessageId) {
-      await ctx.deleteMessage(ctx.wizard.state.baseMessageId).catch(() => {});
-      ctx.wizard.state.baseMessageId = null;
+    if (ctx.scene.state.baseMessageId) {
+      await ctx.deleteMessage(ctx.scene.state.baseMessageId).catch(() => {});
+      ctx.scene.state.baseMessageId = null;
     }
     await ctx.replyWithMarkdown('Thank you for learning about Base!');
     ctx.answerCbQuery();
@@ -2302,7 +2302,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
     // Implement Pagination
     const pageSize = 5; // Number of transactions per page
     const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
-    ctx.wizard.state.transactionsPage = 1; // Initialize to first page
+    ctx.scene.state.transactionsPage = 1; // Initialize to first page
 
     const generateTransactionPage = (page) => {
       const start = (page - 1) * pageSize;
@@ -2352,7 +2352,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       return { message, inlineKeyboard };
     };
 
-    const { message, inlineKeyboard } = generateTransactionPage(ctx.wizard.state.transactionsPage);
+    const { message, inlineKeyboard } = generateTransactionPage(ctx.scene.state.transactionsPage);
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
     logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
@@ -2374,7 +2374,7 @@ bot.action(/transaction_page_(\d+)/, async (ctx) => {
       return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
     }
 
-    ctx.wizard.state.transactionsPage = requestedPage;
+    ctx.scene.state.transactionsPage = requestedPage;
 
     const start = (requestedPage - 1) * pageSize;
     const end = start + pageSize;
