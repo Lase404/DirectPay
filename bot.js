@@ -72,6 +72,25 @@ const app = express();
 // =================== Initialize Telegraf Bot ===================
 const bot = new Telegraf(BOT_TOKEN);
 
+// =================== Set Webhook ===================
+// Register the webhook URL with Telegram
+bot.telegram.setWebhook(`${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`)
+  .then(() => {
+    logger.info(`Webhook set to ${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`);
+  })
+  .catch((err) => {
+    logger.error(`Failed to set webhook: ${err.message}`);
+  });
+
+// =================== Verify Webhook ===================
+bot.telegram.getWebhookInfo()
+  .then((info) => {
+    logger.info(`Current webhook info: ${JSON.stringify(info, null, 2)}`);
+  })
+  .catch((err) => {
+    logger.error(`Failed to get webhook info: ${err.message}`);
+  });
+
 // =================== Define Bank List ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
@@ -1545,8 +1564,8 @@ bot.action('leave_feedback', async (ctx) => {
   await ctx.answerCbQuery();
 });
 
-// =================== Edit Bank Details Scene ===================
-// Already defined above
+// =================== Bank Linking Scene ===================
+// Already handled above
 
 // =================== Admin Panel ===================
 
@@ -2604,7 +2623,8 @@ bot.action('cancel_broadcast', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-// =================== Start Express Server ===================
+// =================== Final Server Start ===================
+// Start Express Server
 app.listen(PORT, () => {
   logger.info(`Webhook server running on port ${PORT}`);
 });
