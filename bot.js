@@ -9,7 +9,10 @@ const fs = require('fs');
 const winston = require('winston');
 const bodyParser = require('body-parser');
 const bcrypt = require('bcrypt'); // For PIN hashing
-require('dotenv').config();
+const dotenv = require('dotenv');
+const Fuse = require('fuse.js'); // For optional fuzzy matching
+
+dotenv.config();
 
 // =================== Logger Setup ===================
 const logger = winston.createLogger({
@@ -156,6 +159,28 @@ const chainMapping = {
 };
 
 // =================== Helper Functions ===================
+
+/**
+ * Matches user input to a bank from the bankList with flexible matching.
+ * @param {string} input - User input for bank name.
+ * @returns {object|null} - Returns the matched bank object or null if not found.
+ */
+function matchBank(input) {
+  const normalizedInput = input.trim().toLowerCase();
+
+  // Initialize Fuse.js for fuzzy matching
+  const fuse = new Fuse(bankList, {
+    keys: ['aliases'],
+    threshold: 0.3,
+  });
+
+  const result = fuse.search(normalizedInput);
+  if (result.length > 0) {
+    return result[0].item;
+  }
+
+  return null;
+}
 
 /**
  * Maps asset and chain names to Paycrest-compatible identifiers.
@@ -693,22 +718,25 @@ bot.action(/select_wallet_(\d+)/, async (ctx) => {
 bankLinkingScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const input = ctx.message.text.trim();
-  logger.info(`User ${userId} entered bank name: ${input}`);
+  logger.info(`User ${userId} entered bank name: "${input}"`);
 
-  const bankNameInput = input.toLowerCase();
-  const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
+  const matchedBank = matchBank(input);
 
-  if (!bank) {
-    await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list:\n\n' + bankList.map(b => `• ${b.name}`).join('\n'));
-    return; // Stay on the same step
+  if (!matchedBank) {
+    await ctx.replyWithMarkdown(
+      '❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' +
+      bankList.map(b => `• ${b.name}`).join('\n')
+    );
+    return; // Remain in the current step
   }
 
   ctx.session.bankData = {
-    bankName: bank.name,
-    bankCode: bank.code,
+    bankName: matchedBank.name,
+    bankCode: matchedBank.code,
+    paycrestInstitutionCode: matchedBank.paycrestInstitutionCode,
   };
 
-  await ctx.replyWithMarkdown('🔢 Please enter your 10-digit bank account number:');
+  await ctx.replyWithMarkdown('🔢 *Please enter your 10-digit bank account number:*');
   return ctx.wizard.next();
 });
 
@@ -716,17 +744,16 @@ bankLinkingScene.on('text', async (ctx) => {
 bankLinkingScene.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   const input = ctx.message.text.trim();
-  logger.info(`User ${userId} entered account number: ${input}`);
 
   if (!/^\d{10}$/.test(input)) {
-    await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
-    return; // Stay on the same step
+    await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
+    return; // Remain in the same step
   }
 
   ctx.session.bankData.accountNumber = input;
 
   // Verify Bank Account
-  await ctx.replyWithMarkdown('🔄 Verifying your bank details...');
+  await ctx.replyWithMarkdown('🔄 *Verifying your bank details...*');
 
   try {
     const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
@@ -747,9 +774,9 @@ bankLinkingScene.on('text', async (ctx) => {
     await ctx.replyWithMarkdown(
       `🏦 *Bank Account Verification*\n\n` +
       `Please confirm your bank details:\n` +
-      `- *Bank Name:* ${ctx.session.bankData.bankName}\n` +
-      `- *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
-      `- *Account Holder:* ${accountName}\n\n` +
+      `• *Bank Name:* ${ctx.session.bankData.bankName}\n` +
+      `• *Account Number:* ${ctx.session.bankData.accountNumber}\n` +
+      `• *Account Holder:* ${accountName}\n\n` +
       `Is this information correct?`,
       Markup.inlineKeyboard([
         [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
@@ -760,7 +787,7 @@ bankLinkingScene.on('text', async (ctx) => {
     return ctx.wizard.next();
   } catch (error) {
     logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ Failed to verify your bank account. Please ensure your details are correct or try again later.');
+    await ctx.replyWithMarkdown('❌ *Failed to verify your bank account.* Please ensure your details are correct or try again later.');
     return ctx.scene.leave();
   }
 });
@@ -809,7 +836,7 @@ bot.action('confirm_bank_yes', async (ctx) => {
     ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error storing bank details for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while linking your bank account. Please try again later.');
+    await ctx.reply('⚠️ *An error occurred while linking your bank account.* Please try again later.');
     ctx.scene.leave();
     ctx.answerCbQuery();
   }
@@ -849,16 +876,15 @@ const editBankDetailsScene = new Scenes.WizardScene(
 
     logger.info(`User ${userId} entered new bank name: ${input}`);
 
-    const bankNameInput = input.toLowerCase();
-    const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
+    const matchedBank = matchBank(input);
 
-    if (!bank) {
-      await ctx.replyWithMarkdown('❌ Invalid bank name. Please enter a valid bank name from our supported list:\n\n' + bankList.map(b => `• ${b.name}`).join('\n'));
+    if (!matchedBank) {
+      await ctx.replyWithMarkdown('❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' + bankList.map(b => `• ${b.name}`).join('\n'));
       return; // Stay on the same step
     }
 
-    ctx.session.editBankData.newBankName = bank.name;
-    ctx.session.editBankData.newBankCode = bank.code;
+    ctx.session.editBankData.newBankName = matchedBank.name;
+    ctx.session.editBankData.newBankCode = matchedBank.code;
     ctx.session.editBankData.step = 2;
 
     await ctx.replyWithMarkdown('🔢 Please enter your new 10-digit bank account number:');
@@ -872,14 +898,14 @@ const editBankDetailsScene = new Scenes.WizardScene(
     logger.info(`User ${userId} entered new account number: ${input}`);
 
     if (!/^\d{10}$/.test(input)) {
-      await ctx.replyWithMarkdown('❌ Invalid account number. Please enter a valid 10-digit account number:');
+      await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
       return; // Stay on the same step
     }
 
     ctx.session.editBankData.newAccountNumber = input;
 
     // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 Verifying your new bank details...');
+    await ctx.replyWithMarkdown('🔄 *Verifying your new bank details...*');
 
     try {
       const verificationResult = await verifyBankAccount(ctx.session.editBankData.newAccountNumber, ctx.session.editBankData.newBankCode);
@@ -913,7 +939,7 @@ const editBankDetailsScene = new Scenes.WizardScene(
       return ctx.wizard.next();
     } catch (error) {
       logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Failed to verify your new bank account. Please ensure your details are correct or try again later.');
+      await ctx.replyWithMarkdown('❌ *Failed to verify your new bank account.* Please ensure your details are correct or try again later.');
       return ctx.scene.leave();
     }
   }
@@ -952,7 +978,7 @@ bot.action('confirm_new_bank_yes', async (ctx) => {
     ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error updating bank details for user ${userId}: ${error.message}`);
-    await ctx.reply('⚠️ An error occurred while updating your bank account. Please try again later.');
+    await ctx.reply('⚠️ *An error occurred while updating your bank account.* Please try again later.');
     ctx.scene.leave();
     ctx.answerCbQuery();
   }
@@ -986,12 +1012,12 @@ const sendMessageScene = new Scenes.WizardScene(
     const recipientId = ctx.message.text.trim();
 
     if (!/^\d+$/.test(recipientId)) {
-      await ctx.replyWithMarkdown('❌ Invalid User ID. Please enter a numeric Telegram User ID:');
+      await ctx.replyWithMarkdown('❌ *Invalid User ID.* Please enter a numeric Telegram User ID:');
       return; // Stay on the same step
     }
 
     ctx.session.adminSendMessage = { recipientId };
-    await ctx.reply('✍️ Please enter the message you want to send:');
+    await ctx.reply('✍️ *Please enter the message you want to send:*');
     return ctx.wizard.next();
   },
   // Step 3: Confirm and Send Message
@@ -1086,13 +1112,23 @@ const broadcastMessageScene = new Scenes.WizardScene(
   }
 );
 
+// =================== Receipt Generation Scene ===================
+// (Already defined above)
+
+// =================== Broadcast Message Scene ===================
+// (Already defined above)
+
+// =================== Define Admin Panel Scene ===================
+/**
+ * Admin Panel is handled via action callbacks, no separate scene needed.
+ */
+
 // =================== Define Other Scenes (e.g., Feedback) ===================
 // Feedback scene is already defined above
 
 // =================== Register All Scenes with Stage ===================
 const stage = new Scenes.Stage();
 
-// Registering all defined scenes
 stage.register(
   feedbackScene,
   createPinScene,
@@ -1411,7 +1447,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     const { message, inlineKeyboard } = generateWalletPage(ctx.session.walletsPage);
     await ctx.replyWithMarkdown(message, inlineKeyboard);
   } catch (error) {
-    logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
+    logger.error(`Error fetching wallets for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ Unable to fetch your wallets. Please try again later.');
   }
 });
@@ -1581,8 +1617,6 @@ bot.action('open_admin_panel', async (ctx) => {
 
   const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
   ctx.session.adminMessageId = sentMessage.message_id;
-
-  // Removed the inactivity timeout as per user request
 });
 
 /**
@@ -1629,7 +1663,8 @@ bot.action(/admin_(.+)/, async (ctx) => {
           message += `*Amount Deposited:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
           message += `*Status:* ${tx.status || 'Pending'}\n`;
           message += `*Chain:* ${tx.chain || 'N/A'}\n`;
-          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
+          message += `*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
+          message += `*Details:* [View on Explorer](https://polygonscan.com/tx/${tx.transactionHash || 'N/A'})\n\n`; // Detailed Transaction View
         });
 
         // Add a 'Back' button to return to the admin menu
