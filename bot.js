@@ -1,338 +1,658 @@
 // =================== Import Dependencies ===================
-const { Telegraf, Scenes, session, Markup } = require('telegraf');
+const express = require('express');
+const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const admin = require('firebase-admin');
 const axios = require('axios');
 const crypto = require('crypto');
-const fs = require('fs');
 const path = require('path');
+const fs = require('fs');
 const winston = require('winston');
 const bodyParser = require('body-parser');
-const express = require('express');
+const bcrypt = require('bcrypt'); // For PIN hashing
+const dotenv = require('dotenv');
+const Fuse = require('fuse.js'); // For fuzzy matching
 
-// =================== Initialize Logger ===================
+dotenv.config();
+
+// =================== Logger Setup ===================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
-      winston.format.timestamp(),
-      winston.format.printf(({ timestamp, level, message }) => {
-          return `[${timestamp}] ${level.toUpperCase()}: ${message}`;
-      })
+    winston.format.timestamp(),
+    winston.format.printf(
+      ({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`
+    )
   ),
   transports: [
     new winston.transports.Console(),
-    new winston.transports.File({ filename: 'bot.log' })
+    new winston.transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 }) // 5MB per file, keep last 5 files
   ],
 });
 
-// =================== Initialize Firebase Admin ===================
-const serviceAccount = require('./path/to/your/serviceAccountKey.json');
-
+// =================== Firebase Setup ===================
+const serviceAccountPath = path.join(__dirname, 'directpay.json'); // Ensure this file is secured on the server
+if (!fs.existsSync(serviceAccountPath)) {
+  logger.error('Firebase service account file (directpay.json) not found.');
+  process.exit(1);
+}
+const serviceAccount = require(serviceAccountPath);
 admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
+  credential: admin.credential.cert(serviceAccount),
+  databaseURL: "https://directpay9ja.firebaseio.com"
 });
-
 const db = admin.firestore();
 
-// =================== Initialize Telegraf Bot ===================
-const botToken = 'YOUR_TELEGRAM_BOT_TOKEN';
-const bot = new Telegraf(botToken);
+// =================== Environment Variables ===================
+const {
+  BOT_TOKEN,
+  PAYCREST_API_KEY,
+  PAYCREST_CLIENT_SECRET,
+  PAYCREST_RATE_API_URL = 'https://api.paycrest.io/v1/rates',
+  PAYCREST_RETURN_ADDRESS = "0x",
+  PERSONAL_CHAT_ID,
+  PAYSTACK_API_KEY,
+  ADMIN_IDS = '',
+  WEBHOOK_PATH = '/webhook/telegram',
+  WEBHOOK_PAYCREST_PATH = '/webhook/paycrest',
+  WEBHOOK_BLOCKRADAR_PATH = '/webhook/blockradar',
+  WEBHOOK_DOMAIN,
+  PORT = 4000,
+  BLOCKRADAR_BASE_API_KEY,
+  BLOCKRADAR_BNB_API_KEY,
+  BLOCKRADAR_POLYGON_API_KEY,
+  MAX_WALLETS = 5,
+} = process.env;
+
+// =================== Validations ===================
+if (!BOT_TOKEN || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !WEBHOOK_DOMAIN || !PAYSTACK_API_KEY) {
+  logger.error('Missing required environment variables. Please check your .env file.');
+  process.exit(1);
+}
 
 // =================== Initialize Express App ===================
 const app = express();
-const PORT = process.env.PORT || 3000;
 
-// =================== Configuration Variables ===================
-// Replace with your actual values
-const ADMIN_IDS = '123456789,987654321'; // Comma-separated Telegram user IDs of admins
-const PAYCREST_RATE_API_URL = 'https://api.paycrest.com/v1/rates'; // Example URL
-const PAYCREST_API_KEY = 'YOUR_PAYCREST_API_KEY';
-const PAYCREST_CLIENT_SECRET = 'YOUR_PAYCREST_CLIENT_SECRET';
-const PERSONAL_CHAT_ID = 'YOUR_TELEGRAM_PERSONAL_CHAT_ID'; // For admin notifications
+// =================== Initialize Telegraf Bot ===================
+const bot = new Telegraf(BOT_TOKEN);
 
-// Webhook paths
-const WEBHOOK_PATH = '/webhook/telegram';
-const WEBHOOK_BLOCKRADAR_PATH = '/webhook/blockradar';
-const WEBHOOK_PAYCREST_PATH = '/webhook/paycrest';
+// =================== Set Webhook ===================
+bot.telegram.setWebhook(`${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`)
+  .then(() => {
+    logger.info(`Webhook set to ${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`);
+  })
+  .catch((err) => {
+    logger.error(`Failed to set webhook: ${err.message}`);
+  });
 
-// Maximum number of wallets per user
-const MAX_WALLETS = 5;
+// =================== Verify Webhook ===================
+bot.telegram.getWebhookInfo()
+  .then((info) => {
+    logger.info(`Current webhook info: ${JSON.stringify(info, null, 2)}`);
+  })
+  .catch((err) => {
+    logger.error(`Failed to get webhook info: ${err.message}`);
+  });
 
-// =================== Utility Functions ===================
-/**
- * Retrieves the user's state from Firestore.
- * @param {string} userId - Telegram user ID.
- * @returns {object} - User state object.
- */
-async function getUserState(userId) {
-  const userRef = db.collection('users').doc(userId);
-  const doc = await userRef.get();
-  if (!doc.exists) {
-    // Initialize user state if not exists
-    await userRef.set({
-      firstName: 'Valued User',
-      wallets: [],
-      walletAddresses: []
-    });
-    return { firstName: 'Valued User', wallets: [], walletAddresses: [] };
+// =================== Define Bank List ===================
+const bankList = [
+  { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
+  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
+  { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
+  { name: 'OPay', code: '999992', aliases: ['opay', 'opay nigeria', 'opaymfb', 'opay microfinance'], paycrestInstitutionCode: 'OPAYNGPC' },
+  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'], paycrestInstitutionCode: 'PALMNGPC' },
+  { name: 'Paystack-Titan MFB', code: '999992', aliases: ['paystack', 'paystack mfb', 'paystack-titan mfb'], paycrestInstitutionCode: 'PAYTNGPC' },
+  { name: 'Moniepoint MFB', code: '999993', aliases: ['moniepoint', 'moniepoint mfb', 'moniepoint nigeria'], paycrestInstitutionCode: 'MONINGPC' },
+  { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' },
+  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZENITHNGLA' },
+  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'gt bank nigeria'], paycrestInstitutionCode: 'GTBNGLA' },
+  { name: 'First Bank of Nigeria', code: '011', aliases: ['first bank', 'first bank of nigeria', 'fbn', 'firstbank'], paycrestInstitutionCode: 'FBNNGLA' },
+  { name: 'UBA', code: '032', aliases: ['uba', 'united bank for africa', 'uba nigeria'], paycrestInstitutionCode: 'UBANGPC' },
+  { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGPC' },
+];
+
+// =================== Define Supported Chains ===================
+const chains = {
+  Base: {
+    id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
+    key: BLOCKRADAR_BASE_API_KEY,
+    apiUrl: 'https://api.blockradar.co/v1/wallets/e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1/addresses',
+    supportedAssets: ['USDC', 'USDT'],
+    network: 'Base',
+    assets: {
+      USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
+      USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
+    }
+  },
+  Polygon: {
+    id: 'f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a',
+    key: BLOCKRADAR_POLYGON_API_KEY,
+    apiUrl: 'https://api.blockradar.co/v1/wallets/f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a/addresses',
+    supportedAssets: ['USDC', 'USDT'],
+    network: 'Polygon',
+    assets: {
+      USDC: 'f348e8e3-e0b4-4704-857e-c274ef000c00',
+      USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1',
+    }
+  },
+  'BNB Smart Chain': {
+    id: '7a844e91-5740-4589-9695-c74411adec7e',
+    key: BLOCKRADAR_BNB_API_KEY,
+    apiUrl: 'https://api.blockradar.co/v1/wallets/7a844e91-5740-4589-9695-c74411adec7e/addresses',
+    supportedAssets: ['USDT', 'USDC'],
+    network: 'BNB Smart Chain',
+    assets: {
+      USDC: 'ff479231-0dbb-4760-b695-e219a50934af',
+      USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb',
+    }
   }
-  return doc.data();
+};
+
+// =================== Chain Mapping ===================
+const chainMapping = {
+  'base': 'Base',
+  'polygon': 'Polygon',
+  'bnb smart chain': 'BNB Smart Chain',
+  'bnb smartchain': 'BNB Smart Chain',
+  'bnb chain': 'BNB Smart Chain',
+  'bnb': 'BNB Smart Chain',
+};
+
+// =================== Initialize Fuse.js for Bank Matching ===================
+const fuse = new Fuse(bankList, {
+  keys: ['aliases'],
+  threshold: 0.3, // Adjusted threshold for better matching
+  includeScore: true
+});
+
+/**
+ * Matches user input to a bank from the bankList with flexible matching.
+ * @param {string} input - User input for bank name.
+ * @returns {object|null} - Returns the matched bank object or null if not found.
+ */
+function matchBank(input) {
+  const normalizedInput = input.trim().toLowerCase();
+
+  // Check if input is purely numeric (likely an account number)
+  if (/^\d+$/.test(normalizedInput)) {
+    return null; // Invalid as a bank name
+  }
+
+  // First, try exact match on aliases
+  const exactMatch = bankList.find(bank => bank.aliases.some(alias => alias.toLowerCase() === normalizedInput));
+  if (exactMatch) return exactMatch;
+
+  // If no exact match, use Fuse.js for fuzzy matching
+  const result = fuse.search(normalizedInput);
+  if (result.length > 0) {
+    // You can adjust the criteria here based on score or return the best match
+    return result[0].item;
+  }
+
+  return null;
 }
 
 /**
- * Updates the user's state in Firestore.
- * @param {string} userId - Telegram user ID.
- * @param {object} data - Data to update.
+ * Maps asset and chain names to Paycrest-compatible identifiers.
+ * @param {string} asset - Asset symbol (USDC/USDT).
+ * @param {string} chainName - Name of the blockchain network.
+ * @returns {object|null} - Mapped token and network or null if unsupported.
  */
-async function updateUserState(userId, data) {
-  const userRef = db.collection('users').doc(userId);
-  await userRef.update(data);
+function mapToPaycrest(asset, chainName) {
+  if (!['USDC', 'USDT'].includes(asset)) return null;
+
+  let token = asset.toUpperCase(); // 'USDC' or 'USDT'
+  let network;
+  const chainKey = chainMapping[chainName.toLowerCase()];
+  if (!chainKey) {
+    logger.error(`No mapping found for chain name: ${chainName}`);
+    return null;
+  }
+  if (/polygon/i.test(chainKey)) network = 'polygon';
+  else if (/base/i.test(chainKey)) network = 'base';
+  else if (/bnb-smart-chain/i.test(chainKey)) network = 'bnb-smart-chain';
+  else return null;
+  return { token, network };
+}
+
+/**
+ * Calculates the payout amount in Naira based on the exchange rate.
+ * @param {string} asset - Asset symbol (USDC/USDT).
+ * @param {number} amount - Amount in asset.
+ * @returns {number} - Calculated payout in Naira.
+ */
+function calculatePayout(asset, amount) {
+  const rate = exchangeRates[asset];
+  if (!rate) {
+    throw new Error(`Unsupported asset received: ${asset}`);
+  }
+  return parseFloat((amount * rate).toFixed(2)); // Return as number
+}
+
+/**
+ * Calculates the amount earned in Naira based on asset and amount.
+ * @param {string} asset - Asset symbol.
+ * @param {number} amount - Amount in asset.
+ * @returns {number} - Amount earned in Naira.
+ */
+function calculateAmountEarnedInNaira(asset, amount) {
+  return calculatePayout(asset, amount);
 }
 
 /**
  * Generates a unique reference ID.
- * @returns {string} - Reference ID.
+ * @returns {string} - Generated reference ID.
  */
 function generateReferenceId() {
-  return 'DP' + Date.now() + crypto.randomBytes(4).toString('hex').toUpperCase();
+  return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
 }
 
 /**
- * Calculates payout in NGN based on asset and amount.
- * @param {string} asset - Asset symbol (e.g., USDC).
- * @param {number} amount - Amount deposited.
- * @returns {number} - Payout amount in NGN.
- */
-function calculatePayout(asset, amount) {
-  const rate = exchangeRates[asset] || 0;
-  return rate * amount;
-}
-
-/**
- * Matches bank name using fuzzy matching or predefined list.
- * @param {string} input - User input for bank name.
- * @returns {object|null} - Matched bank object or null.
- */
-function matchBank(input) {
-  const bankList = [
-    { name: 'Access Bank', code: '044', paycrestInstitutionCode: 'ACCESS' },
-    { name: 'PalmPay', code: 'PMPAY', paycrestInstitutionCode: 'PALMPAY' },
-    // Add more banks as needed
-  ];
-  
-  const normalizedInput = input.trim().toLowerCase();
-  return bankList.find(bank => bank.name.toLowerCase() === normalizedInput) || null;
-}
-
-/**
- * Verifies the bank account using external API.
+ * Verifies bank account details using Paystack API.
  * @param {string} accountNumber - Bank account number.
  * @param {string} bankCode - Bank code.
  * @returns {object} - Verification result.
  */
 async function verifyBankAccount(accountNumber, bankCode) {
-  // Placeholder for actual verification logic
-  // For example, integrate with a bank verification API
-  // Returning a mock response for demonstration
-  return {
-    data: {
-      account_name: 'ajibola margaret adunbi'
-    }
-  };
+  try {
+    const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
+      params: { account_number: accountNumber, bank_code: bankCode },
+      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
+    });
+    return response.data;
+  } catch (error) {
+    logger.error(`Error verifying bank account (${accountNumber}, ${bankCode}): ${error.response ? error.response.data.message : error.message}`);
+    throw new Error('Failed to verify bank account. Please try again later.');
+  }
 }
 
 /**
- * Creates a Paycrest order.
+ * Creates a Paycrest order for off-ramping.
  * @param {string} userId - Telegram user ID.
  * @param {number} amount - Amount in asset.
- * @param {string} asset - Asset symbol.
- * @param {string} chain - Blockchain name.
- * @param {object} bankDetails - User's bank details.
- * @param {string} returnAddress - Address to return funds if needed.
- * @returns {object} - Paycrest order details.
+ * @param {string} token - Asset token.
+ * @param {string} network - Blockchain network.
+ * @param {object} recipientDetails - Bank details.
+ * @param {string} userSendAddress - User's send address.
+ * @returns {object} - Paycrest order data.
  */
-async function createPaycrestOrder(userId, amount, asset, chain, bankDetails, returnAddress) {
-  // Placeholder for actual Paycrest order creation logic
-  // Replace with actual API integration
-  // Returning a mock order for demonstration
-  return {
-    id: generateReferenceId(),
-    receiveAddress: '0xABCDEF1234567890',
-  };
+async function createPaycrestOrder(userId, amount, token, network, recipientDetails, userSendAddress) {
+  try {
+    const paycrestMapping = mapToPaycrest(token, network);
+    if (!paycrestMapping) {
+      throw new Error('No Paycrest mapping for the selected asset/chain.');
+    }
+
+    const bank = bankList.find(b => b.name.toLowerCase() === recipientDetails.bankName.toLowerCase());
+    if (!bank || !bank.paycrestInstitutionCode) {
+      const errorMsg = `No Paycrest institution code found for bank: ${recipientDetails.bankName}`;
+      logger.error(errorMsg);
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ ${errorMsg} for user ${userId}.`);
+      throw new Error(errorMsg);
+    }
+
+    const recipient = {
+      institution: bank.paycrestInstitutionCode,
+      accountIdentifier: recipientDetails.accountNumber,
+      accountName: recipientDetails.accountName,
+      memo: `Payment from DirectPay`,
+      providerId: "" // Update if necessary
+    };
+
+    const rate = exchangeRates[token];
+    if (!rate) {
+      throw new Error(`Exchange rate for ${token} not available.`);
+    }
+
+    const orderPayload = {
+      amount: String(amount),
+      rate: String(rate),
+      network: paycrestMapping.network,
+      token: paycrestMapping.token,
+      recipient: recipient,
+      returnAddress: userSendAddress || PAYCREST_RETURN_ADDRESS,
+      feePercent: 2, // Example fee percentage
+    };
+
+    const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
+      headers: {
+        'API-Key': PAYCREST_API_KEY,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    if (orderResp.data.status !== 'success') {
+      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
+    }
+
+    return orderResp.data.data; // Contains id, amount, token, network, receiveAddress, etc.
+  } catch (err) {
+    logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
+    throw new Error('Failed to create Paycrest order.');
+  }
 }
 
 /**
- * Withdraws funds from Blockradar to Paycrest.
- * @param {string} chain - Blockchain name.
+ * Withdraws from Blockradar to Paycrest receive address.
+ * @param {string} chain - Blockchain network.
  * @param {string} assetId - Asset ID in Blockradar.
- * @param {string} receiveAddress - Address to send funds to.
+ * @param {string} address - Destination address.
  * @param {number} amount - Amount to withdraw.
- * @param {string} orderId - Paycrest order ID.
+ * @param {string} reference - Reference ID.
  * @param {object} metadata - Additional metadata.
+ * @returns {object} - Withdrawal response.
  */
-async function withdrawFromBlockradar(chain, assetId, receiveAddress, amount, orderId, metadata) {
-  // Placeholder for actual Blockradar withdrawal logic
-  // Replace with actual API integration
-  // For demonstration, we'll assume success
-  logger.info(`Withdrawing ${amount} of asset ${assetId} from ${chain} to ${receiveAddress} for order ${orderId}`);
+async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
+  try {
+    const chainKey = chainMapping[chain.toLowerCase()];
+    if (!chainKey) {
+      throw new Error(`Unsupported or unknown chain: ${chain}`);
+    }
+
+    const chainData = chains[chainKey];
+    if (!chainData) {
+      throw new Error(`Chain data not found for: ${chainKey}`);
+    }
+
+    const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`, {
+      address,
+      amount: String(amount),
+      assetId,
+      reference,
+      metadata
+    }, {
+      headers: {
+        'x-api-key': chainData.key,
+        'Content-Type': 'application/json'
+      }
+    });
+    const data = resp.data;
+    if (data.statusCode !== 200) {
+      throw new Error(`Blockradar withdrawal error: ${JSON.stringify(data)}`);
+    }
+    return data;
+  } catch (error) {
+    logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
+    throw error;
+  }
 }
 
 /**
- * Maps asset and chain to Paycrest specific details.
- * @param {string} asset - Asset symbol.
- * @param {string} chain - Blockchain name.
- * @returns {object|null} - Mapped Paycrest details or null.
+ * Retrieves user state from Firestore.
+ * @param {string} userId - Telegram user ID.
+ * @returns {object} - User state data.
  */
-function mapToPaycrest(asset, chain) {
-  // Placeholder for actual mapping logic
-  // Replace with actual mappings as per Paycrest requirements
-  return {
-    asset,
-    chain
-  };
+async function getUserState(userId) {
+  try {
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      await db.collection('users').doc(userId).set({
+        firstName: '', // Will be updated upon first interaction
+        wallets: [],
+        walletAddresses: [],
+        hasReceivedDeposit: false, // Assuming this tracks deposits
+        awaitingBroadcastMessage: false, // For admin broadcast
+        pin: null, // To store hashed PIN
+      });
+      return {
+        firstName: '',
+        wallets: [],
+        walletAddresses: [],
+        hasReceivedDeposit: false,
+        awaitingBroadcastMessage: false,
+        pin: null,
+      };
+    } else {
+      const data = userDoc.data();
+      return {
+        firstName: data.firstName || '',
+        wallets: data.wallets || [],
+        walletAddresses: data.walletAddresses || [],
+        hasReceivedDeposit: data.hasReceivedDeposit || false,
+        awaitingBroadcastMessage: data.awaitingBroadcastMessage || false,
+        pin: data.pin || null,
+      };
+    }
+  } catch (error) {
+    logger.error(`Error getting user state for ${userId}: ${error.message}`);
+    throw error;
+  }
 }
 
 /**
- * Calculates amount earned in NGN.
- * @param {string} asset - Asset symbol.
- * @param {number} amount - Amount in asset.
- * @returns {number} - Amount in NGN.
+ * Updates user state in Firestore.
+ * @param {string} userId - Telegram user ID.
+ * @param {object} newState - New state data.
  */
-function calculateAmountEarnedInNaira(asset, amount) {
-  const rate = exchangeRates[asset] || 0;
-  return rate * amount;
+async function updateUserState(userId, newState) {
+  try {
+    await db.collection('users').doc(userId).update(newState);
+  } catch (error) {
+    logger.error(`Error updating user state for ${userId}: ${error.message}`);
+    throw error;
+  }
 }
 
-// =================== Initialize Scenes ===================
-const { BaseScene, Stage } = Scenes;
+/**
+ * Generates a wallet address using Blockradar API.
+ * @param {string} chain - Blockchain network.
+ * @returns {string} - Generated wallet address.
+ */
+async function generateWallet(chain) {
+  try {
+    const chainData = chains[chain];
+    if (!chainData) {
+      throw new Error(`Unsupported chain: ${chain}`);
+    }
+
+    const response = await axios.post(
+      chainData.apiUrl,
+      { name: `DirectPay_User_Wallet_${chain}` },
+      { headers: { 'x-api-key': chainData.key } }
+    );
+
+    const walletAddress = response.data.data.address;
+    if (!walletAddress) {
+      throw new Error('Wallet address not returned from Blockradar.');
+    }
+    return walletAddress;
+  } catch (error) {
+    logger.error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
+    throw new Error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
+  }
+}
+
+/**
+ * Generates a transaction receipt message.
+ * @param {object} txData - Transaction data.
+ * @returns {string} - Formatted receipt message.
+ */
+function generateReceipt(txData) {
+  let receiptMessage = `🧾 *Transaction Receipt*\n\n`;
+  receiptMessage += `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n`;
+  receiptMessage += `*Amount:* ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}\n`;
+  receiptMessage += `*Status:* ${txData.status || 'Pending'}\n`;
+  receiptMessage += `*Exchange Rate:* ₦${exchangeRates[txData.asset] || 'N/A'} per ${txData.asset || 'N/A'}\n`;
+  receiptMessage += `*Date:* ${txData.timestamp ? new Date(txData.timestamp).toLocaleString() : 'N/A'}\n`;
+  receiptMessage += `*Chain:* ${txData.chain || 'N/A'}\n`;
+
+  return receiptMessage;
+}
 
 // =================== Define Scenes ===================
 
-// --- Feedback Scene ---
+// =================== Feedback Scene ===================
 const feedbackScene = new Scenes.WizardScene(
   'feedback_scene',
-  // Step 0: Ask for feedback
+  // Step 1: Ask for Feedback
   async (ctx) => {
     try {
-      await ctx.reply('💬 *We value your feedback!*\n\nPlease share your thoughts or suggestions about our service:');
+      await ctx.reply('💬 *We Value Your Feedback*\n\nPlease share your thoughts or suggestions to help us improve DirectPay:');
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Error in feedback_scene Step 0: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while collecting feedback. Please try again later.');
+      logger.error(`Error in feedback_scene Step 1: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
       ctx.scene.leave();
     }
   },
-  // Step 1: Receive feedback and thank user
+  // Step 2: Confirm Receipt of Feedback
   async (ctx) => {
     try {
       const feedback = ctx.message.text.trim();
       const userId = ctx.from.id.toString();
-    
-      // Store feedback in Firestore
+
+      if (!feedback) {
+        await ctx.replyWithMarkdown('❌ Feedback cannot be empty. Please provide your feedback:');
+        return; // Remain in the current step
+      }
+
       await db.collection('feedback').add({
         userId,
         feedback,
         timestamp: admin.firestore.FieldValue.serverTimestamp(),
       });
-    
-      await ctx.reply('🙏 *Thank you for your feedback!* We appreciate your input.');
+      await ctx.reply('🙏 Thank you for your feedback!');
       ctx.scene.leave();
     } catch (error) {
-      logger.error(`Error in feedback_scene Step 1: ${error.message}`);
+      logger.error(`Error in feedback_scene Step 2: ${error.message}`);
       await ctx.replyWithMarkdown('⚠️ An error occurred while saving your feedback. Please try again later.');
       ctx.scene.leave();
     }
   }
 );
 
-// --- Create PIN Scene ---
+// =================== Create PIN Scene ===================
 const createPinScene = new Scenes.WizardScene(
   'create_pin_scene',
-  // Step 0: Ask user to enter PIN digits via inline keyboard
+  // Step 1: Enter PIN
   async (ctx) => {
     try {
-      ctx.wizard.state.enterPinDigits = [];
-      await ctx.reply('🔒 *Set Up Your 4-Digit PIN*', getPinKeyboard());
+      ctx.wizard.state.pinDigits = [];
+      await ctx.replyWithMarkdown('🔒 *Create a 4-digit PIN*', getPinKeyboard());
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Error in create_pin_scene Step 0: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while setting up your PIN. Please try again later.');
+      logger.error(`Error in create_pin_scene Step 1: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
       ctx.scene.leave();
     }
   },
-  // Step 1: Verify entered PIN
+  // Step 2: Confirm PIN
   async (ctx) => {
     try {
-      if (ctx.wizard.state.enterPinDigits.length !== 4) {
-        await ctx.replyWithMarkdown('⚠️ *Invalid PIN.* Please enter exactly 4 digits.');
+      if (ctx.wizard.state.pinDigits.length < 4) {
+        return; // Wait until 4 digits are entered
+      }
+
+      ctx.wizard.state.tempPin = ctx.wizard.state.pinDigits.join('');
+      ctx.wizard.state.pinDigits = []; // Reset for confirmation
+
+      await ctx.replyWithMarkdown('🔄 *Please confirm your 4-digit PIN*', getPinKeyboard());
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Error in create_pin_scene Step 2: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+      ctx.scene.leave();
+    }
+  },
+  // Step 3: Verify PIN
+  async (ctx) => {
+    try {
+      if (ctx.wizard.state.pinDigits.length < 4) {
+        return; // Wait until 4 digits are entered
+      }
+
+      const confirmedPin = ctx.wizard.state.pinDigits.join('');
+      const originalPin = ctx.wizard.state.tempPin;
+
+      if (confirmedPin !== originalPin) {
+        await ctx.reply('❌ *PINs do not match.* Please start the PIN creation process again.');
+        ctx.wizard.state.pinDigits = [];
+        ctx.wizard.state.tempPin = null;
+        ctx.scene.leave();
         return;
       }
-    
-      const enteredPin = ctx.wizard.state.enterPinDigits.join('');
-      ctx.wizard.state.enterPinDigits = []; // Reset
-    
-      const userId = ctx.from.id.toString();
-      const userState = await getUserState(userId);
-    
-      if (userState.pin) {
-        await ctx.reply('⚠️ *A PIN is already set. If you wish to change it, please contact support.*');
-        return ctx.scene.leave();
-      }
-    
+
       // Hash the PIN before storing
-      const bcrypt = require('bcrypt');
-      const hashedPin = await bcrypt.hash(enteredPin, 10);
-    
-      // Update user state with hashed PIN
-      await updateUserState(userId, {
-        pin: hashedPin
-      });
-    
-      await ctx.reply('✅ *PIN set successfully!* Your PIN is now active.');
+      const hashedPin = await bcrypt.hash(originalPin, 10);
+
+      // Store the hashed PIN in Firestore
+      const userId = ctx.from.id.toString();
+      await updateUserState(userId, { pin: hashedPin });
+
+      await ctx.reply('✅ *PIN has been set successfully!* Your PIN is required to edit bank details.');
       ctx.scene.leave();
     } catch (error) {
-      logger.error(`Error in create_pin_scene Step 1: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while verifying your PIN. Please try again later.');
+      logger.error(`Error in create_pin_scene Step 3: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while setting your PIN. Please try again later.');
       ctx.scene.leave();
     }
   }
 );
 
-// --- Enter PIN Verification Scene ---
+// Handle PIN Input Actions in createPinScene
+createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
+  try {
+    const digit = ctx.match[1];
+    ctx.wizard.state.pinDigits.push(digit);
+    await ctx.answerCbQuery();
+
+    // Check if 4 digits have been entered
+    if (ctx.wizard.state.pinDigits.length === 4) {
+      await ctx.wizard.next(); // Move to confirmation step
+      await ctx.scene.step(1); // Trigger the next step
+    }
+  } catch (error) {
+    logger.error(`Error handling PIN digit input: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+    ctx.scene.leave();
+  }
+});
+
+createPinScene.action('pin_cancel', async (ctx) => {
+  try {
+    await ctx.reply('❌ PIN creation has been canceled.');
+    ctx.wizard.state.pinDigits = [];
+    ctx.scene.leave();
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error handling PIN cancel: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+  }
+});
+
+// =================== Enter PIN Scene ===================
 const enterPinScene = new Scenes.WizardScene(
   'enter_pin_scene',
-  // Step 0: Ask user to enter PIN digits via inline keyboard
+  // Step 1: Enter PIN
   async (ctx) => {
     try {
       ctx.wizard.state.enterPinDigits = [];
-      await ctx.reply('🔒 *Enter Your 4-Digit PIN*', getPinKeyboard());
+      await ctx.reply('🔒 *Enter your 4-digit PIN*', getPinKeyboard());
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Error in enter_pin_scene Step 0: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while entering your PIN. Please try again later.');
+      logger.error(`Error in enter_pin_scene Step 1: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
       ctx.scene.leave();
     }
   },
-  // Step 1: Verify entered PIN
+  // Step 2: Verify PIN
   async (ctx) => {
     try {
-      if (ctx.wizard.state.enterPinDigits.length !== 4) {
-        await ctx.replyWithMarkdown('⚠️ *Invalid PIN.* Please enter exactly 4 digits.');
-        return;
+      if (ctx.wizard.state.enterPinDigits.length < 4) {
+        return; // Wait until 4 digits are entered
       }
-    
+
       const enteredPin = ctx.wizard.state.enterPinDigits.join('');
       ctx.wizard.state.enterPinDigits = []; // Reset
-    
+
       const userId = ctx.from.id.toString();
       const userState = await getUserState(userId);
-    
+
       if (!userState.pin) {
         await ctx.reply('⚠️ No PIN found. Please set a PIN first.');
         ctx.scene.leave();
         return;
       }
-    
-      const bcrypt = require('bcrypt');
+
       const isMatch = await bcrypt.compare(enteredPin, userState.pin);
       if (isMatch) {
         ctx.wizard.state.pinVerified = true;
@@ -348,14 +668,45 @@ const enterPinScene = new Scenes.WizardScene(
         // Optionally, limit the number of attempts
       }
     } catch (error) {
-      logger.error(`Error in enter_pin_scene Step 1: ${error.message}`);
+      logger.error(`Error in enter_pin_scene Step 2: ${error.message}`);
       await ctx.replyWithMarkdown('⚠️ An error occurred while verifying your PIN. Please try again later.');
       ctx.scene.leave();
     }
   }
 );
 
-// --- Bank Linking Scene ---
+// Handle PIN Input Actions in enterPinScene
+enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
+  try {
+    const digit = ctx.match[1];
+    ctx.wizard.state.enterPinDigits.push(digit);
+    await ctx.answerCbQuery();
+
+    // Check if 4 digits have been entered
+    if (ctx.wizard.state.enterPinDigits.length === 4) {
+      await ctx.wizard.next(); // Move to verification step
+      await ctx.scene.step(1); // Trigger the next step
+    }
+  } catch (error) {
+    logger.error(`Error handling PIN digit input in enterPinScene: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+    ctx.scene.leave();
+  }
+});
+
+enterPinScene.action('pin_cancel', async (ctx) => {
+  try {
+    await ctx.reply('❌ PIN entry has been canceled.');
+    ctx.wizard.state.enterPinDigits = [];
+    ctx.scene.leave();
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error handling PIN cancel in enterPinScene: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+  }
+});
+
+// =================== Bank Linking Scene ===================
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   // Step 0: Select Wallet to Link (if multiple unlinked wallets)
@@ -366,23 +717,23 @@ const bankLinkingScene = new Scenes.WizardScene(
       const unlinkedWallets = userState.wallets
         .map((wallet, index) => ({ wallet, index }))
         .filter(w => !w.wallet.bank);
-  
+
       if (unlinkedWallets.length === 0) {
         await ctx.replyWithMarkdown('✅ *All your wallets have linked bank accounts.*');
         return ctx.scene.leave();
       }
-  
+
       if (unlinkedWallets.length === 1) {
         ctx.wizard.state.bankLinkingWalletIndex = unlinkedWallets[0].index;
         await ctx.replyWithMarkdown(`🏦 *Linking Bank Account for Wallet ${unlinkedWallets[0].index + 1} (${unlinkedWallets[0].wallet.chain}):*\n\nPlease enter your bank name (e.g., Access Bank):`);
         return ctx.wizard.next();
       }
-  
+
       // If multiple unlinked wallets, ask user to select one
       const walletButtons = unlinkedWallets.map(w => [
         Markup.button.callback(`Wallet ${w.index + 1} - ${w.wallet.chain}`, `select_wallet_${w.index}`)
       ]);
-  
+
       await ctx.replyWithMarkdown('🏦 *You have multiple unlinked wallets.*\n\nPlease select a wallet to link your bank account:', Markup.inlineKeyboard(walletButtons));
       return ctx.wizard.next();
     } catch (error) {
@@ -393,15 +744,18 @@ const bankLinkingScene = new Scenes.WizardScene(
   },
   // Step 1: Enter Bank Name
   async (ctx) => {
-    // Handled by the text handler below
+    // This step is handled by the 'text' handler below
+    return;
   },
   // Step 2: Enter Account Number
   async (ctx) => {
-    // Handled by the text handler below
+    // This step is handled by the 'text' handler below
+    return;
   },
   // Step 3: Confirmation
   async (ctx) => {
-    // Handled by the action handlers below
+    // This step is handled by the 'text' handler below
+    return;
   }
 );
 
@@ -425,101 +779,110 @@ bankLinkingScene.action(/select_wallet_(\d+)/, async (ctx) => {
     logger.error(`Error selecting wallet for bank linking for user ${ctx.from.id}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
     ctx.scene.leave();
+    ctx.answerCbQuery();
   }
 });
 
-// Handle Bank Name Input
+// Handle bank name and account number inputs based on the current step
 bankLinkingScene.on('text', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const currentStep = ctx.wizard.cursor; // 0-based index
-  const input = ctx.message.text.trim();
+  try {
+    const userId = ctx.from.id.toString();
+    const currentStep = ctx.wizard.cursor; // 0-based index
+    const input = ctx.message.text.trim();
 
-  if (currentStep === 1) { // Step 1: Enter Bank Name
-    logger.info(`User ${userId} entered bank name: "${input}"`);
+    if (currentStep === 1) { // Step 1: Enter Bank Name
+      logger.info(`User ${userId} entered bank name: "${input}"`);
 
-    // Check if the input is purely numeric (likely an account number)
-    if (/^\d+$/.test(input)) {
-      await ctx.replyWithMarkdown(
-        '❌ *Invalid input.* You entered a numeric value, which appears to be an account number. Please enter a valid bank name (e.g., Access Bank):'
-      );
-      return; // Remain in the current step
-    }
-
-    const matchedBank = matchBank(input);
-
-    if (!matchedBank) {
-      await ctx.replyWithMarkdown(
-        '❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' +
-        bankList.map(b => `• ${b.name}`).join('\n')
-      );
-      return; // Remain in the current step
-    }
-
-    ctx.wizard.state.bankData = {
-      bankName: matchedBank.name,
-      bankCode: matchedBank.code,
-      paycrestInstitutionCode: matchedBank.paycrestInstitutionCode,
-    };
-
-    await ctx.replyWithMarkdown('🔢 *Please enter your 10-digit bank account number:*');
-    return ctx.wizard.next();
-  }
-
-  if (currentStep === 2) { // Step 2: Enter Account Number
-    logger.info(`User ${userId} entered account number: "${input}"`);
-
-    if (!/^\d{10}$/.test(input)) {
-      await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
-      return; // Remain in the same step
-    }
-
-    ctx.wizard.state.bankData.accountNumber = input;
-
-    // Verify Bank Account
-    await ctx.replyWithMarkdown('🔄 *Verifying your bank details...*');
-
-    try {
-      const verificationResult = await verifyBankAccount(ctx.wizard.state.bankData.accountNumber, ctx.wizard.state.bankData.bankCode);
-
-      if (!verificationResult || !verificationResult.data) {
-        throw new Error('Invalid verification response.');
+      // Check if the input is purely numeric (likely an account number)
+      if (/^\d+$/.test(input)) {
+        await ctx.replyWithMarkdown(
+          '❌ *Invalid input.* You entered a numeric value, which appears to be an account number. Please enter a valid bank name (e.g., Access Bank):'
+        );
+        return; // Remain in the current step
       }
 
-      const accountName = verificationResult.data.account_name;
+      const matchedBank = matchBank(input);
 
-      if (!accountName) {
-        throw new Error('Unable to retrieve account name.');
+      if (!matchedBank) {
+        await ctx.replyWithMarkdown(
+          '❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' +
+          bankList.map(b => `• ${b.name}`).join('\n')
+        );
+        return; // Remain in the current step
       }
 
-      ctx.wizard.state.bankData.accountName = accountName;
+      ctx.wizard.state.bankData = {
+        bankName: matchedBank.name,
+        bankCode: matchedBank.code,
+        paycrestInstitutionCode: matchedBank.paycrestInstitutionCode,
+      };
 
-      // Ask for Confirmation
-      await ctx.replyWithMarkdown(
-        `🏦 *Bank Account Verification*\n\n` +
-        `Please confirm your bank details:\n` +
-        `• *Bank Name:* ${ctx.wizard.state.bankData.bankName}\n` +
-        `• *Account Number:* ${ctx.wizard.state.bankData.accountNumber}\n` +
-        `• *Account Holder:* ${accountName}\n\n` +
-        `Is this information correct?`,
-        Markup.inlineKeyboard([
-          [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
-          [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
-          [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')],
-        ])
-      );
+      await ctx.replyWithMarkdown('🔢 *Please enter your 10-digit bank account number:*');
       return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ *Failed to verify your bank account.* Please ensure your details are correct or try again later.');
-      ctx.scene.leave();
     }
-  }
 
-  if (currentStep === 3) { // Step 3: Confirmation
-    // No text input expected in this step
-    await ctx.replyWithMarkdown('❌ *Invalid input.* Please use the buttons to confirm or cancel.');
+    if (currentStep === 2) { // Step 2: Enter Account Number
+      logger.info(`User ${userId} entered account number: "${input}"`);
+
+      if (!/^\d{10}$/.test(input)) {
+        await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
+        return; // Remain in the same step
+      }
+
+      ctx.wizard.state.bankData.accountNumber = input;
+
+      // Verify Bank Account
+      await ctx.replyWithMarkdown('🔄 *Verifying your bank details...*');
+
+      try {
+        const verificationResult = await verifyBankAccount(ctx.wizard.state.bankData.accountNumber, ctx.wizard.state.bankData.bankCode);
+
+        if (!verificationResult || !verificationResult.data) {
+          throw new Error('Invalid verification response.');
+        }
+
+        const accountName = verificationResult.data.account_name;
+
+        if (!accountName) {
+          throw new Error('Unable to retrieve account name.');
+        }
+
+        ctx.wizard.state.bankData.accountName = accountName;
+
+        // Ask for Confirmation
+        await ctx.replyWithMarkdown(
+          `🏦 *Bank Account Verification*\n\n` +
+          `Please confirm your bank details:\n` +
+          `• *Bank Name:* ${ctx.wizard.state.bankData.bankName}\n` +
+          `• *Account Number:* ${ctx.wizard.state.bankData.accountNumber}\n` +
+          `• *Account Holder:* ${accountName}\n\n` +
+          `Is this information correct?`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
+            [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
+            [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')],
+          ])
+        );
+        return ctx.wizard.next();
+      } catch (error) {
+        logger.error(`Error verifying bank account for user ${userId}: ${error.message}`);
+        await ctx.replyWithMarkdown('❌ *Failed to verify your bank account.* Please ensure your details are correct or try again later.');
+        ctx.scene.leave();
+      }
+    }
+
+    if (currentStep === 3) { // Step 3: Confirmation
+      // No text input expected in this step
+      await ctx.replyWithMarkdown('❌ *Invalid input.* Please use the buttons to confirm or cancel.');
+    }
+  } catch (error) {
+    logger.error(`Error in bank_linking_scene on 'text': ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    ctx.scene.leave();
   }
 });
+
+// =================== Confirmation Handlers Within Scene ===================
 
 // Handle confirmation "Yes, Confirm" within the scene
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
@@ -599,13 +962,13 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   }
 });
 
-// --- Edit Bank Details Scene ---
+// =================== Edit Bank Details Scene ===================
 const editBankDetailsScene = new Scenes.WizardScene(
   'edit_bank_details_scene',
   // Step 1: Enter New Bank Name
   async (ctx) => {
     try {
-      const { walletIndex } = ctx.scene.state;
+      const { walletIndex } = ctx.wizard.state;
       ctx.wizard.state.editBankData = {};
       ctx.wizard.state.editBankData.walletIndex = walletIndex;
       ctx.wizard.state.editBankData.step = 1;
@@ -619,19 +982,17 @@ const editBankDetailsScene = new Scenes.WizardScene(
   },
   // Step 2: Enter New Account Number
   async (ctx) => {
-    // Handled by the text handler below
+    // This step is handled by the 'text' handler below
+    return;
   },
   // Step 3: Confirmation
   async (ctx) => {
-    // Handled by the action handlers below
-  },
-  // Step 4: Finalization
-  async (ctx) => {
-    // Handled by the action handlers below
+    // This step is handled by the 'text' handler below
+    return;
   }
 );
 
-// Handle New Bank Name Input
+// Handle new bank name entry in editBankDetailsScene
 editBankDetailsScene.on('text', async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
@@ -711,10 +1072,15 @@ editBankDetailsScene.on('text', async (ctx) => {
         );
         return ctx.wizard.next();
       } catch (error) {
-        logger.error(`Error in edit_bank_details_scene Step 2: ${error.message}`);
+        logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
         await ctx.replyWithMarkdown('❌ *Failed to verify your new bank account.* Please ensure your details are correct or try again later.');
         ctx.scene.leave();
       }
+    }
+
+    if (currentStep === 3) { // Step 3: Confirmation
+      // No text input expected in this step
+      await ctx.replyWithMarkdown('❌ *Invalid input.* Please use the buttons to confirm or cancel.');
     }
   } catch (error) {
     logger.error(`Error in edit_bank_details_scene on 'text': ${error.message}`);
@@ -773,7 +1139,7 @@ editBankDetailsScene.action('confirm_new_bank_no', async (ctx) => {
   try {
     await ctx.reply('🔄 *Let\'s try entering your new bank details again.*\n\nPlease enter your new bank name (e.g., Access Bank):');
     ctx.wizard.state.editBankData = {}; // Reset bank data
-    ctx.wizard.back(); // Go back to new bank name input
+    ctx.scene.reenter();
     ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error in confirm_new_bank_no: ${error.message}`);
@@ -783,7 +1149,7 @@ editBankDetailsScene.action('confirm_new_bank_no', async (ctx) => {
   }
 });
 
-// Handle "Cancel Editing" for new bank details
+// Handle "Cancel Editing"
 editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   try {
     await ctx.reply('❌ *Bank editing has been canceled.*');
@@ -796,7 +1162,7 @@ editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   }
 });
 
-// --- Send Message Scene ---
+// =================== Send Message Scene ===================
 const sendMessageScene = new Scenes.WizardScene(
   'send_message_scene',
   // Step 1: Ask for Recipient User ID
@@ -851,7 +1217,7 @@ const sendMessageScene = new Scenes.WizardScene(
   }
 );
 
-// --- Receipt Generation Scene ---
+// =================== Receipt Generation Scene ===================
 const receiptGenerationScene = new Scenes.WizardScene(
   'receipt_generation_scene',
   // Step 1: Ask for Reference ID
@@ -895,23 +1261,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
-// Function to generate receipt (placeholder)
-function generateReceipt(txData) {
-  return `🧾 **Transaction Receipt**
-
-• **Reference ID:** \`${txData.referenceId}\`
-• **User ID:** ${txData.userId}
-• **Amount Deposited:** ${txData.amount} ${txData.asset}
-• **Payout Amount:** ₦${txData.payout}
-• **Status:** ${txData.status}
-• **Date:** ${new Date(txData.timestamp).toLocaleString()}
-• **Transaction Hash:** \`${txData.transactionHash}\`
-
-🔗 [View on Explorer](https://polygonscan.com/tx/${txData.transactionHash})
-`;
-}
-
-// --- Broadcast Message Scene ---
+// =================== Broadcast Message Scene ===================
 const broadcastMessageScene = new Scenes.WizardScene(
   'broadcast_message_scene',
   // Step 1: Ask for Broadcast Message
@@ -965,12 +1315,15 @@ const broadcastMessageScene = new Scenes.WizardScene(
 );
 
 // =================== Define Admin Panel Scene ===================
+
 /**
  * Admin Panel is handled via action callbacks, no separate scene needed.
  */
 
 // =================== Register All Scenes with Stage ===================
-const stage = new Scenes.Stage([
+const stage = new Scenes.Stage();
+
+stage.register(
   feedbackScene,
   createPinScene,
   enterPinScene,
@@ -978,8 +1331,8 @@ const stage = new Scenes.Stage([
   sendMessageScene,
   receiptGenerationScene,
   editBankDetailsScene,
-  broadcastMessageScene
-]);
+  broadcastMessageScene // Ensure this is defined before registration
+);
 
 // Apply session and stage middleware
 bot.use(session());
@@ -1070,56 +1423,6 @@ const getPinKeyboard = () => Markup.inlineKeyboard([
   [Markup.button.callback('0', 'pin_digit_0'), Markup.button.callback('🔙 Cancel', 'pin_cancel')]
 ]);
 
-// =================== Handle "Pin Input" Actions ===================
-/**
- * Handles PIN digit inputs and cancellation.
- * This should be handled globally to capture PIN inputs during PIN setup and verification.
- */
-bot.action(/pin_digit_(\d)/, async (ctx) => {
-  try {
-    // Determine which scene is currently active
-    const currentScene = ctx.scene.current;
-
-    if (currentScene === 'create_pin_scene' || currentScene === 'enter_pin_scene') {
-      const digit = ctx.match[1];
-      if (!ctx.wizard || !ctx.wizard.state.enterPinDigits) {
-        // Initialize if not present
-        ctx.wizard.state.enterPinDigits = [];
-      }
-      ctx.wizard.state.enterPinDigits.push(digit);
-      await ctx.answerCbQuery();
-
-      // Check if 4 digits have been entered
-      if (ctx.wizard.state.enterPinDigits.length === 4) {
-        await ctx.wizard.next(); // Move to verification step
-        await ctx.scene.step(1); // Trigger the next step
-      }
-    } else {
-      // If not in a PIN-related scene, ignore or handle accordingly
-      await ctx.answerCbQuery();
-    }
-  } catch (error) {
-    logger.error(`Error handling PIN digit input: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-    ctx.answerCbQuery();
-  }
-});
-
-// Handle PIN cancellation
-bot.action('pin_cancel', async (ctx) => {
-  try {
-    await ctx.reply('❌ PIN entry has been canceled.');
-    if (ctx.wizard && ctx.wizard.state.enterPinDigits) {
-      ctx.wizard.state.enterPinDigits = [];
-    }
-    ctx.scene.leave();
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error handling PIN cancel: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-  }
-});
-
 // =================== /start Command ===================
 bot.start(async (ctx) => {
   try {
@@ -1171,32 +1474,6 @@ async function greetUser(ctx) {
   }
 }
 
-// =================== Handle "🏦 Link Bank Account" ===================
-bot.hears('🏦 Link Bank Account', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    // Check if the user is already in the bank_linking_scene
-    if (ctx.scene.current === 'bank_linking_scene') {
-      await ctx.reply('🔄 *You are already in the process of linking a bank account. Please complete the current process before starting a new one.*');
-      return;
-    }
-
-    const userState = await getUserState(userId);
-    const unlinkedWallets = userState.wallets.filter(wallet => !wallet.bank);
-
-    if (unlinkedWallets.length === 0) {
-      await ctx.replyWithMarkdown('✅ *All your wallets have linked bank accounts.*');
-      return;
-    }
-
-    // Enter the bank_linking_scene
-    await ctx.scene.enter('bank_linking_scene');
-  } catch (error) {
-    logger.error(`Error handling "Link Bank Account" for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-  }
-});
-
 // =================== Generate Wallet Handler ===================
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -1241,6 +1518,12 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
     }
 
     const chain = selectedChainKey;
+
+    // Check if the user is already in the bank_linking_scene
+    if (ctx.scene.current === 'bank_linking_scene') {
+      await ctx.reply('🔄 *You are already in the process of linking a bank account. Please complete the current process before starting a new one.*');
+      return ctx.answerCbQuery();
+    }
 
     // Acknowledge the Callback to Remove Loading State
     await ctx.answerCbQuery();
@@ -1474,9 +1757,13 @@ const getSettingsMenu = () =>
 const isAdmin = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
 
 // =================== Rating Handlers ===================
-/**
- * Handles rating selections (1-5 stars) with vertical inline menu
- */
+// Define the feedback options after rating
+const feedbackOptions = Markup.inlineKeyboard([
+  [Markup.button.callback('💬 Give Feedback', 'give_feedback')],
+  [Markup.button.callback('❌ Leave', 'leave_feedback')],
+]);
+
+// Handle rating selections (1-5 stars) with vertical inline menu
 bot.action(/rate_(\d+)/, async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
@@ -1518,14 +1805,6 @@ bot.action(/rate_(\d+)/, async (ctx) => {
   }
 });
 
-/**
- * Defines feedback options after rating.
- */
-const feedbackOptions = Markup.inlineKeyboard([
-  [Markup.button.callback('💬 Give Feedback', 'give_feedback')],
-  [Markup.button.callback('❌ Leave', 'leave_feedback')],
-]);
-
 // Handle 'Give Feedback' button
 bot.action('give_feedback', async (ctx) => {
   try {
@@ -1549,11 +1828,12 @@ bot.action('leave_feedback', async (ctx) => {
   }
 });
 
-// =================== Admin Panel Handlers ===================
+// =================== Bank Linking Scene ===================
+// Already handled above
 
-/**
- * Entry point for Admin Panel
- */
+// =================== Admin Panel ===================
+
+// Entry point for Admin Panel
 bot.action('open_admin_panel', async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
@@ -1562,10 +1842,10 @@ bot.action('open_admin_panel', async (ctx) => {
     }
 
     // Reset session variables if necessary
-    ctx.session.adminMessageId = null;
+    ctx.wizard.state.adminMessageId = null;
 
     const sentMessage = await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
-    ctx.session.adminMessageId = sentMessage.message_id;
+    ctx.wizard.state.adminMessageId = sentMessage.message_id;
   } catch (error) {
     logger.error(`Error opening admin panel for user ${ctx.from.id}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred while opening the admin panel.');
@@ -1761,9 +2041,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
         // Return to the main menu
         await greetUser(ctx);
         // Delete the admin panel message
-        if (ctx.session.adminMessageId) {
-          await ctx.deleteMessage(ctx.session.adminMessageId).catch(() => {});
-          ctx.session.adminMessageId = null;
+        if (ctx.wizard.state.adminMessageId) {
+          await ctx.deleteMessage(ctx.wizard.state.adminMessageId).catch(() => {});
+          ctx.wizard.state.adminMessageId = null;
         }
         ctx.answerCbQuery();
         break;
@@ -1775,68 +2055,6 @@ bot.action(/admin_(.+)/, async (ctx) => {
     logger.error(`Error handling admin action: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
     await ctx.answerCbQuery('⚠️ An error occurred.', { show_alert: true });
-  }
-});
-
-// =================== Settings Menu Actions ===================
-bot.action('settings_generate_wallet', async (ctx) => {
-  try {
-    await ctx.scene.leave();
-    await ctx.reply('💼 Generating a new wallet...');
-    await ctx.scene.enter('bank_linking_scene');
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in settings_generate_wallet: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-    ctx.answerCbQuery();
-  }
-});
-
-bot.action('settings_edit_bank', async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-    const linkedWallets = userState.wallets.filter(wallet => wallet.bank);
-
-    if (linkedWallets.length === 0) {
-      await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
-      return ctx.answerCbQuery();
-    }
-
-    // Ask user to select which wallet to edit
-    const walletButtons = linkedWallets.map((wallet, index) => [
-      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `edit_wallet_${index}`)
-    ]);
-
-    await ctx.replyWithMarkdown('✏️ *Select the wallet for which you want to edit bank details:*', Markup.inlineKeyboard(walletButtons));
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in settings_edit_bank: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-    ctx.answerCbQuery();
-  }
-});
-
-// Handle wallet selection for editing bank details
-bot.action(/edit_wallet_(\d+)/, async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    const walletIndex = parseInt(ctx.match[1], 10);
-
-    const userState = await getUserState(userId);
-    const wallet = userState.wallets[walletIndex];
-    if (!wallet) {
-      await ctx.replyWithMarkdown('❌ Selected wallet does not exist.');
-      return ctx.answerCbQuery();
-    }
-
-    // Enter the edit_bank_details_scene with walletIndex
-    await ctx.scene.enter('edit_bank_details_scene', { walletIndex });
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error selecting wallet for editing bank details for user ${ctx.from.id}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    ctx.answerCbQuery();
   }
 });
 
@@ -1899,19 +2117,16 @@ If you haven't received your transaction, follow these steps to troubleshoot:
 1. **Navigate to Bank Editing:**
    - Click on "⚙️ Settings" > "✏️ Edit Linked Bank Details" from the main menu.
 
-2. **Select Wallet to Edit:**
-   - Choose the wallet for which you want to edit the bank details.
-
-3. **Authenticate with PIN:**
+2. **Authenticate with PIN:**
    - Enter your 4-digit PIN to verify your identity.
 
-4. **Provide New Bank Details:**
+3. **Provide New Bank Details:**
    - Enter the updated bank name or account number as required.
 
-5. **Verify Changes:**
+4. **Verify Changes:**
    - Confirm the updated account holder name.
 
-6. **Completion:**
+5. **Completion:**
    - Your bank account details have been updated successfully.
 `,
 };
@@ -2017,7 +2232,7 @@ bot.action(/base_page_(\d+)/, async (ctx) => {
 bot.action('exit_base', async (ctx) => {
   try {
     // Delete the message and clear session
-    if (ctx.wizard && ctx.wizard.state.baseMessageId) {
+    if (ctx.wizard.state.baseMessageId) {
       await ctx.deleteMessage(ctx.wizard.state.baseMessageId).catch(() => {});
       ctx.wizard.state.baseMessageId = null;
     }
@@ -2244,16 +2459,16 @@ bot.action('settings_generate_wallet', async (ctx) => {
 });
 
 // =================== Admin Panel ===================
-// Handled above via action callbacks
+// Already handled above
 
 // =================== Support Handlers ===================
-// Handled above
+// Already handled above
 
 // =================== Transactions Handler ===================
-// Handled above
+// Already handled above
 
 // =================== Learn About Base Handler ===================
-// Handled above
+// Already handled above
 
 // =================== Current Rates Handler ===================
 bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
@@ -2269,6 +2484,9 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
     await ctx.replyWithMarkdown('⚠️ An error occurred while fetching exchange rates.');
   }
 });
+
+// =================== Rating Handlers ===================
+// Already handled above
 
 // =================== Final Registration and Server Start ===================
 // Ensure all scenes are properly registered before starting the server
