@@ -1,3 +1,5 @@
+// bot.js
+
 // =================== Import Dependencies ===================
 const express = require('express');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
@@ -164,8 +166,6 @@ const fuse = new Fuse(bankList, {
   includeScore: true
 });
 
-// =================== Helper Functions ===================
-
 /**
  * Matches user input to a bank from the bankList with flexible matching.
  * @param {string} input - User input for bank name.
@@ -173,6 +173,11 @@ const fuse = new Fuse(bankList, {
  */
 function matchBank(input) {
   const normalizedInput = input.trim().toLowerCase();
+
+  // Check if input is purely numeric (likely an account number)
+  if (/^\d+$/.test(normalizedInput)) {
+    return null; // Invalid as a bank name
+  }
 
   // First, try exact match on aliases
   const exactMatch = bankList.find(bank => bank.aliases.some(alias => alias.toLowerCase() === normalizedInput));
@@ -386,7 +391,7 @@ async function getUserState(userId) {
         firstName: '', // Will be updated upon first interaction
         wallets: [],
         walletAddresses: [],
-        hasReceivedDeposit: false,
+        hasReceivedDeposit: false, // Assuming this tracks deposits
         awaitingBroadcastMessage: false, // For admin broadcast
         pin: null, // To store hashed PIN
       });
@@ -406,7 +411,7 @@ async function getUserState(userId) {
         walletAddresses: data.walletAddresses || [],
         hasReceivedDeposit: data.hasReceivedDeposit || false,
         awaitingBroadcastMessage: data.awaitingBroadcastMessage || false,
-        pin: data.pin || null, // Hashed PIN
+        pin: data.pin || null,
       };
     }
   } catch (error) {
@@ -786,6 +791,14 @@ bankLinkingScene.on('text', async (ctx) => {
     const input = ctx.message.text.trim();
     logger.info(`User ${userId} entered bank name: "${input}"`);
 
+    // Check if the input is purely numeric (likely an account number)
+    if (/^\d+$/.test(input)) {
+      await ctx.replyWithMarkdown(
+        '❌ *Invalid input.* You entered a numeric value, which appears to be an account number. Please enter a valid bank name (e.g., Access Bank):'
+      );
+      return; // Remain in the current step
+    }
+
     const matchedBank = matchBank(input);
 
     if (!matchedBank) {
@@ -982,6 +995,14 @@ editBankDetailsScene.on('text', async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
     logger.info(`User ${userId} entered new bank name: "${input}"`);
+
+    // Check if the input is purely numeric (likely an account number)
+    if (/^\d+$/.test(input)) {
+      await ctx.replyWithMarkdown(
+        '❌ *Invalid input.* You entered a numeric value, which appears to be an account number. Please enter a valid bank name (e.g., Access Bank):'
+      );
+      return; // Remain in the current step
+    }
 
     const matchedBank = matchBank(input);
 
@@ -1776,7 +1797,7 @@ bot.action('give_feedback', async (ctx) => {
   } catch (error) {
     logger.error(`Error entering feedback_scene: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    ctx.answerCbQuery();
+    await ctx.answerCbQuery();
   }
 });
 
@@ -1787,7 +1808,7 @@ bot.action('leave_feedback', async (ctx) => {
     await ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error handling leave_feedback: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
   }
 });
 
@@ -1928,8 +1949,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
                 `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
                 `• *Cash amount:* ₦${payout}\n` +
                 `• *Network:* ${txData.chain}\n` +
-                `• *Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
-                `Thank you for using *DirectPay*!`,
+                `• *Date:* ${new Date(txData.timestamp).toLocaleString()}\n`,
                 { parse_mode: 'Markdown' }
               );
               logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
