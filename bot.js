@@ -147,7 +147,6 @@ const chains = {
   }
 };
 
-
 // =================== Chain Mapping ===================
 const chainMapping = {
   'base': 'Base',
@@ -538,7 +537,8 @@ const createPinScene = new Scenes.WizardScene(
   async (ctx) => {
     try {
       if (ctx.scene.state.pinDigits.length < 4) {
-        return; // Wait until 4 digits are entered
+        // Wait until 4 digits are entered
+        return;
       }
 
       ctx.scene.state.tempPin = ctx.scene.state.pinDigits.join('');
@@ -557,7 +557,8 @@ const createPinScene = new Scenes.WizardScene(
   async (ctx) => {
     try {
       if (ctx.scene.state.pinDigits.length < 4) {
-        return; // Wait until 4 digits are entered
+        // Wait until 4 digits are entered
+        return;
       }
 
       const confirmedPin = ctx.scene.state.pinDigits.join('');
@@ -597,8 +598,7 @@ createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
     // Check if 4 digits have been entered
     if (ctx.scene.state.pinDigits.length === 4) {
       await ctx.wizard.next(); // Move to confirmation step
-      // Trigger the next step without sending a new message
-      await ctx.scene.step(1);
+      // No need to call ctx.scene.step(1)
     }
   } catch (error) {
     logger.error(`Error handling PIN digit input: ${error.message}`);
@@ -638,7 +638,8 @@ const enterPinScene = new Scenes.WizardScene(
   async (ctx) => {
     try {
       if (ctx.scene.state.enterPinDigits.length < 4) {
-        return; // Wait until 4 digits are entered
+        // Wait until 4 digits are entered
+        return;
       }
 
       const enteredPin = ctx.scene.state.enterPinDigits.join('');
@@ -685,7 +686,7 @@ enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
     // Check if 4 digits have been entered
     if (ctx.scene.state.enterPinDigits.length === 4) {
       await ctx.wizard.next(); // Move to verification step
-      await ctx.scene.step(1); // Trigger the next step
+      // No need to call ctx.scene.step(1)
     }
   } catch (error) {
     logger.error(`Error handling PIN digit input in enterPinScene: ${error.message}`);
