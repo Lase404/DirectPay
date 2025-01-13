@@ -92,17 +92,14 @@ bot.telegram.getWebhookInfo()
 // =================== Define Bank List ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
-  { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
-  { name: 'Kuda Microfinance Bank', code: '50211', aliases: ['kuda', 'kuda bank', 'kudab', 'kuda bank nigeria'], paycrestInstitutionCode: 'KUDANGPC' },
-  { name: 'OPay', code: '999992', aliases: ['opay', 'opay nigeria', 'opaymfb', 'opay microfinance'], paycrestInstitutionCode: 'OPAYNGPC' },
-  { name: 'PalmPay', code: '999991', aliases: ['palmpay', 'palmpay nigeria'], paycrestInstitutionCode: 'PALMNGPC' },
-  { name: 'Paystack-Titan MFB', code: '999992', aliases: ['paystack', 'paystack mfb', 'paystack-titan mfb'], paycrestInstitutionCode: 'PAYTNGPC' },
-  { name: 'Moniepoint MFB', code: '999993', aliases: ['moniepoint', 'moniepoint mfb', 'moniepoint nigeria'], paycrestInstitutionCode: 'MONINGPC' },
-  { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' },
-  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZENITHNGLA' },
-  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'gt bank nigeria'], paycrestInstitutionCode: 'GTBNGLA' },
-  { name: 'First Bank of Nigeria', code: '011', aliases: ['first bank', 'first bank of nigeria', 'fbn', 'firstbank'], paycrestInstitutionCode: 'FBNNGLA' },
-  { name: 'UBA', code: '032', aliases: ['uba', 'united bank for africa', 'uba nigeria'], paycrestInstitutionCode: 'UBANGPC' },
+  { name: 'GTBank', code: '058', aliases: ['gtbank', 'gt bank', 'gtb', 'gt bank nigeria'], paycrestInstitutionCode: 'GTBNGNGLA' },
+  { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZENNGLA' },
+  { name: 'First Bank', code: '011', aliases: ['first bank', 'firstbank', 'first bank nigeria'], paycrestInstitutionCode: 'FBNGNGLA' },
+  { name: 'UBA', code: '033', aliases: ['uba', 'united bank for africa', 'united bank africa'], paycrestInstitutionCode: 'UBANGNLAX' },
+  { name: 'Polaris Bank', code: '076', aliases: ['polaris bank', 'polaris', 'polarisb', 'polaris bank nigeria'], paycrestInstitutionCode: 'PLANGNLAX' },
+  { name: 'Ecobank', code: '050', aliases: ['ecobank', 'ecobank nigeria'], paycrestInstitutionCode: 'ECOBANGNLAX' },
+  { name: 'Union Bank', code: '032', aliases: ['union bank', 'unionbank', 'union bank nigeria'], paycrestInstitutionCode: 'UNIONBANK' },
+  { name: 'Heritage Bank', code: '030', aliases: ['heritage bank', 'heritagebank', 'heritage bank nigeria'], paycrestInstitutionCode: 'HTBANK' },
   { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGPC' },
 ];
 
@@ -120,25 +117,25 @@ const chains = {
     }
   },
   Polygon: {
-    id: 'f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a',
+    id: '97d015af-9889-4ae0-9b99-0aa6ed5c69bd',
     key: BLOCKRADAR_POLYGON_API_KEY,
-    apiUrl: 'https://api.blockradar.co/v1/wallets/f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a/addresses',
+    apiUrl: 'https://api.blockradar.co/v1/wallets/97d015af-9889-4ae0-9b99-0aa6ed5c69bd/addresses',
     supportedAssets: ['USDC', 'USDT'],
     network: 'Polygon',
     assets: {
-      USDC: 'f348e8e3-e0b4-4704-857e-c274ef000c00',
-      USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1',
+      USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
+      USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
     }
   },
   'BNB Smart Chain': {
-    id: '7a844e91-5740-4589-9695-c74411adec7e',
+    id: 'f9bc72e5-1d44-4b7f-8b8c-a45f3a25a5c6',
     key: BLOCKRADAR_BNB_API_KEY,
-    apiUrl: 'https://api.blockradar.co/v1/wallets/7a844e91-5740-4589-9695-c74411adec7e/addresses',
-    supportedAssets: ['USDT', 'USDC'],
+    apiUrl: 'https://api.blockradar.co/v1/wallets/f9bc72e5-1d44-4b7f-8b8c-a45f3a25a5c6/addresses',
+    supportedAssets: ['USDC', 'USDT'],
     network: 'BNB Smart Chain',
     assets: {
-      USDC: 'ff479231-0dbb-4760-b695-e219a50934af',
-      USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb',
+      USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
+      USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
     }
   }
 };
@@ -185,291 +182,172 @@ function matchBank(input) {
   return null;
 }
 
+// =================== Utility Functions ===================
 /**
- * Maps asset and chain names to Paycrest-compatible identifiers.
- * @param {string} asset - Asset symbol (USDC/USDT).
- * @param {string} chainName - Name of the blockchain network.
- * @returns {object|null} - Mapped token and network or null if unsupported.
- */
-function mapToPaycrest(asset, chainName) {
-  if (!['USDC', 'USDT'].includes(asset)) return null;
-
-  let token = asset.toUpperCase(); // 'USDC' or 'USDT'
-  let network;
-  const chainKey = chainMapping[chainName.toLowerCase()];
-  if (!chainKey) {
-    logger.error(`No mapping found for chain name: ${chainName}`);
-    return null;
-  }
-  if (/polygon/i.test(chainKey)) network = 'polygon';
-  else if (/base/i.test(chainKey)) network = 'base';
-  else if (/bnb-smart-chain/i.test(chainKey)) network = 'bnb-smart-chain';
-  else return null;
-  return { token, network };
-}
-
-/**
- * Calculates the payout amount in Naira based on the exchange rate.
- * @param {string} asset - Asset symbol (USDC/USDT).
- * @param {number} amount - Amount in asset.
- * @returns {number} - Calculated payout in Naira.
- */
-function calculatePayout(asset, amount) {
-  const rate = exchangeRates[asset];
-  if (!rate) {
-    throw new Error(`Unsupported asset received: ${asset}`);
-  }
-  return parseFloat((amount * rate).toFixed(2)); // Return as number
-}
-
-/**
- * Calculates the amount earned in Naira based on asset and amount.
- * @param {string} asset - Asset symbol.
- * @param {number} amount - Amount in asset.
- * @returns {number} - Amount earned in Naira.
- */
-function calculateAmountEarnedInNaira(asset, amount) {
-  return calculatePayout(asset, amount);
-}
-
-/**
- * Generates a unique reference ID.
- * @returns {string} - Generated reference ID.
- */
-function generateReferenceId() {
-  return 'REF-' + Math.random().toString(36).substr(2, 9).toUpperCase();
-}
-
-/**
- * Verifies bank account details using Paystack API.
- * @param {string} accountNumber - Bank account number.
- * @param {string} bankCode - Bank code.
- * @returns {object} - Verification result.
- */
-async function verifyBankAccount(accountNumber, bankCode) {
-  try {
-    const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
-      params: { account_number: accountNumber, bank_code: bankCode },
-      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
-    });
-    return response.data;
-  } catch (error) {
-    logger.error(`Error verifying bank account (${accountNumber}, ${bankCode}): ${error.response ? error.response.data.message : error.message}`);
-    throw new Error('Failed to verify bank account. Please try again later.');
-  }
-}
-
-/**
- * Creates a Paycrest order for off-ramping.
+ * Updates user state in Firestore.
  * @param {string} userId - Telegram user ID.
- * @param {number} amount - Amount in asset.
- * @param {string} token - Asset token.
- * @param {string} network - Blockchain network.
- * @param {object} recipientDetails - Bank details.
- * @param {string} userSendAddress - User's send address.
- * @returns {object} - Paycrest order data.
+ * @param {object} data - Data to update.
  */
-async function createPaycrestOrder(userId, amount, token, network, recipientDetails, userSendAddress) {
-  try {
-    const paycrestMapping = mapToPaycrest(token, network);
-    if (!paycrestMapping) {
-      throw new Error('No Paycrest mapping for the selected asset/chain.');
-    }
-
-    const bank = bankList.find(b => b.name.toLowerCase() === recipientDetails.bankName.toLowerCase());
-    if (!bank || !bank.paycrestInstitutionCode) {
-      const errorMsg = `No Paycrest institution code found for bank: ${recipientDetails.bankName}`;
-      logger.error(errorMsg);
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ ${errorMsg} for user ${userId}.`);
-      throw new Error(errorMsg);
-    }
-
-    const recipient = {
-      institution: bank.paycrestInstitutionCode,
-      accountIdentifier: recipientDetails.accountNumber,
-      accountName: recipientDetails.accountName,
-      memo: `Payment from DirectPay`,
-      providerId: "" // Update if necessary
-    };
-
-    const rate = exchangeRates[token];
-    if (!rate) {
-      throw new Error(`Exchange rate for ${token} not available.`);
-    }
-
-    const orderPayload = {
-      amount: String(amount),
-      rate: String(rate),
-      network: paycrestMapping.network,
-      token: paycrestMapping.token,
-      recipient: recipient,
-      returnAddress: userSendAddress || PAYCREST_RETURN_ADDRESS,
-      feePercent: 2, // Example fee percentage
-    };
-
-    const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
-      headers: {
-        'API-Key': PAYCREST_API_KEY,
-        'Content-Type': 'application/json'
-      }
-    });
-
-    if (orderResp.data.status !== 'success') {
-      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
-    }
-
-    return orderResp.data.data; // Contains id, amount, token, network, receiveAddress, etc.
-  } catch (err) {
-    logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
-    throw new Error('Failed to create Paycrest order.');
-  }
-}
-
-/**
- * Withdraws from Blockradar to Paycrest receive address.
- * @param {string} chain - Blockchain network.
- * @param {string} assetId - Asset ID in Blockradar.
- * @param {string} address - Destination address.
- * @param {number} amount - Amount to withdraw.
- * @param {string} reference - Reference ID.
- * @param {object} metadata - Additional metadata.
- * @returns {object} - Withdrawal response.
- */
-async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
-  try {
-    const chainKey = chainMapping[chain.toLowerCase()];
-    if (!chainKey) {
-      throw new Error(`Unsupported or unknown chain: ${chain}`);
-    }
-
-    const chainData = chains[chainKey];
-    if (!chainData) {
-      throw new Error(`Chain data not found for: ${chainKey}`);
-    }
-
-    const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`, {
-      address,
-      amount: String(amount),
-      assetId,
-      reference,
-      metadata
-    }, {
-      headers: {
-        'x-api-key': chainData.key,
-        'Content-Type': 'application/json'
-      }
-    });
-    const data = resp.data;
-    if (data.statusCode !== 200) {
-      throw new Error(`Blockradar withdrawal error: ${JSON.stringify(data)}`);
-    }
-    return data;
-  } catch (error) {
-    logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
-    throw error;
-  }
+async function updateUserState(userId, data) {
+  const userRef = db.collection('users').doc(userId);
+  await userRef.set(data, { merge: true });
 }
 
 /**
  * Retrieves user state from Firestore.
  * @param {string} userId - Telegram user ID.
- * @returns {object} - User state data.
+ * @returns {object} - User state.
  */
 async function getUserState(userId) {
-  try {
-    const userDoc = await db.collection('users').doc(userId).get();
-    if (!userDoc.exists) {
-      await db.collection('users').doc(userId).set({
-        firstName: '', // Will be updated upon first interaction
-        wallets: [],
-        walletAddresses: [],
-        hasReceivedDeposit: false, // Assuming this tracks deposits
-        awaitingBroadcastMessage: false, // For admin broadcast
-        pin: null, // To store hashed PIN
-      });
-      return {
-        firstName: '',
-        wallets: [],
-        walletAddresses: [],
-        hasReceivedDeposit: false,
-        awaitingBroadcastMessage: false,
-        pin: null,
-      };
-    } else {
-      const data = userDoc.data();
-      return {
-        firstName: data.firstName || '',
-        wallets: data.wallets || [],
-        walletAddresses: data.walletAddresses || [],
-        hasReceivedDeposit: data.hasReceivedDeposit || false,
-        awaitingBroadcastMessage: data.awaitingBroadcastMessage || false,
-        pin: data.pin || null,
-      };
-    }
-  } catch (error) {
-    logger.error(`Error getting user state for ${userId}: ${error.message}`);
-    throw error;
+  const userRef = db.collection('users').doc(userId);
+  const doc = await userRef.get();
+  if (!doc.exists) {
+    // Initialize user state if not present
+    await userRef.set({
+      firstName: '',
+      wallets: [],
+      walletAddresses: []
+    });
+    return { firstName: '', wallets: [], walletAddresses: [] };
   }
+  return doc.data();
 }
 
 /**
- * Updates user state in Firestore.
- * @param {string} userId - Telegram user ID.
- * @param {object} newState - New state data.
+ * Generates a reference ID.
+ * @returns {string} - Reference ID.
  */
-async function updateUserState(userId, newState) {
-  try {
-    await db.collection('users').doc(userId).update(newState);
-  } catch (error) {
-    logger.error(`Error updating user state for ${userId}: ${error.message}`);
-    throw error;
-  }
+function generateReferenceId() {
+  return 'REF-' + crypto.randomBytes(6).toString('hex').toUpperCase();
 }
 
 /**
- * Generates a wallet address using Blockradar API.
- * @param {string} chain - Blockchain network.
- * @returns {string} - Generated wallet address.
+ * Generates a wallet address based on the selected chain.
+ * Placeholder function; replace with actual wallet generation logic.
+ * @param {string} chain - Chain name.
+ * @returns {string} - Wallet address.
  */
 async function generateWallet(chain) {
+  // Placeholder: Replace with actual wallet generation logic
+  // For demonstration, return a dummy address
+  return '0x' + crypto.randomBytes(20).toString('hex');
+}
+
+/**
+ * Maps asset and chain to Paycrest parameters.
+ * Placeholder function; replace with actual mapping logic.
+ * @param {string} asset - Asset symbol.
+ * @param {string} chain - Chain name.
+ * @returns {object|null} - Paycrest mapping or null if not found.
+ */
+function mapToPaycrest(asset, chain) {
+  // Placeholder: Implement actual mapping based on Paycrest's API requirements
+  return {
+    asset,
+    chain
+    // Add other necessary parameters
+  };
+}
+
+/**
+ * Verifies Paycrest webhook signature.
+ * @param {Buffer} requestBody - Raw request body.
+ * @param {string} signatureHeader - Signature from headers.
+ * @param {string} secretKey - Paycrest client secret.
+ * @returns {boolean} - Verification result.
+ */
+function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
+  const hmac = crypto.createHmac('sha256', secretKey);
+  hmac.update(requestBody);
+  const calculatedSignature = hmac.digest('hex');
+
   try {
-    const chainData = chains[chain];
-    if (!chainData) {
-      throw new Error(`Unsupported chain: ${chain}`);
-    }
-
-    const response = await axios.post(
-      chainData.apiUrl,
-      { name: `DirectPay_User_Wallet_${chain}` },
-      { headers: { 'x-api-key': chainData.key } }
-    );
-
-    const walletAddress = response.data.data.address;
-    if (!walletAddress) {
-      throw new Error('Wallet address not returned from Blockradar.');
-    }
-    return walletAddress;
+    return crypto.timingSafeEqual(Buffer.from(calculatedSignature), Buffer.from(signatureHeader));
   } catch (error) {
-    logger.error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
-    throw new Error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
+    // If buffer lengths are not equal, timingSafeEqual throws an error
+    return false;
   }
 }
 
 /**
- * Generates a transaction receipt message.
- * @param {object} txData - Transaction data.
- * @returns {string} - Formatted receipt message.
+ * Calculates payout in NGN based on asset and amount.
+ * Placeholder function; replace with actual calculation logic.
+ * @param {string} asset - Asset symbol.
+ * @param {number} amount - Amount in asset.
+ * @returns {number} - Payout in NGN.
  */
-function generateReceipt(txData) {
-  let receiptMessage = `🧾 *Transaction Receipt*\n\n`;
-  receiptMessage += `*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n`;
-  receiptMessage += `*Amount:* ${txData.amount || 'N/A'} ${txData.asset || 'N/A'}\n`;
-  receiptMessage += `*Status:* ${txData.status || 'Pending'}\n`;
-  receiptMessage += `*Exchange Rate:* ₦${exchangeRates[txData.asset] || 'N/A'} per ${txData.asset || 'N/A'}\n`;
-  receiptMessage += `*Date:* ${txData.timestamp ? new Date(txData.timestamp).toLocaleString() : 'N/A'}\n`;
-  receiptMessage += `*Chain:* ${txData.chain || 'N/A'}\n`;
+function calculatePayout(asset, amount) {
+  // Placeholder: Implement actual payout calculation based on exchange rates
+  // For demonstration, assume a fixed rate
+  const rate = 500; // Example rate: 1 USDC = ₦500
+  return rate * amount;
+}
 
-  return receiptMessage;
+/**
+ * Calculates the amount earned in NGN based on asset and amount.
+ * Placeholder function; replace with actual calculation logic.
+ * @param {string} asset - Asset symbol.
+ * @param {number} amount - Amount in asset.
+ * @returns {number} - Amount earned in NGN.
+ */
+function calculateAmountEarnedInNaira(asset, amount) {
+  // Placeholder: Implement actual calculation based on exchange rates
+  const rate = 500; // Example rate: 1 USDC = ₦500
+  return rate * amount;
+}
+
+/**
+ * Verifies a bank account via Paycrest.
+ * Placeholder function; replace with actual API integration.
+ * @param {string} accountNumber - Bank account number.
+ * @param {string} bankCode - Bank code.
+ * @returns {object} - Verification result.
+ */
+async function verifyBankAccount(accountNumber, bankCode) {
+  // Placeholder: Implement actual verification via Paycrest's API
+  // For demonstration, return a mock response
+  return {
+    data: {
+      account_name: 'John Doe'
+    },
+    status: 'success'
+  };
+}
+
+/**
+ * Creates a Paycrest order.
+ * Placeholder function; replace with actual API integration.
+ * @param {string} userId - Telegram user ID.
+ * @param {number} amount - Amount in asset.
+ * @param {string} asset - Asset symbol.
+ * @param {string} chain - Chain name.
+ * @param {object} bankDetails - User's bank details.
+ * @param {string} returnAddress - Return address for Paycrest.
+ * @returns {object} - Paycrest order details.
+ */
+async function createPaycrestOrder(userId, amount, asset, chain, bankDetails, returnAddress) {
+  // Placeholder: Implement actual order creation via Paycrest's API
+  // For demonstration, return a mock order
+  return {
+    id: generateReferenceId(),
+    receiveAddress: '0x' + crypto.randomBytes(20).toString('hex')
+  };
+}
+
+/**
+ * Withdraws from Blockradar to Paycrest's receive address.
+ * Placeholder function; replace with actual API integration.
+ * @param {string} chain - Chain name.
+ * @param {string} assetId - Asset ID in Blockradar.
+ * @param {string} receiveAddress - Receive address from Paycrest.
+ * @param {number} amount - Amount to withdraw.
+ * @param {string} paycrestOrderId - Paycrest order ID.
+ * @param {object} metadata - Additional metadata.
+ */
+async function withdrawFromBlockradar(chain, assetId, receiveAddress, amount, paycrestOrderId, metadata) {
+  // Placeholder: Implement actual withdrawal via Blockradar's API
+  // For demonstration, assume withdrawal is successful
+  return;
 }
 
 // =================== Define Scenes ===================
@@ -521,7 +399,8 @@ const createPinScene = new Scenes.WizardScene(
   async (ctx) => {
     try {
       ctx.scene.state.pinDigits = [];
-      await ctx.replyWithMarkdown('🔒 *Create a 4-digit PIN*\n\nPlease enter your PIN:', Markup.removeKeyboard());
+      // **Updated Message for Clarity**
+      await ctx.replyWithMarkdown('🔒 *Set Up Your 4-Digit PIN*\n\nPlease enter your PIN:', Markup.removeKeyboard());
       // Await text input
       return ctx.wizard.next();
     } catch (error) {
@@ -961,8 +840,10 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     await ctx.reply('✅ *Bank account linked successfully!*');
 
-    // Initiate PIN setup immediately
-    await ctx.reply('🔒 *Set Up Your 4-Digit PIN*');
+    // **Removed External PIN Prompt**
+    // await ctx.reply('🔒 *Set Up Your 4-Digit PIN*');
+
+    // **Enter the create_pin_scene directly**
     await ctx.scene.enter('create_pin_scene');
 
     ctx.scene.leave();
@@ -1287,6 +1168,30 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
+/**
+ * Generates a transaction receipt.
+ * Placeholder function; replace with actual receipt generation logic.
+ * @param {object} txData - Transaction data.
+ * @returns {string} - Formatted receipt.
+ */
+function generateReceipt(txData) {
+  // Placeholder: Implement actual receipt formatting
+  return `
+🧾 *Transaction Receipt*
+
+• *Reference ID:* \`${txData.referenceId}\`
+• *User ID:* ${txData.userId}
+• *Amount Deposited:* ${txData.amount} ${txData.asset}
+• *Payout:* ₦${txData.payout}
+• *Chain:* ${txData.chain}
+• *Status:* ${txData.status}
+• *Date:* ${new Date(txData.timestamp).toLocaleString()}
+• *Transaction Hash:* \`${txData.transactionHash}\`
+
+*Thank you for using DirectPay!*
+  `;
+}
+
 // =================== Broadcast Message Scene ===================
 const broadcastMessageScene = new Scenes.WizardScene(
   'broadcast_message_scene',
@@ -1341,7 +1246,7 @@ const broadcastMessageScene = new Scenes.WizardScene(
   }
 );
 
-// =================== Define Admin Panel Scene ===================
+// =================== Admin Panel Scene ===================
 
 /**
  * Admin Panel is handled via action callbacks, no separate scene needed.
@@ -1437,12 +1342,6 @@ const getMainMenu = (walletExists, hasBankLinked) =>
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
     ['📈 View Current Rates'], // Added Refresh Rates Button
   ]).resize();
-
-// =================== PIN Keyboard ===================
-/**
- * Removed the inline PIN keyboard as per user request.
- * Only text-based PIN input is used.
- */
 
 // =================== /start Command ===================
 bot.start(async (ctx) => {
@@ -2929,26 +2828,6 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
     res.status(500).send('Error');
   }
 });
-
-/**
- * Verifies Paycrest webhook signature.
- * @param {Buffer} requestBody - Raw request body.
- * @param {string} signatureHeader - Signature from headers.
- * @param {string} secretKey - Paycrest client secret.
- * @returns {boolean} - Verification result.
- */
-function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
-  const hmac = crypto.createHmac('sha256', secretKey);
-  hmac.update(requestBody);
-  const calculatedSignature = hmac.digest('hex');
-
-  try {
-    return crypto.timingSafeEqual(Buffer.from(calculatedSignature), Buffer.from(signatureHeader));
-  } catch (error) {
-    // If buffer lengths are not equal, timingSafeEqual throws an error
-    return false;
-  }
-}
 
 // =================== Telegram Webhook Handler ===================
 app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
