@@ -1,35 +1,31 @@
-// =================== Import Dependencies ===================
-const express = require('express');
-const { Telegraf, Markup, Scenes, session } = require('telegraf');
+// =================== Imports ===================
+const { Telegraf, Scenes, session, Markup } = require('telegraf');
+const { WizardScene, Stage } = Scenes;
 const admin = require('firebase-admin');
-const axios = require('axios');
-const crypto = require('crypto');
+const express = require('express');
+const bodyParser = require('body-parser');
 const path = require('path');
 const fs = require('fs');
+const axios = require('axios');
+const crypto = require('crypto');
+const Fuse = require('fuse.js');
+const bcrypt = require('bcrypt');
 const winston = require('winston');
-const bodyParser = require('body-parser');
-const bcrypt = require('bcrypt'); // For PIN hashing
-const dotenv = require('dotenv');
-const Fuse = require('fuse.js'); // For fuzzy matching
-
-dotenv.config();
 
 // =================== Logger Setup ===================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
     winston.format.timestamp(),
-    winston.format.printf(
-      ({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`
-    )
+    winston.format.printf(({ timestamp, level, message }) => `${timestamp} [${level.toUpperCase()}]: ${message}`)
   ),
   transports: [
-    new winston.transports.Console(),
-    new winston.transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 }) // 5MB per file, keep last 5 files
+    new winston.transports.File({ filename: 'bot.log' }),
+    new winston.transports.Console()
   ],
 });
 
-// =================== Firebase Setup ===================
+// =================== Firebase Initialization ===================
 const serviceAccountPath = path.join(__dirname, 'directpay.json'); // Ensure this file is secured on the server
 if (!fs.existsSync(serviceAccountPath)) {
   logger.error('Firebase service account file (directpay.json) not found.');
@@ -519,6 +515,7 @@ const feedbackScene = new Scenes.WizardScene(
 );
 
 // =================== Create PIN Scene ===================
+// **Corrected Version: Ensures ctx.wizard.next() is called only in action handlers**
 const createPinScene = new Scenes.WizardScene(
   'create_pin_scene',
   // Step 1: Enter PIN
@@ -526,7 +523,7 @@ const createPinScene = new Scenes.WizardScene(
     try {
       ctx.scene.state.pinDigits = [];
       await ctx.replyWithMarkdown('🔒 *Create a 4-digit PIN*', getPinKeyboard());
-      return ctx.wizard.next();
+      // Removed ctx.wizard.next() to let action handler manage the flow
     } catch (error) {
       logger.error(`Error in create_pin_scene Step 1: ${error.message}`);
       await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
@@ -546,7 +543,7 @@ const createPinScene = new Scenes.WizardScene(
 
       // Update the existing message to ask for confirmation
       await ctx.editMessageText('🔄 *Please confirm your 4-digit PIN*', getPinKeyboard());
-      return ctx.wizard.next();
+      // Removed ctx.wizard.next() to let action handler manage the flow
     } catch (error) {
       logger.error(`Error in create_pin_scene Step 2: ${error.message}`);
       await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
@@ -593,10 +590,12 @@ createPinScene.action(/pin_digit_(\d)/, async (ctx) => {
   try {
     const digit = ctx.match[1];
     ctx.scene.state.pinDigits.push(digit);
+    logger.info(`User ${ctx.from.id} entered PIN digit: ${digit}`);
     await ctx.answerCbQuery();
 
     // Check if 4 digits have been entered
     if (ctx.scene.state.pinDigits.length === 4) {
+      logger.info(`User ${ctx.from.id} completed PIN entry. Moving to confirmation step.`);
       await ctx.wizard.next(); // Move to confirmation step
       // No need to call ctx.scene.step(1)
     }
@@ -620,6 +619,7 @@ createPinScene.action('pin_cancel', async (ctx) => {
 });
 
 // =================== Enter PIN Scene ===================
+// **Corrected Version: Ensures ctx.wizard.next() is called only in action handlers**
 const enterPinScene = new Scenes.WizardScene(
   'enter_pin_scene',
   // Step 1: Enter PIN
@@ -627,7 +627,7 @@ const enterPinScene = new Scenes.WizardScene(
     try {
       ctx.scene.state.enterPinDigits = [];
       await ctx.reply('🔒 *Enter your 4-digit PIN*', getPinKeyboard());
-      return ctx.wizard.next();
+      // Removed ctx.wizard.next() to let action handler manage the flow
     } catch (error) {
       logger.error(`Error in enter_pin_scene Step 1: ${error.message}`);
       await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
@@ -681,10 +681,12 @@ enterPinScene.action(/pin_digit_(\d)/, async (ctx) => {
   try {
     const digit = ctx.match[1];
     ctx.scene.state.enterPinDigits.push(digit);
+    logger.info(`User ${ctx.from.id} entered PIN digit: ${digit}`);
     await ctx.answerCbQuery();
 
     // Check if 4 digits have been entered
     if (ctx.scene.state.enterPinDigits.length === 4) {
+      logger.info(`User ${ctx.from.id} completed PIN entry. Moving to verification step.`);
       await ctx.wizard.next(); // Move to verification step
       // No need to call ctx.scene.step(1)
     }
@@ -850,7 +852,7 @@ bankLinkingScene.on('text', async (ctx) => {
 
         ctx.scene.state.bankData.accountName = accountName;
 
-        // Ask for Confirmation by Editing the Existing Message
+        // Ask for Confirmation by Sending a New Message
         await ctx.replyWithMarkdown(
           `🏦 *Bank Account Verification*\n\n` +
           `Please confirm your bank details:\n` +
@@ -957,7 +959,7 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
     ctx.scene.leave();
     ctx.answerCbQuery();
   } catch (error) {
-    logger.error(`Error handling cancel_bank_linking: ${error.message}`);
+    logger.error(`Error in cancel_bank_linking: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
   }
 });
@@ -1056,7 +1058,7 @@ editBankDetailsScene.on('text', async (ctx) => {
 
         ctx.scene.state.editBankData.newAccountName = accountName;
 
-        // Ask for Confirmation by Editing the Existing Message
+        // Ask for Confirmation by Sending a New Message
         await ctx.replyWithMarkdown(
           `🏦 *New Bank Account Verification*\n\n` +
           `Please confirm your new bank details:\n` +
