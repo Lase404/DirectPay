@@ -697,6 +697,8 @@ const bankLinkingScene = new WizardScene(
   async (ctx) => {
     try {
       const input = ctx.message.text.trim();
+      const userId = ctx.from.id.toString();
+      const bankData = ctx.scene.state.bankData;
 
       // Validate account number
       if (!/^\d{10}$/.test(input)) {
@@ -717,7 +719,7 @@ const bankLinkingScene = new WizardScene(
       await ctx.replyWithMarkdown('🔄 *Verifying your bank details...*');
 
       try {
-        const verificationResult = await verifyBankAccount(ctx.scene.state.bankData.accountNumber, ctx.scene.state.bankData.bankCode);
+        const verificationResult = await verifyBankAccount(bankData.accountNumber, bankData.bankCode);
 
         if (!verificationResult || !verificationResult.data) {
           throw new Error('Invalid verification response.');
@@ -735,8 +737,8 @@ const bankLinkingScene = new WizardScene(
         await ctx.replyWithMarkdown(
           `🏦 *Bank Account Verification*\n\n` +
           `Please confirm your bank details:\n` +
-          `• *Bank Name:* ${ctx.scene.state.bankData.bankName}\n` +
-          `• *Account Number:* ****${ctx.scene.state.bankData.accountNumber.slice(-4)}\n` +
+          `• *Bank Name:* ${bankData.bankName}\n` +
+          `• *Account Number:* ****${bankData.accountNumber.slice(-4)}\n` +
           `• *Account Holder:* ${accountName}\n\n` +
           `Is this information correct?`,
           Markup.inlineKeyboard([
@@ -766,7 +768,7 @@ const bankLinkingScene = new WizardScene(
   },
   // Step 4: Confirmation handled via action with Timeout Removal
   async (ctx) => {
-    // No further steps; actions handle confirmation
+    // This step is handled via action callbacks below
     return;
   }
 );
@@ -1121,7 +1123,7 @@ const editBankSelectionScene = new WizardScene(
   },
   // Step 2: Handle Wallet Selection via Action Callbacks
   async (ctx) => {
-    // This step is handled via action callbacks
+    // This step is handled via action callbacks below
     return;
   }
 );
@@ -1181,6 +1183,7 @@ const editBankDetailsScene = new WizardScene(
       const input = ctx.message.text.trim();
       const userId = ctx.from.id.toString();
       const walletIndex = ctx.scene.state.editBankWalletIndex;
+      const newBankData = ctx.scene.state.editBankData;
 
       // Validate account number
       if (!/^\d{10}$/.test(input)) {
@@ -1201,7 +1204,7 @@ const editBankDetailsScene = new WizardScene(
       await ctx.replyWithMarkdown('🔄 *Verifying your new bank details...*');
 
       try {
-        const verificationResult = await verifyBankAccount(ctx.scene.state.editBankData.newAccountNumber, ctx.scene.state.editBankData.newBankCode);
+        const verificationResult = await verifyBankAccount(newBankData.newAccountNumber, newBankData.newBankCode);
 
         if (!verificationResult || !verificationResult.data) {
           throw new Error('Invalid verification response.');
@@ -1219,8 +1222,8 @@ const editBankDetailsScene = new WizardScene(
         await ctx.replyWithMarkdown(
           `🏦 *Bank Account Verification*\n\n` +
           `Please confirm your new bank details:\n` +
-          `• *Bank Name:* ${ctx.scene.state.editBankData.newBankName}\n` +
-          `• *Account Number:* ****${ctx.scene.state.editBankData.newAccountNumber.slice(-4)}\n` +
+          `• *Bank Name:* ${newBankData.newBankName}\n` +
+          `• *Account Number:* ****${newBankData.newAccountNumber.slice(-4)}\n` +
           `• *Account Holder:* ${accountName}\n\n` +
           `Is this information correct?`,
           Markup.inlineKeyboard([
@@ -1250,7 +1253,7 @@ const editBankDetailsScene = new WizardScene(
   },
   // Step 4: Confirmation handled via action with Timeout Removal
   async (ctx) => {
-    // No further steps; actions handle confirmation
+    // This step is handled via action callbacks below
     return;
   }
 );
@@ -1355,25 +1358,82 @@ editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   }
 });
 
-// =================== Send Message Scene Actions ===================
-// Already handled within sendMessageScene
+// =================== Enter PIN Authentication Scene ===================
+const enterPinAuthenticationScene = new WizardScene(
+  'enter_pin_authentication_scene',
+  // Step 1: Enter PIN with Security Reminder
+  async (ctx) => {
+    try {
+      await ctx.replyWithMarkdown('🔒 *Enter your 6-digit PIN:*');
+      // Await text input
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Error in enter_pin_authentication_scene Step 1: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+      ctx.scene.leave();
+    }
+  },
+  // Step 2: Verify PIN with Attempt Limits and Clear Consequences
+  async (ctx) => {
+    try {
+      const enteredPin = ctx.message.text.trim();
 
-// =================== Receipt Generation Scene Actions ===================
-// Already handled within receiptGenerationScene
+      // Validate that the input is exactly 6 digits
+      if (!/^\d{6}$/.test(enteredPin)) {
+        ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
+        if (ctx.scene.state.pinAttempts >= 3) {
+          await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* Access has been temporarily locked. Please try again later or contact support.');
+          await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
+          ctx.scene.leave();
+          return;
+        }
+        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **6-digit numeric PIN**:');
+        return; // Remain in the current step
+      }
 
-// =================== Broadcast Message Scene Actions ===================
-// Already handled within broadcastMessageScene
+      // Delete the user's message containing the PIN
+      await ctx.deleteMessage();
 
-// =================== Feedback Scene Actions ===================
-// Already handled within feedbackScene
+      const userId = ctx.from.id.toString();
+      const userState = await getUserState(userId);
+      const walletIndex = ctx.scene.state.editBankWalletIndex;
 
-// =================== Define Other Scenes ===================
+      if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
+        await ctx.reply('⚠️ Selected wallet does not exist or has no linked bank account.');
+        await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
+        ctx.scene.leave();
+        return;
+      }
 
-// (Additional scenes like 'edit_bank_selection_scene' and 'enter_pin_authentication_scene' are defined above)
+      const isMatch = await bcrypt.compare(enteredPin, userState.pin);
+      if (isMatch) {
+        ctx.scene.state.pinVerified = true;
+        await ctx.replyWithMarkdown('✅ *PIN verified successfully.* You can now edit your bank details.');
+        ctx.scene.leave();
+        // Proceed to edit bank details
+        await ctx.scene.enter('edit_bank_details_scene');
+      } else {
+        ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
+        if (ctx.scene.state.pinAttempts >= 3) {
+          await ctx.replyWithMarkdown('❌ *Incorrect PIN.* Access has been temporarily locked. Please try again later or contact support.');
+          await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
+          ctx.scene.leave();
+          return;
+        }
+        await ctx.replyWithMarkdown('❌ *Incorrect PIN.* Please try again:');
+      }
+    } catch (error) {
+      logger.error(`Error in enter_pin_authentication_scene Step 2: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while verifying your PIN. Please try again later.');
+      ctx.scene.leave();
+    }
+  }
+);
 
 // =================== Register All Scenes with Stage ===================
 const stage = new Scenes.Stage();
 
+// Register all scenes in a single call after they have been defined
 stage.register(
   feedbackScene,
   createPinScene,
@@ -1701,7 +1761,8 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
 
     let message = `💼 *Your Wallets* (Page ${requestedPage}/${totalPages}):\n\n`;
     wallets.forEach((wallet, index) => {
-      message += `*Wallet ${start + index + 1}:*\n`;
+      const walletNumber = start + index + 1;
+      message += `*Wallet ${walletNumber}:*\n`;
       message += `• *Chain:* ${wallet.chain}\n`;
       message += `• *Address:* \`${wallet.address}\`\n`;
       message += `• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n\n`;
@@ -2425,7 +2486,8 @@ bot.action('settings_edit_bank', async (ctx) => {
       .filter(w => w.wallet.bank);
 
     if (linkedWallets.length === 0) {
-      return ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
+      await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
+      return ctx.answerCbQuery();
     }
 
     // Display linked wallets with Clear Labels and Navigation
@@ -2452,76 +2514,10 @@ bot.action('settings_edit_bank', async (ctx) => {
 });
 
 // =================== Enter PIN Authentication Scene ===================
-const enterPinAuthenticationScene = new WizardScene(
-  'enter_pin_authentication_scene',
-  // Step 1: Enter PIN with Security Reminder
-  async (ctx) => {
-    try {
-      await ctx.replyWithMarkdown('🔒 *Enter your 6-digit PIN:*');
-      // Await text input
-      return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Error in enter_pin_authentication_scene Step 1: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-      ctx.scene.leave();
-    }
-  },
-  // Step 2: Verify PIN with Attempt Limits and Clear Consequences
-  async (ctx) => {
-    try {
-      const enteredPin = ctx.message.text.trim();
-
-      // Validate that the input is exactly 6 digits
-      if (!/^\d{6}$/.test(enteredPin)) {
-        ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
-        if (ctx.scene.state.pinAttempts >= 3) {
-          await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* Access has been temporarily locked. Please try again later or contact support.');
-          await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
-          ctx.scene.leave();
-          return;
-        }
-        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **6-digit numeric PIN**:');
-        return; // Remain in the current step
-      }
-
-      // Delete the user's message containing the PIN
-      await ctx.deleteMessage();
-
-      const userId = ctx.from.id.toString();
-      const userState = await getUserState(userId);
-      const walletIndex = ctx.scene.state.editBankWalletIndex;
-
-      if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
-        await ctx.reply('⚠️ Selected wallet does not exist or has no linked bank account.');
-        await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
-        ctx.scene.leave();
-        return;
-      }
-
-      const isMatch = await bcrypt.compare(enteredPin, userState.pin);
-      if (isMatch) {
-        ctx.scene.state.pinVerified = true;
-        await ctx.replyWithMarkdown('✅ *PIN verified successfully.* You can now edit your bank details.');
-        ctx.scene.leave();
-        // Proceed to edit bank details
-        await ctx.scene.enter('edit_bank_details_scene');
-      } else {
-        ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
-        if (ctx.scene.state.pinAttempts >= 3) {
-          await ctx.replyWithMarkdown('❌ *Incorrect PIN.* Access has been temporarily locked. Please try again later or contact support.');
-          await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
-          ctx.scene.leave();
-          return;
-        }
-        await ctx.replyWithMarkdown('❌ *Incorrect PIN.* Please try again:');
-      }
-    } catch (error) {
-      logger.error(`Error in enter_pin_authentication_scene Step 2: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while verifying your PIN. Please try again later.');
-      ctx.scene.leave();
-    }
-  }
-);
+/**
+ * The enterPinAuthenticationScene is already defined above.
+ * Ensure that it is included in the stage.register() call.
+ */
 
 // =================== Send Message Scene ===================
 // Already handled within sendMessageScene
