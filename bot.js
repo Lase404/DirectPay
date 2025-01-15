@@ -71,24 +71,6 @@ const app = express();
 // =================== Initialize Telegraf Bot ===================
 const bot = new Telegraf(BOT_TOKEN);
 
-// =================== Set Webhook ===================
-bot.telegram.setWebhook(`${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`)
-  .then(() => {
-    logger.info(`Webhook set to ${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`);
-  })
-  .catch((err) => {
-    logger.error(`Failed to set webhook: ${err.message}`);
-  });
-
-// =================== Verify Webhook ===================
-bot.telegram.getWebhookInfo()
-  .then((info) => {
-    logger.info(`Current webhook info: ${JSON.stringify(info, null, 2)}`);
-  })
-  .catch((err) => {
-    logger.error(`Failed to get webhook info: ${err.message}`);
-  });
-
 // =================== Define Bank List with Paystack and Paycrest Codes ===================
 const bankList = [
   { 
@@ -416,7 +398,7 @@ async function withdrawFromBlockradar(chain, assetId, receiveAddress, amount, pa
   return;
 }
 
-// =================== Define Scenes ===================
+// =================== Define All Scenes ===================
 
 // =================== Feedback Scene ===================
 const feedbackScene = new WizardScene(
@@ -789,7 +771,8 @@ const bankLinkingScene = new WizardScene(
   }
 );
 
-// Handle confirmation "Yes, Confirm" within the scene with Timeout Removal
+// =================== Confirmation Actions for Bank Linking ===================
+
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
@@ -858,7 +841,6 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   }
 });
 
-// Handle confirmation "No, Edit Details" within the scene
 bankLinkingScene.action('confirm_bank_no', async (ctx) => {
   try {
     await ctx.replyWithMarkdown('🔄 *Let\'s try entering your bank details again.*\n\nPlease enter your bank name (e.g., Access Bank):');
@@ -874,7 +856,6 @@ bankLinkingScene.action('confirm_bank_no', async (ctx) => {
   }
 });
 
-// Handle "Cancel Linking" within the scene
 bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   try {
     const userId = ctx.from.id.toString();
@@ -1107,11 +1088,288 @@ const broadcastMessageScene = new WizardScene(
   }
 );
 
-// =================== Admin Panel Scene ===================
+// =================== Edit Bank Selection Scene ===================
+const editBankSelectionScene = new WizardScene(
+  'edit_bank_selection_scene',
+  // Step 1: Select Wallet to Edit with Clear Navigation
+  async (ctx) => {
+    try {
+      const userId = ctx.from.id.toString();
+      const userState = await getUserState(userId);
+      const linkedWallets = userState.wallets
+        .map((wallet, index) => ({ wallet, index }))
+        .filter(w => w.wallet.bank);
 
-/**
- * Admin Panel is handled via action callbacks, no separate scene needed.
- */
+      if (linkedWallets.length === 0) {
+        await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
+        return ctx.scene.leave();
+      }
+
+      // Create buttons for each linked wallet
+      const buttons = linkedWallets.map(w => [Markup.button.callback(`Wallet ${w.index + 1}`, `edit_bank_wallet_${w.index}`)]);
+
+      // Add a 'Back' button
+      buttons.push([Markup.button.callback('🔙 Back to Settings Menu', 'edit_bank_back_settings')]);
+
+      await ctx.replyWithMarkdown('🔄 *Select a Wallet to Edit Bank Details:*', Markup.inlineKeyboard(buttons));
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Error in edit_bank_selection_scene Step 1: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+      ctx.scene.leave();
+    }
+  },
+  // Step 2: Handle Wallet Selection via Action Callbacks
+  async (ctx) => {
+    // This step is handled via action callbacks
+    return;
+  }
+);
+
+// =================== Edit Bank Details Scene ===================
+const editBankDetailsScene = new WizardScene(
+  'edit_bank_details_scene',
+  // Step 1: Enter New Bank Name with Clear Explanation
+  async (ctx) => {
+    try {
+      ctx.scene.state.editBankData = {};
+      await ctx.replyWithMarkdown('🏦 *Edit Bank Account*\n\nPlease enter your new bank name (e.g., Access Bank):');
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Error in edit_bank_details_scene Step 1: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+      ctx.scene.leave();
+    }
+  },
+  // Step 2: Enter New Account Number with Attempt Limits and Progress Indicator
+  async (ctx) => {
+    try {
+      const input = ctx.message.text.trim();
+      const userId = ctx.from.id.toString();
+      const walletIndex = ctx.scene.state.editBankWalletIndex;
+
+      const matchedBank = matchBank(input);
+
+      if (!matchedBank) {
+        ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
+        if (ctx.scene.state.bankAttempts >= 3) {
+          await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank editing process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+          ctx.scene.leave();
+          return;
+        }
+        await ctx.replyWithMarkdown('❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' +
+          bankList.map(b => `• ${b.name}`).join('\n'));
+        return; // Remain in the same step
+      }
+
+      ctx.scene.state.editBankData.newBankName = matchedBank.name;
+      ctx.scene.state.editBankData.newBankCode = matchedBank.code;
+      ctx.scene.state.editBankData.newPaycrestCode = matchedBank.paycrestInstitutionCode;
+
+      await ctx.replyWithMarkdown('🔢 *Please enter your new 10-digit bank account number:*');
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Error in edit_bank_details_scene Step 2: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+      ctx.scene.leave();
+    }
+  },
+  // Step 3: Confirm and Update Bank Details with Attempt Limits and Clear Consequences
+  async (ctx) => {
+    try {
+      const input = ctx.message.text.trim();
+      const userId = ctx.from.id.toString();
+      const walletIndex = ctx.scene.state.editBankWalletIndex;
+
+      // Validate account number
+      if (!/^\d{10}$/.test(input)) {
+        ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
+        if (ctx.scene.state.bankAttempts >= 3) {
+          await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank editing process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+          ctx.scene.leave();
+          return; // Exit after max attempts
+        }
+        await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
+        return; // Remain in the same step
+      }
+
+      ctx.scene.state.editBankData.newAccountNumber = input;
+
+      // Verify Bank Account via Paystack API with Progress Indicator
+      await ctx.replyWithMarkdown('🔄 *Verifying your new bank details...*');
+
+      try {
+        const verificationResult = await verifyBankAccount(ctx.scene.state.editBankData.newAccountNumber, ctx.scene.state.editBankData.newBankCode);
+
+        if (!verificationResult || !verificationResult.data) {
+          throw new Error('Invalid verification response.');
+        }
+
+        const accountName = verificationResult.data.account_name;
+
+        if (!accountName) {
+          throw new Error('Unable to retrieve account name.');
+        }
+
+        ctx.scene.state.editBankData.newAccountName = accountName;
+
+        // Ask for Confirmation
+        await ctx.replyWithMarkdown(
+          `🏦 *Bank Account Verification*\n\n` +
+          `Please confirm your new bank details:\n` +
+          `• *Bank Name:* ${ctx.scene.state.editBankData.newBankName}\n` +
+          `• *Account Number:* ****${ctx.scene.state.editBankData.newAccountNumber.slice(-4)}\n` +
+          `• *Account Holder:* ${accountName}\n\n` +
+          `Is this information correct?`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback('✅ Yes, Confirm', 'confirm_new_bank_yes')],
+            [Markup.button.callback('❌ No, Edit Details', 'confirm_new_bank_no')],
+            [Markup.button.callback('❌ Cancel Editing', 'cancel_edit_bank')],
+          ])
+        );
+        return ctx.wizard.next();
+      } catch (error) {
+        logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
+        ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
+        if (ctx.scene.state.bankAttempts >= 3) {
+          await ctx.replyWithMarkdown('❌ *Bank verification failed too many times.* The bank editing process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+          ctx.scene.leave();
+          return;
+        }
+        await ctx.replyWithMarkdown('❌ *Failed to verify your new bank account.* Please ensure your details are correct or try again.');
+        return; // Remain in the same step
+      }
+    } catch (error) {
+      logger.error(`Error in edit_bank_details_scene Step 3: ${error.message}`);
+      await ctx.replyWithMarkdown('⚠️ An error occurred while verifying your bank account. Please try again later.');
+      ctx.scene.leave();
+    }
+  },
+  // Step 4: Confirmation handled via action with Timeout Removal
+  async (ctx) => {
+    // No further steps; actions handle confirmation
+    return;
+  }
+);
+
+// Handle confirmation "Yes, Confirm" for new bank details with Progress Indicators
+editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    const walletIndex = ctx.scene.state.editBankWalletIndex;
+    const newBankData = ctx.scene.state.editBankData;
+
+    if (walletIndex === undefined || walletIndex === null) {
+      await ctx.reply('❌ No wallet selected for editing. Please try again.');
+      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+      ctx.scene.leave();
+      return ctx.answerCbQuery();
+    }
+
+    const userState = await getUserState(userId);
+
+    // Update the selected wallet with new bank details
+    if (!userState.wallets[walletIndex]) {
+      await ctx.reply('❌ Selected wallet does not exist.');
+      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+      ctx.scene.leave();
+      return ctx.answerCbQuery();
+    }
+
+    userState.wallets[walletIndex].bank = {
+      bankName: newBankData.newBankName,
+      bankCode: newBankData.newBankCode,
+      paycrestInstitutionCode: newBankData.newPaycrestCode,
+      accountNumber: newBankData.newAccountNumber,
+      accountName: newBankData.newAccountName,
+    };
+
+    // Update user state in Firestore
+    await updateUserState(userId, {
+      wallets: userState.wallets,
+      bankAttempts: 0, // Reset bank linking attempts on success
+    });
+
+    await ctx.reply('✅ *Bank account updated successfully!*');
+
+    // Show updated wallet details with Clear Explanations
+    const wallet = userState.wallets[walletIndex];
+    const ratesMessage = `📈 *Current Exchange Rates:*\n\n• *USDC*: ₦${exchangeRates['USDC']}\n• *USDT*: ₦${exchangeRates['USDT']}\n\nThese rates are applied during your deposits and payouts.`;
+
+    const supportedChains = Object.keys(chains).join(', ');
+    const riskWarning = `⚠️ *Risk Warning:*\nPlease ensure you only send tokens from supported chains (${supportedChains}) to your wallet address. Sending tokens from unsupported chains may result in loss of funds.`;
+
+    const walletDetails = `💼 *Wallet Details:*\n\n• *Address:* \`${wallet.address}\`\n• *Linked Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n\n${ratesMessage}\n\n${riskWarning}`;
+
+    // Send wallet details with clear explanations
+    await ctx.replyWithMarkdown(walletDetails, Markup.inlineKeyboard([
+      [Markup.button.callback('🔒 Create PIN', 'create_pin_yes')],
+      [Markup.button.callback('❌ Skip PIN Creation', 'create_pin_no')],
+      [Markup.button.callback('🔙 Back to Main Menu', 'edit_bank_back_main')],
+    ]));
+
+    // Reset bankAttempts in Firestore
+    await updateUserState(userId, { bankAttempts: 0 });
+
+    ctx.scene.leave();
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error in confirm_new_bank_yes: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ *An error occurred while updating your bank account.* Please try again later.');
+    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+    ctx.scene.leave();
+    ctx.answerCbQuery();
+  }
+});
+
+// Handle confirmation "No, Edit Details" for new bank details
+editBankDetailsScene.action('confirm_new_bank_no', async (ctx) => {
+  try {
+    await ctx.replyWithMarkdown('🔄 *Let\'s try entering your new bank details again.*\n\nPlease enter your new bank name (e.g., Access Bank):');
+    ctx.scene.state.editBankData = {}; // Reset bank data
+    ctx.scene.state.bankAttempts = 0; // Reset bank attempts
+    ctx.wizard.back(); // Go back to bank name input
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error in confirm_new_bank_no: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+    ctx.scene.leave();
+    ctx.answerCbQuery();
+  }
+});
+
+// Handle "Cancel Editing"
+editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
+  try {
+    const userId = ctx.from.id.toString();
+    await ctx.reply('❌ *Bank editing has been canceled.*');
+    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+    ctx.scene.leave();
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error in cancel_edit_bank: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+  }
+});
+
+// =================== Send Message Scene Actions ===================
+// Already handled within sendMessageScene
+
+// =================== Receipt Generation Scene Actions ===================
+// Already handled within receiptGenerationScene
+
+// =================== Broadcast Message Scene Actions ===================
+// Already handled within broadcastMessageScene
+
+// =================== Feedback Scene Actions ===================
+// Already handled within feedbackScene
+
+// =================== Define Other Scenes ===================
+
+// (Additional scenes like 'edit_bank_selection_scene' and 'enter_pin_authentication_scene' are defined above)
 
 // =================== Register All Scenes with Stage ===================
 const stage = new Scenes.Stage();
@@ -1129,7 +1387,7 @@ stage.register(
   editBankDetailsScene
 );
 
-// Apply session and stage middleware
+// Apply session and stage middleware only once
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -1260,6 +1518,9 @@ async function greetUser(ctx) {
 // =================== Generate Wallet Handler ===================
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
+  let pendingMessage;
+  let walletGenerationTimeout;
+
   try {
     const userState = await getUserState(userId);
     
@@ -1274,15 +1535,17 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     }
     
     // Display pending message with progress indicator
-    const pendingMessage = await ctx.replyWithMarkdown('🔄 *Generating your wallet... Please wait.*');
+    pendingMessage = await ctx.replyWithMarkdown('🔄 *Generating your wallet... Please wait.*');
 
     // Set a timeout to handle potential delays or failures (e.g., 5 minutes)
-    const walletGenerationTimeout = setTimeout(async () => {
+    walletGenerationTimeout = setTimeout(async () => {
       // Check if the user is still awaiting a response by verifying if the pending message still exists
       try {
         await ctx.telegram.getChat(PERSONAL_CHAT_ID); // Dummy check; replace with appropriate logic
         await ctx.replyWithMarkdown('⏰ *Wallet generation timed out.* Please try again later.');
-        await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+        if (pendingMessage) {
+          await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+        }
         // Optionally, notify admin about the timeout
         await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ Wallet generation timed out for user ${userId}.`);
       } catch (error) {
@@ -1300,7 +1563,9 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       clearTimeout(walletGenerationTimeout);
 
       // Delete the Pending Message
-      await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+      if (pendingMessage) {
+        await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+      }
 
       // Fetch Updated User State
       const updatedUserState = await getUserState(userId);
@@ -1337,7 +1602,9 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     // Clear the timeout as an error occurred
     clearTimeout(walletGenerationTimeout);
     // Delete the pending message if an error occurs
-    await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+    if (pendingMessage) {
+      await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+    }
     await ctx.replyWithMarkdown('⚠️ An error occurred while generating your wallet. Please try again later.');
   }
 });
@@ -1538,10 +1805,12 @@ bot.action(/rate_(\d+)/, async (ctx) => {
     }
     
     // Delete the rating message
-    try {
-      await ctx.deleteMessage();
-    } catch (error) {
-      logger.error(`Error deleting rating message for user ${userId}: ${error.message}`);
+    if (ctx.message.message_id) {
+      try {
+        await ctx.deleteMessage(ctx.message.message_id);
+      } catch (error) {
+        logger.error(`Error deleting rating message for user ${userId}: ${error.message}`);
+      }
     }
     
     // Thank the user
@@ -1583,6 +1852,10 @@ bot.action('leave_feedback', async (ctx) => {
 });
 
 // =================== Admin Panel ===================
+
+/**
+ * Admin Panel is handled via action callbacks, no separate scene needed.
+ */
 
 // Entry point for Admin Panel
 bot.action('open_admin_panel', async (ctx) => {
@@ -2169,76 +2442,11 @@ bot.action('settings_edit_bank', async (ctx) => {
     // Enter a scene or handle via actions
     ctx.scene.state.editBankWalletList = linkedWallets;
     ctx.scene.state.editBanking = true;
-    ctx.scene.enter('edit_bank_selection_scene');
+    await ctx.scene.enter('edit_bank_selection_scene');
     ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error initiating edit_bank_details: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-    ctx.answerCbQuery();
-  }
-});
-
-// =================== Edit Bank Selection Scene ===================
-const editBankSelectionScene = new WizardScene(
-  'edit_bank_selection_scene',
-  // Step 1: Select Wallet to Edit with Clear Navigation
-  async (ctx) => {
-    try {
-      const userId = ctx.from.id.toString();
-      const userState = await getUserState(userId);
-      const linkedWallets = userState.wallets
-        .map((wallet, index) => ({ wallet, index }))
-        .filter(w => w.wallet.bank);
-
-      if (linkedWallets.length === 0) {
-        await ctx.replyWithMarkdown('❌ You have no linked bank accounts to edit.');
-        return ctx.scene.leave();
-      }
-
-      // Create buttons for each linked wallet
-      const buttons = linkedWallets.map(w => [Markup.button.callback(`Wallet ${w.index + 1}`, `edit_bank_wallet_${w.index}`)]);
-
-      // Add a 'Back' button
-      buttons.push([Markup.button.callback('🔙 Back to Settings Menu', 'edit_bank_back_settings')]);
-
-      await ctx.replyWithMarkdown('🔄 *Select a Wallet to Edit Bank Details:*', Markup.inlineKeyboard(buttons));
-      return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Error in edit_bank_selection_scene Step 1: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-      ctx.scene.leave();
-    }
-  },
-  // Step 2: Handle Wallet Selection via Action Callbacks
-  async (ctx) => {
-    // This step is handled via action callbacks
-    return;
-  }
-);
-
-// Handle Wallet Selection Actions with Security Checks
-bot.action(/edit_bank_wallet_(\d+)/, async (ctx) => {
-  try {
-    const walletIndex = parseInt(ctx.match[1], 10);
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-
-    if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
-      await ctx.replyWithMarkdown('❌ Selected wallet does not exist or has no linked bank account.');
-      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-      ctx.scene.leave();
-      return ctx.answerCbQuery();
-    }
-
-    ctx.scene.state.editBankWalletIndex = walletIndex;
-
-    // Prompt for PIN Authentication with Progress Indicator
-    await ctx.replyWithMarkdown('🔒 *Please enter your 6-digit PIN to proceed:*');
-    await ctx.scene.enter('enter_pin_authentication_scene');
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error handling edit_bank_wallet action: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
     ctx.answerCbQuery();
   }
 });
@@ -2315,251 +2523,20 @@ const enterPinAuthenticationScene = new WizardScene(
   }
 );
 
-// =================== Edit Bank Details Scene ===================
-const editBankDetailsScene = new WizardScene(
-  'edit_bank_details_scene',
-  // Step 1: Enter New Bank Name with Clear Explanation
-  async (ctx) => {
-    try {
-      ctx.scene.state.editBankData = {};
-      await ctx.replyWithMarkdown('🏦 *Edit Bank Account*\n\nPlease enter your new bank name (e.g., Access Bank):');
-      return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Error in edit_bank_details_scene Step 1: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-      ctx.scene.leave();
-    }
-  },
-  // Step 2: Enter New Account Number with Attempt Limits and Progress Indicator
-  async (ctx) => {
-    try {
-      const input = ctx.message.text.trim();
-      const userId = ctx.from.id.toString();
-      const walletIndex = ctx.scene.state.editBankWalletIndex;
-
-      const matchedBank = matchBank(input);
-
-      if (!matchedBank) {
-        ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
-        if (ctx.scene.state.bankAttempts >= 3) {
-          await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank editing process has been canceled. Please try again later or contact support.');
-          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-          ctx.scene.leave();
-          return;
-        }
-        await ctx.replyWithMarkdown('❌ *Invalid bank name.* Please enter a valid bank name from our supported list:\n\n' +
-          bankList.map(b => `• ${b.name}`).join('\n'));
-        return; // Remain in the same step
-      }
-
-      ctx.scene.state.editBankData.newBankName = matchedBank.name;
-      ctx.scene.state.editBankData.newBankCode = matchedBank.code;
-      ctx.scene.state.editBankData.newPaycrestCode = matchedBank.paycrestInstitutionCode;
-
-      await ctx.replyWithMarkdown('🔢 *Please enter your new 10-digit bank account number:*');
-      return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Error in edit_bank_details_scene Step 2: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
-      ctx.scene.leave();
-    }
-  },
-  // Step 3: Confirm and Update Bank Details with Attempt Limits and Clear Consequences
-  async (ctx) => {
-    try {
-      const input = ctx.message.text.trim();
-      const userId = ctx.from.id.toString();
-      const walletIndex = ctx.scene.state.editBankWalletIndex;
-
-      // Validate account number
-      if (!/^\d{10}$/.test(input)) {
-        ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
-        if (ctx.scene.state.bankAttempts >= 3) {
-          await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank editing process has been canceled. Please try again later or contact support.');
-          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-          ctx.scene.leave();
-          return; // Exit after max attempts
-        }
-        await ctx.replyWithMarkdown('❌ *Invalid account number.* Please enter a valid 10-digit account number:');
-        return; // Remain in the same step
-      }
-
-      ctx.scene.state.editBankData.newAccountNumber = input;
-
-      // Verify Bank Account via Paystack API with Progress Indicator
-      await ctx.replyWithMarkdown('🔄 *Verifying your new bank details...*');
-
-      try {
-        const verificationResult = await verifyBankAccount(ctx.scene.state.editBankData.newAccountNumber, ctx.scene.state.editBankData.newBankCode);
-
-        if (!verificationResult || !verificationResult.data) {
-          throw new Error('Invalid verification response.');
-        }
-
-        const accountName = verificationResult.data.account_name;
-
-        if (!accountName) {
-          throw new Error('Unable to retrieve account name.');
-        }
-
-        ctx.scene.state.editBankData.newAccountName = accountName;
-
-        // Ask for Confirmation
-        await ctx.replyWithMarkdown(
-          `🏦 *Bank Account Verification*\n\n` +
-          `Please confirm your new bank details:\n` +
-          `• *Bank Name:* ${ctx.scene.state.editBankData.newBankName}\n` +
-          `• *Account Number:* ****${ctx.scene.state.editBankData.newAccountNumber.slice(-4)}\n` +
-          `• *Account Holder:* ${accountName}\n\n` +
-          `Is this information correct?`,
-          Markup.inlineKeyboard([
-            [Markup.button.callback('✅ Yes, Confirm', 'confirm_new_bank_yes')],
-            [Markup.button.callback('❌ No, Edit Details', 'confirm_new_bank_no')],
-            [Markup.button.callback('❌ Cancel Editing', 'cancel_edit_bank')],
-          ])
-        );
-        return ctx.wizard.next();
-      } catch (error) {
-        logger.error(`Error verifying new bank account for user ${userId}: ${error.message}`);
-        ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
-        if (ctx.scene.state.bankAttempts >= 3) {
-          await ctx.replyWithMarkdown('❌ *Bank verification failed too many times.* The bank editing process has been canceled. Please try again later or contact support.');
-          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-          ctx.scene.leave();
-          return;
-        }
-        await ctx.replyWithMarkdown('❌ *Failed to verify your new bank account.* Please ensure your details are correct or try again.');
-        return; // Remain in the same step
-      }
-    } catch (error) {
-      logger.error(`Error in edit_bank_details_scene Step 3: ${error.message}`);
-      await ctx.replyWithMarkdown('⚠️ An error occurred while verifying your bank account. Please try again later.');
-      ctx.scene.leave();
-    }
-  },
-  // Step 4: Confirmation handled via action with Timeout Removal
-  async (ctx) => {
-    // No further steps; actions handle confirmation
-    return;
-  }
-);
-
-// Handle confirmation "Yes, Confirm" for new bank details with Progress Indicators
-editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    const walletIndex = ctx.scene.state.editBankWalletIndex;
-    const newBankData = ctx.scene.state.editBankData;
-
-    if (walletIndex === undefined || walletIndex === null) {
-      await ctx.reply('❌ No wallet selected for editing. Please try again.');
-      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-      ctx.scene.leave();
-      return ctx.answerCbQuery();
-    }
-
-    const userState = await getUserState(userId);
-
-    // Update the selected wallet with new bank details
-    if (!userState.wallets[walletIndex]) {
-      await ctx.reply('❌ Selected wallet does not exist.');
-      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-      ctx.scene.leave();
-      return ctx.answerCbQuery();
-    }
-
-    userState.wallets[walletIndex].bank = {
-      bankName: newBankData.newBankName,
-      bankCode: newBankData.newBankCode,
-      paycrestInstitutionCode: newBankData.newPaycrestCode,
-      accountNumber: newBankData.newAccountNumber,
-      accountName: newBankData.newAccountName,
-    };
-
-    // Update user state in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-      bankAttempts: 0, // Reset bank linking attempts on success
-    });
-
-    await ctx.reply('✅ *Bank account updated successfully!*');
-
-    // Show updated wallet details with Clear Explanations
-    const wallet = userState.wallets[walletIndex];
-    const ratesMessage = `📈 *Current Exchange Rates:*\n\n• *USDC*: ₦${exchangeRates['USDC']}\n• *USDT*: ₦${exchangeRates['USDT']}\n\nThese rates are applied during your deposits and payouts.`;
-
-    const supportedChains = Object.keys(chains).join(', ');
-    const riskWarning = `⚠️ *Risk Warning:*\nPlease ensure you only send tokens from supported chains (${supportedChains}) to your wallet address. Sending tokens from unsupported chains may result in loss of funds.`;
-
-    const walletDetails = `💼 *Wallet Details:*\n\n• *Address:* \`${wallet.address}\`\n• *Linked Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n\n${ratesMessage}\n\n${riskWarning}`;
-
-    // Send wallet details with clear explanations
-    await ctx.replyWithMarkdown(walletDetails, Markup.inlineKeyboard([
-      [Markup.button.callback('🔒 Create PIN', 'create_pin_yes')],
-      [Markup.button.callback('❌ Skip PIN Creation', 'create_pin_no')],
-      [Markup.button.callback('🔙 Back to Main Menu', 'edit_bank_back_main')],
-    ]));
-
-    // Reset bankAttempts in Firestore
-    await updateUserState(userId, { bankAttempts: 0 });
-
-    ctx.scene.leave();
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in confirm_new_bank_yes: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ *An error occurred while updating your bank account.* Please try again later.');
-    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-    ctx.scene.leave();
-    ctx.answerCbQuery();
-  }
-});
-
-// Handle confirmation "No, Edit Details" for new bank details
-editBankDetailsScene.action('confirm_new_bank_no', async (ctx) => {
-  try {
-    await ctx.replyWithMarkdown('🔄 *Let\'s try entering your new bank details again.*\n\nPlease enter your new bank name (e.g., Access Bank):');
-    ctx.scene.state.editBankData = {}; // Reset bank data
-    ctx.scene.state.bankAttempts = 0; // Reset bank attempts
-    ctx.wizard.back(); // Go back to bank name input
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in confirm_new_bank_no: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-    ctx.scene.leave();
-    ctx.answerCbQuery();
-  }
-});
-
-// Handle "Cancel Editing"
-editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
-  try {
-    const userId = ctx.from.id.toString();
-    await ctx.reply('❌ *Bank editing has been canceled.*');
-    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
-    ctx.scene.leave();
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in cancel_edit_bank: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-  }
-});
-
-// =================== PIN Creation and Verification ===================
-// (Already handled within createPinScene and enterPinScene)
-
-// =================== Admin Panel ===================
-// (Already handled above)
-
-// =================== Broadcast Message Scene ===================
-// (Already handled above)
+// =================== Send Message Scene ===================
+// Already handled within sendMessageScene
 
 // =================== Receipt Generation Scene ===================
-// (Already handled above)
+// Already handled within receiptGenerationScene
 
-// =================== Send Message Scene ===================
-// (Already handled above)
+// =================== Broadcast Message Scene ===================
+// Already handled within broadcastMessageScene
+
+// =================== Feedback Scene ===================
+// Already handled within feedbackScene
 
 // =================== Register All Scenes with Stage ===================
+// (Ensure that all scenes are defined before registering)
 stage.register(
   feedbackScene,
   createPinScene,
@@ -2573,11 +2550,7 @@ stage.register(
   editBankDetailsScene
 );
 
-// Apply session and stage middleware
-bot.use(session());
-bot.use(stage.middleware());
-
-// =================== Current Rates Handler ===================
+// =================== Exchange Rate Handler ===================
 bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   try {
     let ratesMessage = '*📈 Current Exchange Rates:*\n\n';
@@ -2592,15 +2565,20 @@ bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
   }
 });
 
-// =================== Final Registration and Server Start ===================
-// Ensure all scenes are properly registered before starting the server
-// (Scenes are already registered above)
+// =================== Admin Panel Navigation ===================
+// Handle 'Back to Admin Menu' from various admin submenus
+bot.action('admin_back_to_main', async (ctx) => {
+  try {
+    await ctx.reply('👨‍💼 **Admin Panel**\n\nSelect an option below:', getAdminMenu());
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error handling admin_back_to_main: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+    ctx.answerCbQuery();
+  }
+});
 
-// =================== Webhook Handlers ===================
-
-/**
- * Handle Telegram Webhook Updates
- */
+// =================== Telegram Webhook Handler ===================
 app.post(WEBHOOK_PATH, bodyParser.json(), (req, res) => {
   if (!req.body) {
     logger.error('No body found in Telegram webhook request.');
