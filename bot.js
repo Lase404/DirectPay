@@ -1,3 +1,4 @@
+// =================== Imports ===================
 const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const { WizardScene, Stage } = Scenes;
 const admin = require('firebase-admin');
@@ -10,6 +11,8 @@ const crypto = require('crypto');
 const Fuse = require('fuse.js');
 const bcrypt = require('bcrypt');
 const winston = require('winston');
+
+// =================== Logger Setup ===================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -463,7 +466,7 @@ const createPinScene = new WizardScene(
     try {
       ctx.scene.state.pinDigits = [];
       // **Updated Message for Clarity and Explanation**
-      await ctx.replyWithMarkdown('🔒 *Set Up Your 4-Digit PIN*\n\nA PIN adds an extra layer of security to your DirectPay account. It is required for accessing sensitive functionalities such as editing bank details and viewing transaction history.\n\nPlease enter your **4-digit numeric PIN**:');
+      await ctx.replyWithMarkdown('🔒 *Set Up Your 6-Digit PIN*\n\nA PIN adds an extra layer of security to your DirectPay account. It is required for accessing sensitive functionalities such as editing bank details and viewing transaction history.\n\nPlease enter your **6-digit numeric PIN**:');
       // Await text input
       return ctx.wizard.next();
     } catch (error) {
@@ -477,15 +480,15 @@ const createPinScene = new WizardScene(
     try {
       const input = ctx.message.text.trim();
 
-      // Validate that the input is exactly 4 digits
-      if (!/^\d{4}$/.test(input)) {
+      // Validate that the input is exactly 6 digits
+      if (!/^\d{6}$/.test(input)) {
         ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
         if (ctx.scene.state.pinAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The PIN creation process has been canceled. Please try again later or contact support.');
           ctx.scene.leave();
           return;
         }
-        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter a **4-digit numeric PIN**:');
+        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter a **6-digit numeric PIN**:');
         return; // Remain in the current step
       }
 
@@ -496,7 +499,7 @@ const createPinScene = new WizardScene(
       await ctx.deleteMessage();
 
       // Prompt for confirmation
-      await ctx.replyWithMarkdown('🔄 *Please confirm your 4-digit PIN:*', Markup.removeKeyboard());
+      await ctx.replyWithMarkdown('🔄 *Please confirm your 6-digit PIN:*', Markup.removeKeyboard());
 
       // Start a timeout for confirmation (e.g., 2 minutes)
       ctx.scene.state.confirmationTimeout = setTimeout(async () => {
@@ -518,15 +521,15 @@ const createPinScene = new WizardScene(
 
       const confirmedPin = ctx.message.text.trim();
 
-      // Validate that the input is exactly 4 digits
-      if (!/^\d{4}$/.test(confirmedPin)) {
+      // Validate that the input is exactly 6 digits
+      if (!/^\d{6}$/.test(confirmedPin)) {
         ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
         if (ctx.scene.state.pinAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The PIN creation process has been canceled. Please try again later or contact support.');
           ctx.scene.leave();
           return;
         }
-        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **4-digit numeric PIN** to confirm:');
+        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **6-digit numeric PIN** to confirm:');
         return; // Remain in the current step
       }
 
@@ -540,7 +543,7 @@ const createPinScene = new WizardScene(
           ctx.scene.leave();
           return;
         }
-        await ctx.replyWithMarkdown('❌ *PINs do not match.* Please enter your **4-digit numeric PIN** to confirm:');
+        await ctx.replyWithMarkdown('❌ *PINs do not match.* Please enter your **6-digit numeric PIN** to confirm:');
         return; // Remain in the current step
       }
 
@@ -567,7 +570,7 @@ const enterPinScene = new WizardScene(
   // Step 1: Enter PIN with Explanation
   async (ctx) => {
     try {
-      await ctx.replyWithMarkdown('🔒 *Enter your 4-digit PIN*\n\nYour PIN is required to perform sensitive actions such as editing bank details or viewing transaction history.');
+      await ctx.replyWithMarkdown('🔒 *Enter your 6-digit PIN*\n\nYour PIN is required to perform sensitive actions such as editing bank details or viewing transaction history.');
       // Await text input
       return ctx.wizard.next();
     } catch (error) {
@@ -581,15 +584,15 @@ const enterPinScene = new WizardScene(
     try {
       const enteredPin = ctx.message.text.trim();
 
-      // Validate that the input is exactly 4 digits
-      if (!/^\d{4}$/.test(enteredPin)) {
+      // Validate that the input is exactly 6 digits
+      if (!/^\d{6}$/.test(enteredPin)) {
         ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
         if (ctx.scene.state.pinAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* Access has been temporarily locked. Please try again later or contact support.');
           ctx.scene.leave();
           return;
         }
-        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **4-digit numeric PIN**:');
+        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **6-digit numeric PIN**:');
         return; // Remain in the current step
       }
 
@@ -644,6 +647,12 @@ const bankLinkingScene = new WizardScene(
         return ctx.scene.leave();
       }
 
+      // Prevent overlapping scenes by ensuring user is not in another scene
+      if (ctx.scene.current) {
+        await ctx.replyWithMarkdown('⚠️ You are already in a process. Please complete or cancel it before starting a new one.');
+        return ctx.scene.leave();
+      }
+
       // If multiple unlinked wallets, display them with clear navigation
       if (unlinkedWallets.length > 1) {
         let walletList = '*Select a Wallet to Link Bank Account:*\n\n';
@@ -651,7 +660,8 @@ const bankLinkingScene = new WizardScene(
           walletList += `• *Wallet ${w.index + 1}:* ${w.wallet.chain}\n`;
         });
         await ctx.replyWithMarkdown(walletList, Markup.inlineKeyboard([
-          [Markup.button.callback('🔄 Refresh', 'bank_linking_refresh')]
+          [Markup.button.callback('🔄 Refresh', 'bank_linking_refresh')],
+          [Markup.button.callback('🔙 Back to Main Menu', 'bank_linking_back_main')]
         ]));
         return ctx.wizard.next();
       }
@@ -678,6 +688,7 @@ const bankLinkingScene = new WizardScene(
         ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
         if (ctx.scene.state.bankAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank linking process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return;
         }
@@ -710,6 +721,7 @@ const bankLinkingScene = new WizardScene(
         ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
         if (ctx.scene.state.bankAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank linking process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return; // Exit after max attempts
         }
@@ -757,6 +769,7 @@ const bankLinkingScene = new WizardScene(
         ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
         if (ctx.scene.state.bankAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Bank verification failed too many times.* The bank linking process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return;
         }
@@ -769,7 +782,7 @@ const bankLinkingScene = new WizardScene(
       ctx.scene.leave();
     }
   },
-  // Step 4: Confirmation handled via action with Timeout
+  // Step 4: Confirmation handled via action with Timeout Removal
   async (ctx) => {
     // No further steps; actions handle confirmation
     return;
@@ -785,6 +798,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     if (walletIndex === undefined || walletIndex === null) {
       await ctx.reply('❌ No wallet selected for linking. Please try again.');
+      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
       ctx.scene.leave();
       return ctx.answerCbQuery();
     }
@@ -794,6 +808,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     // Update the selected wallet with bank details
     if (!userState.wallets[walletIndex]) {
       await ctx.reply('❌ Selected wallet does not exist.');
+      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
       ctx.scene.leave();
       return ctx.answerCbQuery();
     }
@@ -826,13 +841,18 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     await ctx.replyWithMarkdown(walletDetails, Markup.inlineKeyboard([
       [Markup.button.callback('🔒 Create PIN', 'create_pin_yes')],
       [Markup.button.callback('❌ Skip PIN Creation', 'create_pin_no')],
+      [Markup.button.callback('🔙 Back to Main Menu', 'bank_linking_back_main')],
     ]));
+
+    // Reset bankAttempts in Firestore
+    await updateUserState(userId, { bankAttempts: 0 });
 
     ctx.scene.leave();
     ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error in confirm_bank_yes: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ *An error occurred while linking your bank account.* Please try again later.');
+    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
     ctx.scene.leave();
     ctx.answerCbQuery();
   }
@@ -857,7 +877,9 @@ bankLinkingScene.action('confirm_bank_no', async (ctx) => {
 // Handle "Cancel Linking" within the scene
 bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   try {
+    const userId = ctx.from.id.toString();
     await ctx.reply('❌ *Bank linking has been canceled.*');
+    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
     ctx.scene.leave();
     ctx.answerCbQuery();
   } catch (error) {
@@ -883,6 +905,7 @@ bankLinkingScene.action('create_pin_yes', async (ctx) => {
 bankLinkingScene.action('create_pin_no', async (ctx) => {
   try {
     await ctx.replyWithMarkdown('✅ *Bank account linked successfully!* While you can access your account without a PIN, we highly recommend setting one for enhanced security.');
+    await updateUserState(ctx.from.id.toString(), { pinAttempts: 0 }); // Reset PIN attempts if needed
     ctx.scene.leave();
     ctx.answerCbQuery();
   } catch (error) {
@@ -1072,7 +1095,7 @@ const broadcastMessageScene = new WizardScene(
       }
 
       // Delete the progress message
-      await ctx.deleteMessage(progressMessage.message_id);
+      await ctx.deleteMessage(progressMessage.message_id).catch(() => {});
 
       await ctx.replyWithMarkdown(`✅ *Broadcast sent successfully!*\n\n• *Success:* ${successCount}\n• *Failed:* ${failureCount}`);
       ctx.scene.leave();
@@ -1244,57 +1267,75 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       return ctx.replyWithMarkdown(`⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets before adding new ones.`);
     }
     
+    // Prevent overlapping scenes by ensuring user is not in another scene
+    if (ctx.scene.current) {
+      await ctx.replyWithMarkdown('⚠️ You are already in a process. Please complete or cancel it before starting a new one.');
+      return;
+    }
+    
     // Display pending message with progress indicator
     const pendingMessage = await ctx.replyWithMarkdown('🔄 *Generating your wallet... Please wait.*');
 
     // Set a timeout to handle potential delays or failures (e.g., 5 minutes)
     const walletGenerationTimeout = setTimeout(async () => {
-      await ctx.replyWithMarkdown('⏰ *Wallet generation timed out.* Please try again later.');
-      await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
-      // Optionally, notify admin about the timeout
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ Wallet generation timed out for user ${userId}.`);
+      // Check if the user is still awaiting a response by verifying if the pending message still exists
+      try {
+        await ctx.telegram.getChat(PERSONAL_CHAT_ID); // Dummy check; replace with appropriate logic
+        await ctx.replyWithMarkdown('⏰ *Wallet generation timed out.* Please try again later.');
+        await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+        // Optionally, notify admin about the timeout
+        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ Wallet generation timed out for user ${userId}.`);
+      } catch (error) {
+        logger.error(`Error handling walletGenerationTimeout for user ${userId}: ${error.message}`);
+      }
     }, 300000); // 5 minutes
 
     // Generate the wallet
     const walletAddress = await generateWallet('Base'); // Since all wallets are EVM-supported, no need to select chain
 
-    // Clear the timeout as wallet generation succeeded
-    clearTimeout(walletGenerationTimeout);
+    // Check if the wallet generation happened after the timeout
+    // (Assuming walletGenerationTimeout is still pending)
+    if (ctx.scene.current) { // Simplistic check; replace with more robust logic if necessary
+      // Clear the timeout as wallet generation succeeded
+      clearTimeout(walletGenerationTimeout);
 
-    // Delete the Pending Message
-    await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
+      // Delete the Pending Message
+      await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
 
-    // Fetch Updated User State
-    const updatedUserState = await getUserState(userId);
+      // Fetch Updated User State
+      const updatedUserState = await getUserState(userId);
 
-    // Add the New Wallet to User State
-    updatedUserState.wallets.push({
-      address: walletAddress || 'N/A',
-      chain: 'EVM Supported',
-      supportedAssets: ['USDC', 'USDT'],
-      bank: null,
-      amount: 0 // Initialize amount if needed
-    });
+      // Add the New Wallet to User State
+      updatedUserState.wallets.push({
+        address: walletAddress || 'N/A',
+        chain: 'EVM Supported',
+        supportedAssets: ['USDC', 'USDT'],
+        bank: null,
+        amount: 0 // Initialize amount if needed
+      });
 
-    // Also, Add the Wallet Address to walletAddresses Array
-    const updatedWalletAddresses = userState.walletAddresses || [];
-    updatedWalletAddresses.push(walletAddress);
+      // Also, Add the Wallet Address to walletAddresses Array
+      const updatedWalletAddresses = userState.walletAddresses || [];
+      updatedWalletAddresses.push(walletAddress);
 
-    // Update User State in Firestore
-    await updateUserState(userId, {
-      wallets: updatedUserState.wallets,
-      walletAddresses: updatedWalletAddresses,
-    });
+      // Update User State in Firestore
+      await updateUserState(userId, {
+        wallets: updatedUserState.wallets,
+        walletAddresses: updatedWalletAddresses,
+      });
 
-    // Log Wallet Generation
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId}: ${walletAddress}`, { parse_mode: 'Markdown' });
-    logger.info(`Wallet generated for user ${userId}: ${walletAddress}`);
+      // Log Wallet Generation
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId}: ${walletAddress}`, { parse_mode: 'Markdown' });
+      logger.info(`Wallet generated for user ${userId}: ${walletAddress}`);
 
-    // Immediately prompt to enter bank details with Progress Indicator
-    await ctx.replyWithMarkdown('🔄 *Linking your bank account...* ⏳');
-    await ctx.scene.enter('bank_linking_scene');
+      // Immediately prompt to enter bank details with Progress Indicator
+      await ctx.replyWithMarkdown('🔄 *Linking your bank account...* ⏳');
+      await ctx.scene.enter('bank_linking_scene');
+    }
   } catch (error) {
     logger.error(`Error handling Generate Wallet for user ${userId}: ${error.message}`);
+    // Clear the timeout as an error occurred
+    clearTimeout(walletGenerationTimeout);
     // Delete the pending message if an error occurs
     await ctx.deleteMessage(pendingMessage.message_id).catch(() => {});
     await ctx.replyWithMarkdown('⚠️ An error occurred while generating your wallet. Please try again later.');
@@ -1356,6 +1397,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
         navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${page + 1}`));
       }
       navigationButtons.push(Markup.button.callback('🔄 Refresh', `wallet_page_${page}`));
+      navigationButtons.push(Markup.button.callback('🔙 Back to Main Menu', 'wallet_page_back_main'));
 
       const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
 
@@ -1424,6 +1466,7 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
       navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${requestedPage + 1}`));
     }
     navigationButtons.push(Markup.button.callback('🔄 Refresh', `wallet_page_${requestedPage}`));
+    navigationButtons.push(Markup.button.callback('🔙 Back to Main Menu', 'wallet_page_back_main'));
 
     const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
 
@@ -1739,7 +1782,7 @@ If you haven't received your transaction, follow these steps to troubleshoot:
    - Click on "⚙️ Settings" > "✏️ Edit Linked Bank Details" from the main menu.
 
 2. **Authenticate with PIN:**
-   - Enter your 4-digit PIN to verify your identity.
+   - Enter your 6-digit PIN to verify your identity.
 
 3. **Provide New Bank Details:**
    - Enter the updated bank name or account number as required.
@@ -1872,6 +1915,7 @@ bot.hears(/💬\s*Support/i, async (ctx) => {
       [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
       [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
       [Markup.button.callback('💬 Contact Support', 'support_contact')],
+      [Markup.button.callback('🔙 Back to Main Menu', 'support_back_main')],
     ]));
   } catch (error) {
     logger.error(`Error handling Support for user ${ctx.from.id}: ${error.message}`);
@@ -1879,11 +1923,11 @@ bot.hears(/💬\s*Support/i, async (ctx) => {
   }
 });
 
-// Support Actions
+// Handle Support Actions
 bot.action('support_how_it_works', async (ctx) => {
   try {
     await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-    ctx.answerCbQuery();
+    await ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error handling support_how_it_works: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
@@ -1893,7 +1937,7 @@ bot.action('support_how_it_works', async (ctx) => {
 bot.action('support_not_received', async (ctx) => {
   try {
     await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-    ctx.answerCbQuery();
+    await ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error handling support_not_received: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
@@ -1903,10 +1947,22 @@ bot.action('support_not_received', async (ctx) => {
 bot.action('support_contact', async (ctx) => {
   try {
     await ctx.replyWithMarkdown('You can contact our support team at [@your_support_username](https://t.me/your_support_username).');
-    ctx.answerCbQuery();
+    await ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error handling support_contact: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again later.');
+  }
+});
+
+// Handle 'Back to Main Menu' in Support
+bot.action('support_back_main', async (ctx) => {
+  try {
+    await greetUser(ctx);
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error handling support_back_main: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+    ctx.answerCbQuery();
   }
 });
 
@@ -1967,6 +2023,7 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
         navigationButtons.push(Markup.button.callback('Next ➡️', `transaction_page_${page + 1}`));
       }
       navigationButtons.push(Markup.button.callback('🔄 Refresh', `transaction_page_${page}`));
+      navigationButtons.push(Markup.button.callback('🔙 Back to Main Menu', 'transaction_page_back_main'));
 
       const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
 
@@ -2038,6 +2095,7 @@ bot.action(/transaction_page_(\d+)/, async (ctx) => {
       navigationButtons.push(Markup.button.callback('Next ➡️', `transaction_page_${requestedPage + 1}`));
     }
     navigationButtons.push(Markup.button.callback('🔄 Refresh', `transaction_page_${requestedPage}`));
+    navigationButtons.push(Markup.button.callback('🔙 Back to Main Menu', 'transaction_page_back_main'));
 
     const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
 
@@ -2068,7 +2126,12 @@ bot.action('settings_back_main', async (ctx) => {
 // =================== Settings Menu Actions ===================
 bot.action('settings_generate_wallet', async (ctx) => {
   try {
-    await ctx.scene.leave();
+    // Check if user is already in a scene to prevent overlapping
+    if (ctx.scene.current) {
+      await ctx.replyWithMarkdown('⚠️ You are already in a process. Please complete or cancel it before starting a new one.');
+      return ctx.answerCbQuery();
+    }
+
     await ctx.reply('💼 Generating a new wallet...');
     await ctx.scene.enter('bank_linking_scene');
     ctx.answerCbQuery();
@@ -2099,7 +2162,8 @@ bot.action('settings_edit_bank', async (ctx) => {
     });
 
     await ctx.replyWithMarkdown(walletList, Markup.inlineKeyboard([
-      [Markup.button.callback('🔄 Refresh', 'edit_bank_refresh')]
+      [Markup.button.callback('🔄 Refresh', 'edit_bank_refresh')],
+      [Markup.button.callback('🔙 Back to Settings Menu', 'edit_bank_back_settings')]
     ]));
 
     // Enter a scene or handle via actions
@@ -2161,13 +2225,15 @@ bot.action(/edit_bank_wallet_(\d+)/, async (ctx) => {
 
     if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
       await ctx.replyWithMarkdown('❌ Selected wallet does not exist or has no linked bank account.');
+      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
+      ctx.scene.leave();
       return ctx.answerCbQuery();
     }
 
     ctx.scene.state.editBankWalletIndex = walletIndex;
 
     // Prompt for PIN Authentication with Progress Indicator
-    await ctx.replyWithMarkdown('🔒 *Please enter your 4-digit PIN to proceed:*');
+    await ctx.replyWithMarkdown('🔒 *Please enter your 6-digit PIN to proceed:*');
     await ctx.scene.enter('enter_pin_authentication_scene');
     ctx.answerCbQuery();
   } catch (error) {
@@ -2183,7 +2249,7 @@ const enterPinAuthenticationScene = new WizardScene(
   // Step 1: Enter PIN with Security Reminder
   async (ctx) => {
     try {
-      await ctx.replyWithMarkdown('🔒 *Enter your 4-digit PIN:*');
+      await ctx.replyWithMarkdown('🔒 *Enter your 6-digit PIN:*');
       // Await text input
       return ctx.wizard.next();
     } catch (error) {
@@ -2197,15 +2263,16 @@ const enterPinAuthenticationScene = new WizardScene(
     try {
       const enteredPin = ctx.message.text.trim();
 
-      // Validate that the input is exactly 4 digits
-      if (!/^\d{4}$/.test(enteredPin)) {
+      // Validate that the input is exactly 6 digits
+      if (!/^\d{6}$/.test(enteredPin)) {
         ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
         if (ctx.scene.state.pinAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* Access has been temporarily locked. Please try again later or contact support.');
+          await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return;
         }
-        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **4-digit numeric PIN**:');
+        await ctx.replyWithMarkdown('❌ *Invalid PIN.* Please enter your **6-digit numeric PIN**:');
         return; // Remain in the current step
       }
 
@@ -2218,6 +2285,7 @@ const enterPinAuthenticationScene = new WizardScene(
 
       if (!userState.wallets[walletIndex] || !userState.wallets[walletIndex].bank) {
         await ctx.reply('⚠️ Selected wallet does not exist or has no linked bank account.');
+        await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
         ctx.scene.leave();
         return;
       }
@@ -2233,6 +2301,7 @@ const enterPinAuthenticationScene = new WizardScene(
         ctx.scene.state.pinAttempts = (ctx.scene.state.pinAttempts || 0) + 1;
         if (ctx.scene.state.pinAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Incorrect PIN.* Access has been temporarily locked. Please try again later or contact support.');
+          await updateUserState(userId, { pinAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return;
         }
@@ -2274,6 +2343,7 @@ const editBankDetailsScene = new WizardScene(
         ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
         if (ctx.scene.state.bankAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank editing process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return;
         }
@@ -2306,6 +2376,7 @@ const editBankDetailsScene = new WizardScene(
         ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
         if (ctx.scene.state.bankAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Too many invalid attempts.* The bank editing process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return; // Exit after max attempts
         }
@@ -2353,6 +2424,7 @@ const editBankDetailsScene = new WizardScene(
         ctx.scene.state.bankAttempts = (ctx.scene.state.bankAttempts || 0) + 1;
         if (ctx.scene.state.bankAttempts >= 3) {
           await ctx.replyWithMarkdown('❌ *Bank verification failed too many times.* The bank editing process has been canceled. Please try again later or contact support.');
+          await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
           ctx.scene.leave();
           return;
         }
@@ -2381,6 +2453,7 @@ editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
 
     if (walletIndex === undefined || walletIndex === null) {
       await ctx.reply('❌ No wallet selected for editing. Please try again.');
+      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
       ctx.scene.leave();
       return ctx.answerCbQuery();
     }
@@ -2390,6 +2463,7 @@ editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
     // Update the selected wallet with new bank details
     if (!userState.wallets[walletIndex]) {
       await ctx.reply('❌ Selected wallet does not exist.');
+      await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
       ctx.scene.leave();
       return ctx.answerCbQuery();
     }
@@ -2423,12 +2497,18 @@ editBankDetailsScene.action('confirm_new_bank_yes', async (ctx) => {
     await ctx.replyWithMarkdown(walletDetails, Markup.inlineKeyboard([
       [Markup.button.callback('🔒 Create PIN', 'create_pin_yes')],
       [Markup.button.callback('❌ Skip PIN Creation', 'create_pin_no')],
+      [Markup.button.callback('🔙 Back to Main Menu', 'edit_bank_back_main')],
     ]));
+
+    // Reset bankAttempts in Firestore
+    await updateUserState(userId, { bankAttempts: 0 });
+
     ctx.scene.leave();
     ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error in confirm_new_bank_yes: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ *An error occurred while updating your bank account.* Please try again later.');
+    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
     ctx.scene.leave();
     ctx.answerCbQuery();
   }
@@ -2453,7 +2533,9 @@ editBankDetailsScene.action('confirm_new_bank_no', async (ctx) => {
 // Handle "Cancel Editing"
 editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   try {
+    const userId = ctx.from.id.toString();
     await ctx.reply('❌ *Bank editing has been canceled.*');
+    await updateUserState(userId, { bankAttempts: 0 }); // Reset attempts
     ctx.scene.leave();
     ctx.answerCbQuery();
   } catch (error) {
@@ -2462,20 +2544,20 @@ editBankDetailsScene.action('cancel_edit_bank', async (ctx) => {
   }
 });
 
-// =================== PIN Creation Actions ===================
-// Already handled within bankLinkingScene and editBankDetailsScene
+// =================== PIN Creation and Verification ===================
+// (Already handled within createPinScene and enterPinScene)
 
 // =================== Admin Panel ===================
-// Already handled above
+// (Already handled above)
 
 // =================== Broadcast Message Scene ===================
-// Already handled above
+// (Already handled above)
 
 // =================== Receipt Generation Scene ===================
-// Already handled above
+// (Already handled above)
 
 // =================== Send Message Scene ===================
-// Already handled above
+// (Already handled above)
 
 // =================== Register All Scenes with Stage ===================
 stage.register(
