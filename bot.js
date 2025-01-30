@@ -1,4 +1,4 @@
-// =================== Import Dependencies ===================
+// DirectPay (telegram bot)
 const express = require('express');
 const { Telegraf, Markup, Scenes, session } = require('telegraf');
 const admin = require('firebase-admin');
@@ -9,8 +9,6 @@ const fs = require('fs');
 const winston = require('winston');
 const bodyParser = require('body-parser');
 require('dotenv').config();
-
-// =================== Logger Setup ===================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -25,7 +23,7 @@ const logger = winston.createLogger({
   ],
 });
 
-// =================== Firebase Setup ===================
+//Firebase Setup 
 const serviceAccountPath = path.join(__dirname, 'directpay.json');
 if (!fs.existsSync(serviceAccountPath)) {
   logger.error('Firebase service account file (directpay.json) not found.');
@@ -38,7 +36,7 @@ admin.initializeApp({
 });
 const db = admin.firestore();
 
-// =================== Environment Variables ===================
+// Environment Variables
 const {
   BOT_TOKEN,
   PAYCREST_API_KEY,
@@ -63,13 +61,11 @@ if (!BOT_TOKEN || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !WEBHOOK_DOMAI
   process.exit(1);
 }
 
-// =================== Initialize Express App ===================
+// Initialize Express App, Initialize Telegraf Bot
 const app = express();
-
-// =================== Initialize Telegraf Bot ===================
 const bot = new Telegraf(BOT_TOKEN);
 
-// =================== Define Supported Banks ===================
+// Supported Banks 
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
   { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
@@ -86,7 +82,7 @@ const bankList = [
   { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGPC' },
 ];
 
-// Define Supported Chains
+// Supported Chains
 const chains = {
   Base: {
     id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
@@ -141,7 +137,7 @@ const getMainMenu = (walletExists, hasBankLinked) =>
     ['📈 View Current Rates'], // Added Refresh Rates Button
   ]).resize();
 
-// =================== Check if User is Admin ===================
+// User is Admin?
 const isAdmin = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
 
 // '/start Command'
