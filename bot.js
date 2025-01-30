@@ -134,7 +134,7 @@ const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
     [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', hasBankLinked ? '⚙️ Settings' : '🏦 Link Bank Account'],
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
-    ['📈 View Current Rates'], // Added Refresh Rates Button
+    ['📈 View Current Rates'],
   ]).resize();
 
 // User is Admin?
@@ -396,10 +396,6 @@ bot.hears('⚙️ Settings', async (ctx) => {
   await ctx.reply('⚙️ *Settings Menu*', getSettingsMenu());
 });
 
-/**
- * Generates the Settings Menu Inline Keyboard.
- * @returns {Markup} - Inline Keyboard Markup.
- */
 const getSettingsMenu = () =>
   Markup.inlineKeyboard([
     [Markup.button.callback('🔄 Generate New Wallet', 'settings_generate_wallet')],
@@ -532,6 +528,21 @@ bot.action(/select_receipt_wallet_(\d+)/, async (ctx) => {
   ctx.session.walletIndex = walletIndex;
   await ctx.scene.enter('receipt_generation_scene');
   ctx.answerCbQuery();
+});
+
+// =================== View Current Rates Handler ===================
+bot.hears(/📈\s*View Current Rates/i, async (ctx) => {
+  try {
+    let ratesMessage = '📈 *Current Exchange Rates*:\n\n';
+    for (const [asset, rate] of Object.entries(exchangeRates)) {
+      ratesMessage += `• *${asset}*: ₦${rate}\n`;
+    }
+    ratesMessage += `\nThese rates are subjected to change.`;
+    await ctx.replyWithMarkdown(ratesMessage);
+  } catch (error) {
+    logger.error(`Error fetching current rates for user ${ctx.from.id}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ Unable to fetch current rates. Please try again later.');
+  }
 });
 
 // =================== Support Handlers ===================
@@ -720,8 +731,16 @@ bot.action('support_contact', async (ctx) => {
 bot.hears(/💰\s*Transactions/i, async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
+    if (!ctx.session) ctx.session = {}; // Ensure session exists
+
     const pageSize = 5; // Number of transactions per page
     const userState = await getUserState(userId);
+    
+    if (!userState || !Array.isArray(userState.wallets)) {
+      await ctx.replyWithMarkdown('⚠️ No transactions found.');
+      return;
+    }
+
     const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
     ctx.session.transactionsPage = 1; // Initialize to first page
 
@@ -750,15 +769,13 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       }
       navigationButtons.push(Markup.button.callback('🔄 Refresh', `transaction_page_${page}`));
 
-      const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-      return { message, inlineKeyboard };
+      return { message, inlineKeyboard: Markup.inlineKeyboard([navigationButtons]) };
     };
 
     const { message, inlineKeyboard } = generateTransactionPage(ctx.session.transactionsPage);
-    await ctx.replyWithMarkdown(message, inlineKeyboard);
+    await ctx.replyWithMarkdown(message, { reply_markup: inlineKeyboard.reply_markup });
   } catch (error) {
-    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
+    console.error(`Error fetching transactions for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ Unable to fetch transactions. Please try again later.');
   }
 });
@@ -769,10 +786,17 @@ bot.action(/transaction_page_(\d+)/, async (ctx) => {
   const requestedPage = parseInt(ctx.match[1], 10);
 
   try {
+    if (!ctx.session) ctx.session = {}; // Ensure session exists
+
     const pageSize = 5;
     const userState = await getUserState(userId);
-    const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
+    
+    if (!userState || !Array.isArray(userState.wallets)) {
+      await ctx.answerCbQuery('⚠️ No transactions found.', { show_alert: true });
+      return;
+    }
 
+    const totalPages = Math.ceil(userState.wallets.length / pageSize) || 1;
     if (requestedPage < 1 || requestedPage > totalPages) {
       return ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
     }
@@ -803,12 +827,13 @@ bot.action(/transaction_page_(\d+)/, async (ctx) => {
     }
     navigationButtons.push(Markup.button.callback('🔄 Refresh', `transaction_page_${requestedPage}`));
 
-    const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-    ctx.answerCbQuery(); // Acknowledge the callback
+    await ctx.editMessageText(message, {
+      parse_mode: 'Markdown',
+      reply_markup: Markup.inlineKeyboard([navigationButtons]).reply_markup,
+    });
+    ctx.answerCbQuery();
   } catch (error) {
-    logger.error(`Error navigating transaction pages for user ${userId}: ${error.message}`);
+    console.error(`Error navigating transaction pages for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred while navigating transactions. Please try again later.');
     ctx.answerCbQuery();
   }
