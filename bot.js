@@ -22,6 +22,8 @@ const logger = winston.createLogger({
     new winston.transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 })
   ],
 });
+const { session } = require('@telegraf/session');
+bot.use(session());
 
 //Firebase Setup 
 const serviceAccountPath = path.join(__dirname, 'directpay.json');
@@ -239,47 +241,46 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet for *${chain}*... Please wait a moment.`);
 
   try {
-    const walletAddress = await generateWallet(chain);
+  const walletAddress = await generateWallet(chain);
+  const userState = await getUserState(userId);
 
-    // Fetch Updated User State
-    const userState = await getUserState(userId);
+  if (!userState.wallets) {
+    userState.wallets = []; // Ensure wallets array exists
+  }
 
-    if (userState.wallets.length >= MAX_WALLETS) {
-      await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
-      await ctx.deleteMessage(generatingMessage.message_id);
-      return;
-    }
-
-    // Add the New Wallet to User State
-    userState.wallets.push({
-      address: walletAddress || 'N/A',
-      chain: chain || 'N/A',
-      supportedAssets: chains[chain].supportedAssets ? [...chains[chain].supportedAssets] : [],
-      bank: null,
-      amount: 0 // Initialize amount if needed
-    });
-
-    // Also, Add the Wallet Address to walletAddresses Array
-    const updatedWalletAddresses = userState.walletAddresses || [];
-    updatedWalletAddresses.push(walletAddress);
-
-    // Update User State in Firestore
-    await updateUserState(userId, {
-      wallets: userState.wallets,
-      walletAddresses: updatedWalletAddresses,
-    });
-
-    // Log Wallet Generation
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId} on ${chain}: ${walletAddress}`, { parse_mode: 'Markdown' });
-    logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
-
-    // Set walletIndex to the newly created wallet
-    const newWalletIndex = userState.wallets.length - 1;
-    ctx.session.walletIndex = newWalletIndex;
-
-    // Delete the Generating Message
+  if (userState.wallets.length >= MAX_WALLETS) {
+    await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
     await ctx.deleteMessage(generatingMessage.message_id);
+    return;
+  }
 
+  // Add the New Wallet to User State
+  userState.wallets.push({
+    address: walletAddress || 'N/A',
+    chain: chain || 'N/A',
+    supportedAssets: chains[chain]?.supportedAssets || [],
+    bank: null,
+    amount: 0
+  });
+
+  // Ensure ctx.session is initialized
+  if (!ctx.session) {
+    ctx.session = {};
+  }
+
+  // Set walletIndex
+  ctx.session.walletIndex = userState.wallets.length - 1;
+
+  await updateUserState(userId, {
+    wallets: userState.wallets
+  });
+
+  await ctx.deleteMessage(generatingMessage.message_id);
+  await ctx.scene.enter('bank_linking_scene');
+} catch (error) {
+  logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
+  await ctx.replyWithMarkdown('⚠️ An error occurred while generating your wallet. Please try again later.');
+}
     // Enter the Bank Linking Wizard Scene Immediately
     await ctx.scene.enter('bank_linking_scene');
   } catch (error) {
