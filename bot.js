@@ -22,8 +22,6 @@ const logger = winston.createLogger({
     new winston.transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 })
   ],
 });
-const { session } = require('@telegraf/session');
-bot.use(session());
 
 //Firebase Setup 
 const serviceAccountPath = path.join(__dirname, 'directpay.json');
