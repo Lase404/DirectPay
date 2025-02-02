@@ -279,8 +279,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
   await ctx.replyWithMarkdown('⚠️ An error occurred while generating your wallet. Please try again later.');
 }
-    // Enter the Bank Linking Wizard Scene Immediately
-    await ctx.scene.enter('bank_linking_scene');
+  await ctx.scene.enter('bank_linking_scene');
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
