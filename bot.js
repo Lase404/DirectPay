@@ -1821,11 +1821,7 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
     switch (event) {
       case 'payment_order.pending':
         await bot.telegram.sendMessage(
-          userId, 
-          `⏳ *Your DirectPay order is pending processing.*\n\n` +
-          `*Reference ID:* \`${reference}\`\n` +
-          `*Amount:* ₦${amountPaid}\n` +
-          `*Status:* Pending\n\n` +
+          userId,
           `We are currently processing your order. Please wait for further updates.`, 
           { parse_mode: 'Markdown' }
         );
@@ -1848,7 +1844,7 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
           `Hello ${userFirstName},\n\n` +
           `Your DirectPay order has been completed. Here are the details of your order:\n\n` +
           `*Crypto amount:* ${txData.amount} ${txData.asset}\n` +
-          `*Cash amount:* NGN ${amountPaid}\n` +
+          `*Cash amount:* NGN ${ngnAmount}\n` +
           `*Network:* ${txData.chain}\n` +
           `*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\n` + 
           `Thank you 💙.`,
