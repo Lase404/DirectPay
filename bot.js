@@ -825,7 +825,6 @@ async function greetUser(ctx) {
   await ctx.replyWithMarkdown(greeting, getMainMenu(walletExists, hasBankLinked));
 }
 
-// =================== Generate Wallet Handler ===================
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   let pendingMessage;
@@ -833,9 +832,10 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     const userState = await getUserState(userId);
     
     if (userState.wallets.length >= MAX_WALLETS) {
-      return ctx.replyWithMarkdown(`⚠️ You’ve reached the maximum of ${MAX_WALLETS} wallets. Manage existing wallets before adding new ones.`, getMainMenu(true, hasBankLinked));
+      return ctx.replyWithMarkdown(`⚠️ You’ve reached the maximum of ${MAX_WALLETS} wallets. Manage existing wallets before adding new ones.`, getMainMenu(true, userState.wallets.some(w => w.bank)));
     }
     
+    // Send a temporary message and store its reference
     pendingMessage = await ctx.replyWithMarkdown('🔄 Generating wallet... Please wait.');
 
     const chain = 'Base';
@@ -855,22 +855,37 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       walletAddresses: userState.walletAddresses,
     });
 
-    await ctx.editMessageText(
+    // Edit the pending message using its chat_id and message_id
+    await bot.telegram.editMessageText(
+      pendingMessage.chat.id,
+      pendingMessage.message_id,
+      null,
       `✅ *Wallet Generated Successfully!*\n\n` +
       `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
       `*Supported Assets:* USDC, USDT\n\n` +
       `Link a bank account to access your wallet address. Contact support for unsupported tokens.`,
-      getMainMenu(true, false)
+      { parse_mode: 'Markdown', reply_markup: getMainMenu(true, false).reply_markup }
     );
 
     ctx.session.walletIndex = userState.wallets.length - 1;
     await ctx.scene.enter('bank_linking_scene');
   } catch (error) {
     logger.error(`Error generating wallet for ${userId}: ${error.message}`);
-    await ctx.editMessageText('⚠️ Wallet generation failed. Please try again later.', getMainMenu(false, false));
+    // Edit the pending message in case of error
+    if (pendingMessage) {
+      await bot.telegram.editMessageText(
+        pendingMessage.chat.id,
+        pendingMessage.message_id,
+        null,
+        '⚠️ Wallet generation failed. Please try again later.',
+        { parse_mode: 'Markdown', reply_markup: getMainMenu(false, false).reply_markup }
+      );
+    } else {
+      // Fallback if pendingMessage wasn't sent yet
+      await ctx.replyWithMarkdown('⚠️ Wallet generation failed. Please try again later.', getMainMenu(false, false));
+    }
   }
 });
-
 // =================== View Wallet Handler ===================
 bot.hears('💼 View Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
