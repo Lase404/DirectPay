@@ -32,7 +32,8 @@
     "web3": "^1.10.0",
     "winston": "^3.8.2",
     "fuse.js": "^6.6.2",
-    "qrcode": "1.5.4"
+    "qrcode": "1.5.4",
+    "sharp": "0.33.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
