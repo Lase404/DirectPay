@@ -835,7 +835,6 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       return ctx.replyWithMarkdown(`⚠️ You’ve reached the maximum of ${MAX_WALLETS} wallets. Manage existing wallets before adding new ones.`, getMainMenu(true, userState.wallets.some(w => w.bank)));
     }
     
-    // Send a temporary message and store its reference
     pendingMessage = await ctx.replyWithMarkdown('🔄 Generating wallet... Please wait.');
 
     const chain = 'Base';
@@ -855,7 +854,6 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       walletAddresses: userState.walletAddresses,
     });
 
-    // Edit the pending message using its chat_id and message_id
     await bot.telegram.editMessageText(
       pendingMessage.chat.id,
       pendingMessage.message_id,
@@ -871,8 +869,8 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     await ctx.scene.enter('bank_linking_scene');
   } catch (error) {
     logger.error(`Error generating wallet for ${userId}: ${error.message}`);
-    // Edit the pending message in case of error
     if (pendingMessage) {
+      // Line 876: This is where the error occurs
       await bot.telegram.editMessageText(
         pendingMessage.chat.id,
         pendingMessage.message_id,
@@ -881,11 +879,12 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
         { parse_mode: 'Markdown', reply_markup: getMainMenu(false, false).reply_markup }
       );
     } else {
-      // Fallback if pendingMessage wasn't sent yet
       await ctx.replyWithMarkdown('⚠️ Wallet generation failed. Please try again later.', getMainMenu(false, false));
     }
   }
 });
+
+
 // =================== View Wallet Handler ===================
 bot.hears('💼 View Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
