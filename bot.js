@@ -69,9 +69,9 @@ if (!BOT_TOKEN || !PAYCREST_API_KEY || !PAYCREST_CLIENT_SECRET || !WEBHOOK_DOMAI
 }
 
 // =================== Image File IDs ===================
-const depositSuccessImage = 'YOUR_DEPOSIT_SUCCESS_FILE_ID'; // Replace with actual file_id
-const paymentSettledImage = 'YOUR_PAYMENT_SETTLED_FILE_ID'; // Replace with actual file_id
-const walletGeneratedBaseImage = 'YOUR_BASE_PNG_FILE_ID'; // Replace with actual file_id
+const depositSuccessImage = 'AAMCBAADGQEAAhwYZ7fssuzPC9COzm0tqo-ocaZM_6UAArgcAAJnC8FRNbki6XorEmEBAAdtAAM2BA; // Replace with actual file_id
+const paymentSettledImage = 'AAMCBAADGQEAAhwXZ7fsrCk1AdBYBcRu3vkoLAU5QLcAArccAAJnC8FRVIqfw9CeOBEBAAdtAAM2BA'; // Replace with actual file_id
+const walletGeneratedBaseImage = 'AgACAgQAAxkBAAIcHGe91Ora-irbqhuTTWEKlPvwCEVYAALDxzEbsujxUby5bO7b177hAQADAgADcwADNgQ'; // Replace with actual file_id
 const errorImage = 'YOUR_ERROR_FILE_ID'; // Optional, replace with actual file_id if used
 
 // =================== Initialize Express App ===================
