@@ -832,9 +832,13 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     const userState = await getUserState(userId);
     
     if (userState.wallets.length >= MAX_WALLETS) {
-      return ctx.replyWithMarkdown(`⚠️ You’ve reached the maximum of ${MAX_WALLETS} wallets. Manage existing wallets before adding new ones.`, getMainMenu(true, userState.wallets.some(w => w.bank)));
+      return ctx.replyWithMarkdown(
+        `⚠️ You’ve reached the maximum of ${MAX_WALLETS} wallets. Manage existing wallets before adding new ones.`,
+        getMainMenu(true, userState.wallets.some(w => w.bank))
+      );
     }
     
+    // Send the pending message
     pendingMessage = await ctx.replyWithMarkdown('🔄 Generating wallet... Please wait.');
 
     const chain = 'Base';
@@ -854,6 +858,7 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       walletAddresses: userState.walletAddresses,
     });
 
+    // Edit the pending message without markup
     await bot.telegram.editMessageText(
       pendingMessage.chat.id,
       pendingMessage.message_id,
@@ -862,28 +867,33 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
       `*Supported Assets:* USDC, USDT\n\n` +
       `Link a bank account to access your wallet address. Contact support for unsupported tokens.`,
-      { parse_mode: 'Markdown', reply_markup: getMainMenu(true, false).reply_markup }
+      { parse_mode: 'Markdown' } // No reply_markup here
     );
+
+    // Send the main menu separately
+    await ctx.replyWithMarkdown('What would you like to do next?', getMainMenu(true, false));
 
     ctx.session.walletIndex = userState.wallets.length - 1;
     await ctx.scene.enter('bank_linking_scene');
   } catch (error) {
     logger.error(`Error generating wallet for ${userId}: ${error.message}`);
     if (pendingMessage) {
-      // Line 876: This is where the error occurs
+      // Edit the pending message without markup
       await bot.telegram.editMessageText(
         pendingMessage.chat.id,
         pendingMessage.message_id,
         null,
         '⚠️ Wallet generation failed. Please try again later.',
-        { parse_mode: 'Markdown', reply_markup: getMainMenu(false, false).reply_markup }
+        { parse_mode: 'Markdown' } // No reply_markup here
       );
+      // Send the main menu separately
+      await ctx.replyWithMarkdown('Please try again or choose another option.', getMainMenu(false, false));
     } else {
+      // Fallback if the pending message wasn’t sent
       await ctx.replyWithMarkdown('⚠️ Wallet generation failed. Please try again later.', getMainMenu(false, false));
     }
   }
 });
-
 
 // =================== View Wallet Handler ===================
 bot.hears('💼 View Wallet', async (ctx) => {
