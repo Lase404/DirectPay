@@ -316,7 +316,7 @@ async function generateWalletGeneratedImage(walletAddress, fileId) {
 const getMainMenu = () => Markup.keyboard([
   ['💼 View Wallet'],
   ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
-  ['📈 View Current Rates', '📝 Feedback']
+  ['📈 View Current Rates', '⚙️ Settings', '📝 Feedback']
 ]).resize();
 
 // =================== Define Scenes ===================
@@ -440,7 +440,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       `Only USDC and USDT are supported across these networks. Contact support for other tokens.`,
       {
         parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([[Markup.button.callback('📋 Copy Address', `copy_address_${wallet.address}`)]).reply_markup
+        reply_markup: Markup.inlineKeyboard([[Markup.button.callback('📋 Copy Address', `copy_address_${wallet.address}`)]]).reply_markup
       }
     );
     await bot.telegram.sendPhoto(userId, walletImageFileId, { caption: '', reply_markup: getMainMenu().reply_markup });
@@ -532,7 +532,7 @@ const sendMessageScene = new Scenes.WizardScene(
       await ctx.replyWithMarkdown('Admin menu:', getAdminMenu());
     } catch (error) {
       logger.error(`Error sending message to ${userIdToMessage}: ${error.message}`);
-      await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '⚠️ Error sending message. Verify the User ID and try again.', { parse_mode: 'Markdown' });
+      await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '❌ Error sending message. Verify the User ID and try again.', { parse_mode: 'Markdown' });
       await bot.telegram.sendPhoto(adminUserId, errorImage, { caption: 'Message sending failed.', reply_markup: getAdminMenu().reply_markup });
     }
     delete ctx.session.userIdToMessage;
@@ -657,7 +657,7 @@ bot.start(async (ctx) => {
     await ctx.replyWithMarkdown(greeting, getMainMenu());
   } catch (error) {
     logger.error(`Error in /start command: ${error.message}`);
-    await bot.telegram.sendPhoto(ctx.from.id, errorImage, { caption: '⚠️ An error occurred. Please try again later.', reply_markup: getMainMenu().reply_markup });
+    await bot.telegram.sendPhoto(ctx.from.id, errorImage, { caption: '❌ An error occurred. Please try again later.', reply_markup: getMainMenu().reply_markup });
   }
 });
 
@@ -739,7 +739,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     await ctx.replyWithMarkdown('Menu:', getMainMenu());
   } catch (error) {
     logger.error(`Error viewing wallets for ${userId}: ${error.message}`);
-    await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '⚠️ Failed to fetch wallets.', { parse_mode: 'Markdown' });
+    await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '❌ Failed to fetch wallets.', { parse_mode: 'Markdown' });
     await bot.telegram.sendPhoto(userId, errorImage, { caption: 'Wallet fetch failed.', reply_markup: getMainMenu().reply_markup });
   }
 });
@@ -761,7 +761,7 @@ bot.hears('⚙️ Settings', async (ctx) => {
     });
   } catch (error) {
     logger.error(`Error accessing settings for ${userId}: ${error.message}`);
-    await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '⚠️ Settings access failed.', { parse_mode: 'Markdown' });
+    await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '❌ Settings access failed.', { parse_mode: 'Markdown' });
     await bot.telegram.sendPhoto(userId, errorImage, { caption: 'Settings failed.', reply_markup: getMainMenu().reply_markup });
   }
 });
@@ -820,7 +820,7 @@ bot.action('settings_edit_bank', async (ctx) => {
     await ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error editing bank in settings for ${userId}: ${error.message}`);
-    await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '⚠️ Failed to edit bank details. Please try again.', { parse_mode: 'Markdown' });
+    await bot.telegram.editMessageText(pendingMessage.chat.id, pendingMessage.message_id, null, '❌ Failed to edit bank details. Please try again.', { parse_mode: 'Markdown' });
     await bot.telegram.sendPhoto(userId, errorImage, { caption: 'Bank edit failed.', reply_markup: getSettingsMenu().reply_markup });
     await ctx.answerCbQuery();
   }
@@ -1375,8 +1375,8 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
         await updateTransactionStatus(userId, txDoc.id, 'Expired');
         await bot.telegram.sendMessage(userId, `⚠️ *Order Expired*\n\n` +
           `Hello ${userFirstName},\n\n` +
-                    `Your order (Ref ID: ${reference}) expired due to processing issues. Funds returned to your source.\n\n` +
-          `Contact support if needed.`, { parse_mode: 'Markdown', reply_markup: getMainMenu().reply_markup });
+          `Your order (Ref ID: ${reference}) expired due to processing issues. Funds returned to your source`
+                    `Contact support if needed.`, { parse_mode: 'Markdown', reply_markup: getMainMenu().reply_markup });
         await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⏰ *Order Expired*\n\n*User:* ${userFirstName} (ID: ${userId})\n*Ref ID:* ${reference}`, { parse_mode: 'Markdown' });
         break;
       case 'payment_order.refunded':
