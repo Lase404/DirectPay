@@ -1449,8 +1449,8 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
         break;
       case 'payment_order.settled':
         const payoutMessage = userState.usePidgin
-          ? `🎉 *Transaction Successful!*\n\nHello ${accountName}, your order don complete!\n*Crypto:* ${txData.amount} ${txData.asset}\n*Cash:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nYou don hammer! NGN${txData.payout} just land like hot amala for your plate. Others dey cry with lower p2p rates, but you dey laugh with DirectPay—na you sabi road!``
-          : `🎉 *Funds Credited Successfully!*\n\nHello ${accountName}, your order has been completed.\n*Crypto:* ${txData.amount} ${txData.asset}\n*Cash:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nYou’ve struck gold!`;
+          ? `🎉 *Transaction Successful!*\n\nHello ${accountName}, your order don complete!\n*Crypto:*${txData.amount} ${txData.asset}\n*Cash:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nYou don hammer! NGN${txData.payout} just land like hot amala for your plate. Others dey cry with lower p2p rates, but you dey laugh with DirectPay—na you sabi road!``
+          : `🎉 *Funds Credited Successfully!*\n\nHello ${accountName}, your order has been completed.\n*Crypto:* ${txData.amount} ${txData.asset}\n*Cash:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nYou've struck gold!`;
         await bot.telegram.sendPhoto(userId, { source: PAYOUT_SUCCESS_IMAGE }, { caption: payoutMessage, parse_mode: 'Markdown' });
         await db.collection('transactions').doc(txDoc.id).update({ status: 'Completed' });
         await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ *Order Settled*\n*User:* ${userFirstName} (ID: ${userId})\n*Reference:* ${reference}\n*Amount Paid:* ₦${amountPaid}\n`, { parse_mode: 'Markdown' });
