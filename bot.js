@@ -1654,7 +1654,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, bodyParser.json(), async (req, res) => {
         await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error creating order for user ${txData.userId}: ${err.message}`, { parse_mode: 'Markdown' });
         await txDoc.ref.update({ status: 'Failed' });
         const assuranceMessage = userState.usePidgin
-           `⚠️ *Wahala Dey!*\n\n` +
+           ? `⚠️ *Wahala Dey!*\n\n` +
             `We get small issue processing your order o. No worry, we dey work on refund wey go show for your wallet in 3-5 minutes. Sorry for the wahala, abeg bear with us!\n\n` +
             `If you get question, ping our support team sharp-sharp.`
           : `⚠️ *Issue Detected*\n\n` +
