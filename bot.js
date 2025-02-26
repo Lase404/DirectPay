@@ -548,7 +548,6 @@ bankLinkingScene.action('bank_is_third_party', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
   const prompt = userState.usePidgin
-  const prompt = userState.usePidgin
     ? 'Okay o! Who you be then? Abeg tell us your first name and last name so we fit know you well-well:\n(Reply with "FirstName LastName", e.g., "Chioma Eze")'
     : 'Alright! What’s your name then? Please provide your first name and last name so we can identify you:\n(Reply with "FirstName LastName", e.g., "Chioma Eze")';
   await ctx.replyWithMarkdown(prompt);
