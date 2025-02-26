@@ -1663,31 +1663,52 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, bodyParser.json(), async (req, res) => {
         await bot.telegram.sendPhoto(txData.userId, { source: ERROR_IMAGE }, { caption: assuranceMessage, parse_mode: 'Markdown' });
         return res.status(500).send('Paycrest order error');
       }
-      const receiveAddress = paycrestOrder.receiveAddress;
-      let blockradarAssetId;
-      switch (asset) {
-        case 'USDC': blockradarAssetId = chains[chain].assets['USDC']; break;
-        case 'USDT': blockradarAssetId = chains[chain].assets['USDT']; break;
-        default: throw new Error(`Unsupported asset: ${asset}`);
-      }
-      try {
-        await withdrawFromBlockradar(chainRaw, blockradarAssetId, receiveAddress, amount, paycrestOrder.id, { userId: txData.userId, originalTxHash: transactionHash });
-      } catch (err) {
-        logger.error(`Error withdrawing: ${err.message}`);
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error withdrawing for user ${txData.userId}: ${err.message}`, { parse_mode: 'Markdown' });
-        await txDoc.ref.update({ status: 'Failed' });
-        const assuranceMessage = userState.usePidgin
-          ? `⚠️ *Withdrawal Wahala Dey!*\n\n` +
-            `We get small issue processing your withdrawal o. No worry, we dey work on refund wey go show for your wallet in 3-5 minutes. Sorry for the wahala, abeg bear with us!\n\n` +
-            `If you get question, ping our support team sharp-sharp.`
-          : `⚠️ *Withdrawal Issue Detected*\n\n` +
-            `We’ve encountered an issue processing your withdrawal. Rest assured, we are working on a refund which should reflect in your wallet within 3-5 minutes. We apologize for the inconvenience and appreciate your patience.\n\n` +
-            `If you have any questions, please contact our support team.`;
-        await bot.telegram.sendPhoto(txData.userId, { source: ERROR_IMAGE }, { caption: assuranceMessage, parse_mode: 'Markdown' });
-        return res.status(500).send('Blockradar withdrawal error');
-      }
-      await txDoc.ref.update({ status: 'Processing' });
-      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `Deposit swept for user ${txData.userId}: Reference ${paycrestOrder.id}`);
+ const receiveAddress = paycrestOrder.receiveAddress;
+let blockradarAssetId;
+switch (asset) {
+  case 'USDC':
+    blockradarAssetId = chains[chain].assets['USDC'];
+    break;
+  case 'USDT':
+    blockradarAssetId = chains[chain].assets['USDT'];
+    break;
+  default:
+    throw new Error(`Unsupported asset: ${asset}`);
+}
+
+try {
+  await withdrawFromBlockradar(
+    chainRaw,
+    blockradarAssetId,
+    receiveAddress,
+    amount,
+    paycrestOrder.id,
+    { userId: txData.userId, originalTxHash: transactionHash }
+  );
+} catch (err) {
+  logger.error(`Error withdrawing: ${err.message}`);
+  await bot.telegram.sendMessage(
+    PERSONAL_CHAT_ID,
+    `❗️ Error withdrawing for user ${txData.userId}: ${err.message}`,
+    { parse_mode: 'Markdown' }
+  );
+  await txDoc.ref.update({ status: 'Failed' });
+  const assuranceMessage = userState.usePidgin
+    ? `⚠️ *Withdrawal Wahala Dey!*\n\nWe get small issue processing your withdrawal o. No worry, we dey work on refund wey go show for your wallet in 3-5 minutes. Sorry for the wahala, abeg bear with us!\n\nIf you get question, ping our support team sharp-sharp.`
+    : `⚠️ *Withdrawal Issue Detected*\n\nWe’ve encountered an issue processing your withdrawal. Rest assured, we are working on a refund which should reflect in your wallet within 3-5 minutes. We apologize for the inconvenience and appreciate your patience.\n\nIf you have any questions, please contact our support team.`;
+  await bot.telegram.sendPhoto(
+    txData.userId,
+    { source: ERROR_IMAGE },
+    { caption: assuranceMessage, parse_mode: 'Markdown' }
+  );
+  return res.status(500).send('Blockradar withdrawal error');
+}
+
+await txDoc.ref.update({ status: 'Processing' });
+await bot.telegram.sendMessage(
+  PERSONAL_CHAT_ID,
+  `Deposit swept for user ${txData.userId}: Reference ${paycrestOrder.id}`
+);
 logger.info(`Deposit swept for user ${txData.userId}: Reference ${paycrestOrder.id}`);
 res.status(200).send('OK');
 
