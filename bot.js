@@ -1321,7 +1321,7 @@ bot.action(/admin_(.+)/, async (ctx) => {
             const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
             const userStateTx = await getUserState(txData.userId);
             const successMsg = userStateTx.usePidgin
-              ? `🎉 *Transaction Successful!*\n\nHello ${accountName}, your order don complete!\n*Crypto:* ${txData.amount} ${txData.asset}\n*Cash:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nYou don hammer! NGN${txData.payout} just land like hot amala for your plate. Others dey cry with lower p2p rates, but you dey laugh with DirectPay—na you sabi road!``
+              ? `🎉 *Transaction Successful!*\n\nHello ${accountName}, your order don complete!\n*Crypto:* ${txData.amount} ${txData.asset}\n*Cash:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nYou don hammer! NGN${txData.payout} just land like hot amala for your plate. Others dey cry with lower p2p rates, but you dey laugh with DirectPay—na you sabi road!`
               : `🎉 *Funds Credited Successfully!*\n\nHello ${accountName}, your order has been completed.\n*Crypto:* ${txData.amount} ${txData.asset}\n*Cash:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nYou’ve struck gold!`;
             await bot.telegram.sendPhoto(txData.userId, { source: PAYOUT_SUCCESS_IMAGE }, { caption: successMsg, parse_mode: 'Markdown' });
             logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
