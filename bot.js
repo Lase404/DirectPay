@@ -451,7 +451,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     };
     await updateUserState(userId, { wallets: userState.wallets });
     const extraWarning = userState.usePidgin
-      ? `\n\n*Note:* No go send Shiba Inu or any funny coin to this address o! Na only USDC and USDT we dey accept here. If you try am, na sara you go collect—VeryDarkMan no go even carry your case`;
+      ? `\n\n*Note:* No go send Shiba Inu or any funny coin to this address o! Na only USDC and USDT we dey accept here. If you try am, na sara you go collect—VeryDarkMan no go even carry your case`
       : `\n\n*Note:* Only USDC and USDT are supported.`;
     const confirmationMessage = userState.usePidgin
       ? `👏 *Bank Linked Successfully!*\n\nWelcome to DirectPay! Here’s your wallet:\n*Address:* \`${wallet.address}\`\n*Networks:* Base, BNB Smart Chain, Polygon (Matic)\n*Assets:* USDC, USDT\n\n*Bank:* ${bankData.bankName}\n*Acc Number:* ${bankData.accountNumber}\n*Holder:* ${bankData.accountName}\n${extraWarning}\n\nScan the QR code to copy your address!`
