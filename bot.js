@@ -1690,7 +1690,6 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, bodyParser.json(), async (req, res) => {
       await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `Deposit swept for user ${txData.userId}: Reference ${paycrestOrder.id}`);
 logger.info(`Deposit swept for user ${txData.userId}: Reference ${paycrestOrder.id}`);
 res.status(200).send('OK');
-});
 
 bot.action(/feedback_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
