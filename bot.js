@@ -1020,7 +1020,7 @@ bot.action(/view_wallet_(\d+)/, async (ctx) => {
         `🔹 *Creation Date:* ${new Date(wallet.creationDate).toLocaleString()}\n` +
         `🔹 *Total Deposits:* ${wallet.totalDeposits || 0} USDC/USDT\n` +
         `🔹 *Total Payouts:* ₦${wallet.totalPayouts || 0}`
-      : `🌟 *${wallet.name || `Wallet #${walletIndex + 1}*\n\n` +
+      : `🌟 *${wallet.name || `Wallet #${walletIndex + 1}}*\n\n` +
         `🔹 *Address:* \`${wallet.address}\`\n` +
         `🔹 *Network:* ${wallet.chain}\n` +
         `🔹 *Supported Assets:*\n` +
