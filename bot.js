@@ -78,7 +78,7 @@ const app = express();
 // =================== Initialize Telegraf Bot ===================
 const bot = new Telegraf(BOT_TOKEN);
 
-// =================== Define Supported Banks ===================
+// =================== Supported Banks ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ABNGNGLA' },
   { name: 'Wema Bank', code: '035', aliases: ['wema', 'wema bank', 'wemab', 'wema bank nigeria'], paycrestInstitutionCode: 'WEMANGLA' },
@@ -95,7 +95,7 @@ const bankList = [
   { name: 'FCMB', code: '214', aliases: ['fcmb', 'first city monument bank', 'fcmb nigeria'], paycrestInstitutionCode: 'FCMBNGPC' },
 ];
 
-// =================== Define Supported Chains ===================
+// =================== Supported Chains ===================
 const chains = {
   Base: {
     id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
@@ -103,7 +103,10 @@ const chains = {
     apiUrl: 'https://api.blockradar.co/v1/wallets/e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1/addresses',
     supportedAssets: ['USDC', 'USDT'],
     network: 'Base',
-    assets: { USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3', USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3' }
+    assets: {
+      USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
+      USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
+    }
   },
   Polygon: {
     id: 'f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a',
@@ -111,7 +114,10 @@ const chains = {
     apiUrl: 'https://api.blockradar.co/v1/wallets/f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a/addresses',
     supportedAssets: ['USDC', 'USDT'],
     network: 'Polygon',
-    assets: { USDC: 'f348e8e3-e0b4-4704-857e-c274ef000c00', USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1' }
+    assets: {
+      USDC: 'f348e8e3-e0b4-4704-857e-c274ef000c00',
+      USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1',
+    }
   },
   'BNB Smart Chain': {
     id: '7a844e91-5740-4589-9695-c74411adec7e',
@@ -119,7 +125,10 @@ const chains = {
     apiUrl: 'https://api.blockradar.co/v1/wallets/7a844e91-5740-4589-9695-c74411adec7e/addresses',
     supportedAssets: ['USDT', 'USDC'],
     network: 'BNB Smart Chain',
-    assets: { USDC: 'ff479231-0dbb-4760-b695-e219a50934af', USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb' }
+    assets: {
+      USDC: 'ff479231-0dbb-4760-b695-e219a50934af',
+      USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb',
+    }
   }
 };
 
@@ -163,7 +172,7 @@ async function verifyBankAccount(accountNumber, bankCode) {
   try {
     const response = await axios.get(`https://api.paystack.co/bank/resolve`, {
       params: { account_number: accountNumber, bank_code: bankCode },
-      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` }
+      headers: { Authorization: `Bearer ${PAYSTACK_API_KEY}` },
     });
     return response.data;
   } catch (error) {
@@ -175,7 +184,9 @@ async function verifyBankAccount(accountNumber, bankCode) {
 async function createPaycrestOrder(userId, amount, token, network, recipientDetails, userSendAddress) {
   try {
     const paycrestMapping = mapToPaycrest(token, network);
-    if (!paycrestMapping) throw new Error('No Paycrest mapping for the selected asset/chain.');
+    if (!paycrestMapping) {
+      throw new Error('No Paycrest mapping for the selected asset/chain.');
+    }
     const bank = bankList.find(b => b.name.toLowerCase() === recipientDetails.bankName.toLowerCase());
     if (!bank || !bank.paycrestInstitutionCode) {
       const errorMsg = `No Paycrest institution code found for bank: ${recipientDetails.bankName}`;
@@ -191,7 +202,9 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
       providerId: ""
     };
     const rate = exchangeRates[token];
-    if (!rate) throw new Error(`Exchange rate for ${token} not available.`);
+    if (!rate) {
+      throw new Error(`Exchange rate for ${token} not available.`);
+    }
     const orderPayload = {
       amount: String(amount),
       rate: String(rate),
@@ -199,12 +212,17 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
       token: paycrestMapping.token,
       recipient: recipient,
       returnAddress: userSendAddress || PAYCREST_RETURN_ADDRESS,
-      feePercent: 2
+      feePercent: 2,
     };
     const orderResp = await axios.post('https://api.paycrest.io/v1/sender/orders', orderPayload, {
-      headers: { 'API-Key': PAYCREST_API_KEY, 'Content-Type': 'application/json' }
+      headers: {
+        'API-Key': PAYCREST_API_KEY,
+        'Content-Type': 'application/json'
+      }
     });
-    if (orderResp.data.status !== 'success') throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
+    if (orderResp.data.status !== 'success') {
+      throw new Error(`Paycrest order creation failed: ${orderResp.data.message}`);
+    }
     return orderResp.data.data;
   } catch (err) {
     logger.error(`Error creating Paycrest order: ${err.response ? err.response.data.message : err.message}`);
@@ -215,14 +233,29 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
 async function withdrawFromBlockradar(chain, assetId, address, amount, reference, metadata) {
   try {
     const chainKey = chainMapping[chain.toLowerCase()];
-    if (!chainKey) throw new Error(`Unsupported or unknown chain: ${chain}`);
+    if (!chainKey) {
+      throw new Error(`Unsupported or unknown chain: ${chain}`);
+    }
     const chainData = chains[chainKey];
-    if (!chainData) throw new Error(`Chain data not found for: ${chainKey}`);
+    if (!chainData) {
+      throw new Error(`Chain data not found for: ${chainKey}`);
+    }
     const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${chainData.id}/withdraw`, {
-      address, amount: String(amount), assetId, reference, metadata
-    }, { headers: { 'x-api-key': chainData.key, 'Content-Type': 'application/json' } });
+      address,
+      amount: String(amount),
+      assetId,
+      reference,
+      metadata
+    }, {
+      headers: {
+        'x-api-key': chainData.key,
+        'Content-Type': 'application/json'
+      }
+    });
     const data = resp.data;
-    if (data.statusCode !== 200) throw new Error(`Blockradar withdrawal error: ${JSON.stringify(data)}`);
+    if (data.statusCode !== 200) {
+      throw new Error(`Blockradar withdrawal error: ${JSON.stringify(data)}`);
+    }
     return data;
   } catch (error) {
     logger.error(`Error withdrawing from Blockradar: ${error.response ? error.response.data.message : error.message}`);
@@ -240,7 +273,7 @@ async function getUserState(userId) {
         walletAddresses: [],
         hasReceivedDeposit: false,
         awaitingBroadcastMessage: false,
-        usePidgin: false
+        usePidgin: false,
       });
       return { firstName: '', wallets: [], walletAddresses: [], hasReceivedDeposit: false, awaitingBroadcastMessage: false, usePidgin: false };
     } else {
@@ -251,7 +284,7 @@ async function getUserState(userId) {
         walletAddresses: data.walletAddresses || [],
         hasReceivedDeposit: data.hasReceivedDeposit || false,
         awaitingBroadcastMessage: data.awaitingBroadcastMessage || false,
-        usePidgin: data.usePidgin || false
+        usePidgin: data.usePidgin || false,
       };
     }
   } catch (error) {
@@ -272,10 +305,18 @@ async function updateUserState(userId, newState) {
 async function generateWallet(chain) {
   try {
     const chainData = chains[chain];
-    if (!chainData) throw new Error(`Unsupported chain: ${chain}`);
-    const response = await axios.post(chainData.apiUrl, { name: `DirectPay_User_Wallet_${chain}` }, { headers: { 'x-api-key': chainData.key } });
+    if (!chainData) {
+      throw new Error(`Unsupported chain: ${chain}`);
+    }
+    const response = await axios.post(
+      chainData.apiUrl,
+      { name: `DirectPay_User_Wallet_${chain}` },
+      { headers: { 'x-api-key': chainData.key } }
+    );
     const walletAddress = response.data.data.address;
-    if (!walletAddress) throw new Error('Wallet address not returned from Blockradar.');
+    if (!walletAddress) {
+      throw new Error('Wallet address not returned from Blockradar.');
+    }
     return walletAddress;
   } catch (error) {
     logger.error(`Error generating wallet for ${chain}: ${error.response ? error.response.data.message : error.message}`);
@@ -285,7 +326,7 @@ async function generateWallet(chain) {
 
 // =================== Define Scenes ===================
 
-// ---------- Bank Linking Scene (Mandatory after wallet generation) ----------
+// ---------- Bank Linking Scene ----------
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   async (ctx) => {
@@ -350,9 +391,13 @@ const bankLinkingScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown(verifyingMsg);
     try {
       const verificationResult = await verifyBankAccount(ctx.session.bankData.accountNumber, ctx.session.bankData.bankCode);
-      if (!verificationResult || !verificationResult.data) throw new Error('Invalid verification response.');
+      if (!verificationResult || !verificationResult.data) {
+        throw new Error('Invalid verification response.');
+      }
       const accountName = verificationResult.data.account_name;
-      if (!accountName) throw new Error('Unable to retrieve account name.');
+      if (!accountName) {
+        throw new Error('Unable to retrieve account name.');
+      }
       ctx.session.bankData.accountName = accountName;
       ctx.session.bankData.step = 4;
       const confirmMsg = userState.usePidgin
@@ -361,7 +406,7 @@ const bankLinkingScene = new Scenes.WizardScene(
       await ctx.replyWithMarkdown(confirmMsg, Markup.inlineKeyboard([
         [Markup.button.callback('✅ Yes, Confirm', 'confirm_bank_yes')],
         [Markup.button.callback('❌ No, Edit Details', 'confirm_bank_no')],
-        [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')]
+        [Markup.button.callback('❌ Cancel Linking', 'cancel_bank_linking')],
       ]));
       return ctx.wizard.next();
     } catch (error) {
@@ -374,7 +419,9 @@ const bankLinkingScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
-  async (ctx) => { return; } // Confirmation is handled via callbacks.
+  async (ctx) => {
+    return; // Confirmation handled by actions
+  }
 );
 
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
@@ -397,11 +444,11 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       bankName: bankData.bankName,
       bankCode: bankData.bankCode,
       accountNumber: bankData.accountNumber,
-      accountName: bankData.accountName
+      accountName: bankData.accountName,
     };
     await updateUserState(userId, { wallets: userState.wallets });
     const confirmationMessage = userState.usePidgin
-      ? `👏 *Bank Account Linked Successfully!*\n\nWelcome to DirectPay! Here’s your new wallet setup:\n\n*Wallet Address:* \`${wallet.address}\`\n*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n*Supported Assets:* USDC, USDT\n\n*Bank Name:* ${bankData.bankName}\n*Account Number:* ${bankData.accountNumber}\n*Account Holder:* ${bankData.accountName}\n\nOnly USDC and USDT dey work here. Scan the QR code to grab your address!`
+      ? `👏 *Bank Account Linked Successfully!*\n\nWelcome to DirectPay! Here’s your new wallet setup:\n\n*Wallet Address:* \`${wallet.address}\`\n*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n*Supported Assets:* USDC, USDT\n\n*Bank Name:* ${bankData.bankName}\n*Account Number:* ${bankData.accountNumber}\n*Account Holder:* ${bankData.accountName}\n\nOnly USDC and USDT dey work here o. Scan the QR code to grab your address!`
       : `👏 *Bank Account Linked Successfully!*\n\nWelcome to DirectPay! Here are the details of your new wallet setup:\n\n*Wallet Address:* \`${wallet.address}\`\n*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n*Supported Assets:* USDC, USDT\n\n*Bank Name:* ${bankData.bankName}\n*Account Number:* ${bankData.accountNumber}\n*Account Holder:* ${bankData.accountName}\n\nPlease note, only USDC and USDT are supported. Scan the QR code below to copy your wallet address!`;
     const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodeURIComponent(wallet.address)}`;
     const qrCodeResponse = await axios.get(qrCodeUrl, { responseType: 'arraybuffer' });
@@ -413,7 +460,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       .toFile(outputImagePath);
     await bot.telegram.sendPhoto(userId, { source: outputImagePath }, {
       caption: confirmationMessage,
-      parse_mode: 'Markdown'
+      parse_mode: 'Markdown',
     });
     fs.unlinkSync(outputImagePath);
     if (!userState.firstName) {
@@ -422,10 +469,10 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
         : `📋 One quick question: Is this bank account (${bankData.accountName}) yours or someone else’s?\n\n[✅ It’s mine!] [❌ It’s a third party’s]`;
       await ctx.replyWithMarkdown(namePrompt, Markup.inlineKeyboard([
         [Markup.button.callback(userState.usePidgin ? '✅ Na me o!' : '✅ It’s mine!', 'bank_is_mine')],
-        [Markup.button.callback(userState.usePidgin ? '❌ Na third party' : '❌ It’s a third party’s', 'bank_is_third_party')]
+        [Markup.button.callback(userState.usePidgin ? '❌ Na third party' : '❌ It’s a third party’s', 'bank_is_third_party')],
       ]));
     } else {
-      const mainMenu = getMainMenu(userState.wallets.length > 0);
+      const mainMenu = getMainMenu(userState.wallets && userState.wallets.length > 0);
       const menuText = userState.usePidgin
         ? `Here’s your menu, ${userState.firstName} wey sabi road:`
         : `Here’s your menu, ${userState.firstName}:`;
@@ -466,7 +513,7 @@ bankLinkingScene.action('bank_is_mine', async (ctx) => {
     const confirmMsg = userState.usePidgin
       ? `Ehen! Good choice, ${firstName}! We go dey call you ${firstName} from now on, sharp person wey sabi road. Here’s your menu:`
       : `Great! We’ll call you ${firstName} from now on. Here’s your menu, ${firstName}:`;
-    const mainMenu = getMainMenu(userState.wallets.length > 0);
+    const mainMenu = getMainMenu(userState.wallets && userState.wallets.length > 0);
     await ctx.replyWithMarkdown(confirmMsg, { reply_markup: mainMenu.reply_markup });
     if (isAdmin(userId)) {
       const adminText = userState.usePidgin
@@ -517,7 +564,7 @@ bankLinkingScene.on('text', async (ctx) => {
     const confirmMsg = userState.usePidgin
       ? `Correct! From now on, we go dey call you ${firstName}, fine person wey dey run things! Here’s your menu:`
       : `Perfect! From now on, we’ll call you ${firstName}. Here’s your menu, ${firstName}:`;
-    const mainMenu = getMainMenu(userState.wallets.length > 0);
+    const mainMenu = getMainMenu(userState.wallets && userState.wallets.length > 0);
     await ctx.replyWithMarkdown(confirmMsg, { reply_markup: mainMenu.reply_markup });
     if (isAdmin(userId)) {
       const adminText = userState.usePidgin
@@ -597,9 +644,12 @@ const sendMessageScene = new Scenes.WizardScene(
       const fileId = highestResolutionPhoto.file_id;
       const caption = ctx.message.caption || '';
       try {
-        await bot.telegram.sendPhoto(userIdToMessage, fileId, { caption, parse_mode: 'Markdown' });
-        const successMsg = userState.usePidgin ? '✅ Photo message don go o!' : '✅ Photo message sent successfully.';
+        await bot.telegram.sendPhoto(userIdToMessage, fileId, { caption: caption, parse_mode: 'Markdown' });
+        const successMsg = userState.usePidgin
+          ? '✅ Photo message don go o!'
+          : '✅ Photo message sent successfully.';
         await ctx.replyWithMarkdown(successMsg);
+        logger.info(`Admin ${adminUserId} sent photo message to user ${userIdToMessage}. Caption: ${caption}`);
       } catch (error) {
         logger.error(`Error sending photo to user ${userIdToMessage}: ${error.message}`);
         const errorMsg = userState.usePidgin
@@ -621,8 +671,11 @@ const sendMessageScene = new Scenes.WizardScene(
           ? `📩 *Message from Admin:*\n\n${messageContent}`
           : `📩 *Message from Admin:*\n\n${messageContent}`;
         await bot.telegram.sendMessage(userIdToMessage, adminMsg, { parse_mode: 'Markdown' });
-        const successMsg = userState.usePidgin ? '✅ Text message don go o!' : '✅ Text message sent successfully.';
+        const successMsg = userState.usePidgin
+          ? '✅ Text message don go o!'
+          : '✅ Text message sent successfully.';
         await ctx.replyWithMarkdown(successMsg);
+        logger.info(`Admin ${adminUserId} sent text message to user ${userIdToMessage}: ${messageContent}`);
       } catch (error) {
         logger.error(`Error sending message to user ${userIdToMessage}: ${error.message}`);
         const errorMsg = userState.usePidgin
@@ -648,7 +701,11 @@ const walletRenameScene = new Scenes.WizardScene(
     if (!ctx.session) ctx.session = {};
     const userState = await getUserState(ctx.from.id.toString());
     if (!userState.wallets || userState.wallets.length === 0) {
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ You no get wallet o! Generate one first.' : '❌ No wallet found. Please generate a wallet first.');
+      await ctx.replyWithMarkdown(
+        userState.usePidgin
+          ? '❌ You no get wallet o! Abeg generate one first.'
+          : 'No wallet found. Please generate a wallet first.'
+      );
       return ctx.scene.leave();
     }
     if (ctx.session.walletIndex === undefined) {
@@ -659,11 +716,20 @@ const walletRenameScene = new Scenes.WizardScene(
         userState.wallets.forEach((wallet, index) => {
           keyboard.push([Markup.button.callback(`Wallet ${index + 1} - ${wallet.address.slice(0, 6)}...`, `rename_select_${index}`)]);
         });
-        await ctx.replyWithMarkdown(userState.usePidgin ? 'Abeg choose which wallet you wan rename:' : 'Please select the wallet to rename:', Markup.inlineKeyboard(keyboard));
+        await ctx.replyWithMarkdown(
+          userState.usePidgin
+            ? 'Abeg choose which wallet you wan rename:'
+            : 'Please select the wallet to rename:',
+          Markup.inlineKeyboard(keyboard)
+        );
         return;
       }
     }
-    await ctx.replyWithMarkdown(userState.usePidgin ? 'Abeg enter new wallet name:' : 'Please enter the new wallet name:');
+    await ctx.replyWithMarkdown(
+      userState.usePidgin
+        ? 'Abeg enter new wallet name:'
+        : 'Please enter the new wallet name:'
+    );
     return ctx.wizard.next();
   },
   async (ctx) => {
@@ -695,8 +761,7 @@ bot.action(/rename_select_(\d+)/, async (ctx) => {
   await ctx.scene.enter('wallet_rename_scene');
 });
 
-// ---------- Wallet Delete Scene ----------
-// NOTE: walletDeleteScene is declared only once.
+// ---------- Wallet Delete Scene (Declared only once) ----------
 const walletDeleteScene = new Scenes.WizardScene(
   'wallet_delete_scene',
   async (ctx) => {
@@ -704,7 +769,11 @@ const walletDeleteScene = new Scenes.WizardScene(
     const userId = ctx.from.id.toString();
     let userState = await getUserState(userId);
     if (!userState.wallets || userState.wallets.length === 0) {
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ You no get wallet o! Abeg generate one first.' : 'No wallet found.');
+      await ctx.replyWithMarkdown(
+        userState.usePidgin
+          ? '❌ You no get wallet o! Abeg generate one first.'
+          : 'No wallet found.'
+      );
       return ctx.scene.leave();
     }
     if (ctx.session.walletIndex === undefined) {
@@ -714,7 +783,12 @@ const walletDeleteScene = new Scenes.WizardScene(
         let keyboard = userState.wallets.map((wallet, index) => [
           Markup.button.callback(`Wallet ${index + 1} - ${wallet.address.slice(0, 6)}...`, `delete_select_${index}`)
         ]);
-        await ctx.replyWithMarkdown(userState.usePidgin ? 'Abeg choose which wallet you wan delete:' : 'Please select the wallet to delete:', Markup.inlineKeyboard(keyboard));
+        await ctx.replyWithMarkdown(
+          userState.usePidgin
+            ? 'Abeg choose which wallet you wan delete:'
+            : 'Please select the wallet to delete:',
+          Markup.inlineKeyboard(keyboard)
+        );
         return;
       }
     }
@@ -730,7 +804,9 @@ const walletDeleteScene = new Scenes.WizardScene(
     );
     return ctx.wizard.next();
   },
-  async (ctx) => { return ctx.scene.leave(); }
+  async (ctx) => {
+    return ctx.scene.leave();
+  }
 );
 
 bot.action(/delete_select_(\d+)/, async (ctx) => {
@@ -753,7 +829,11 @@ bot.action('delete_confirm', async (ctx) => {
   userState.wallets.splice(walletIndex, 1);
   userState.walletAddresses.splice(walletIndex, 1);
   await updateUserState(userId, { wallets: userState.wallets, walletAddresses: userState.walletAddresses });
-  await ctx.replyWithMarkdown(userState.usePidgin ? '✅ Wallet don delete successfully.' : '✅ Wallet deleted successfully.');
+  await ctx.replyWithMarkdown(
+    userState.usePidgin
+      ? '✅ Wallet don delete successfully.'
+      : '✅ Wallet deleted successfully.'
+  );
   ctx.session.walletIndex = undefined;
   await ctx.answerCbQuery();
   return ctx.scene.leave();
@@ -761,17 +841,23 @@ bot.action('delete_confirm', async (ctx) => {
 
 bot.action('delete_cancel', async (ctx) => {
   if (!ctx.session) ctx.session = {};
-  await ctx.replyWithMarkdown(ctx.session.usePidgin ? 'Wallet deletion canceled.' : 'Wallet deletion canceled.');
+  await ctx.replyWithMarkdown(
+    ctx.session.usePidgin
+      ? 'Wallet deletion canceled.'
+      : 'Wallet deletion canceled.'
+  );
   ctx.session.walletIndex = undefined;
   await ctx.answerCbQuery();
   return ctx.scene.leave();
 });
 
-// =================== Register Scenes and Apply Middleware ===================
-const stageManager = new Scenes.Stage();
-stageManager.register(bankLinkingScene, sendMessageScene, walletRenameScene, walletDeleteScene);
+// =================== Register Scenes with Stage ===================
+const stage = new Scenes.Stage();
+stage.register(bankLinkingScene, sendMessageScene, walletRenameScene, walletDeleteScene);
+
+// =================== Apply Middlewares ===================
 bot.use(session());
-bot.use(stageManager.middleware());
+bot.use(stage.middleware());
 
 // =================== Exchange Rate Fetching ===================
 const SUPPORTED_ASSETS = ['USDC', 'USDT'];
@@ -784,7 +870,9 @@ async function fetchExchangeRate(asset) {
     });
     if (response.data.status === 'success' && response.data.data) {
       const rate = parseFloat(response.data.data);
-      if (isNaN(rate)) throw new Error(`Invalid rate data for ${asset}: ${response.data.data}`);
+      if (isNaN(rate)) {
+        throw new Error(`Invalid rate data for ${asset}: ${response.data.data}`);
+      }
       return rate;
     } else {
       throw new Error(`Failed to fetch rate for ${asset}: ${response.data.message || 'Unknown error'}`);
@@ -807,6 +895,7 @@ async function fetchExchangeRates() {
     logger.error(`Error fetching exchange rates from Paycrest: ${error.message}`);
   }
 }
+
 fetchExchangeRates();
 setInterval(fetchExchangeRates, 300000);
 
@@ -825,13 +914,13 @@ const getMainMenu = (hasWallets = false) =>
   Markup.keyboard([
     [hasWallets ? '💼 View Wallet' : '💼 Generate Wallet', '⚙️ Settings'],
     ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
-    ['📈 View Current Rates']
+    ['📈 View Current Rates'],
   ]).resize();
 
 // =================== Check if User is Admin ===================
 const isAdmin = (userId) => ADMIN_IDS.split(',').map(id => id.trim()).includes(userId.toString());
 
-// =================== Personalized Greeting ===================
+// ------------------ Personalized Greeting ------------------
 async function greetUser(ctx) {
   const userId = ctx.from.id.toString();
   let userState;
@@ -847,7 +936,10 @@ async function greetUser(ctx) {
     return;
   }
   const currentHour = new Date().getHours();
-  const timeGreeting = currentHour < 12 ? "Good morning" : currentHour < 18 ? "Good afternoon" : "Good evening";
+  let timeGreeting = "";
+  if (currentHour < 12) timeGreeting = "Good morning";
+  else if (currentHour < 18) timeGreeting = "Good afternoon";
+  else timeGreeting = "Good evening";
   const personalizedGreeting = userState.firstName ? `${timeGreeting}, ${userState.firstName}!` : `${timeGreeting}, valued user!`;
   const greeting = `${personalizedGreeting}\n\nThank you for choosing **DirectPay**. Here, we convert your cryptocurrency to cash swiftly and securely. Let’s get started:`;
   const mainMenu = getMainMenu(userState.wallets && userState.wallets.length > 0);
@@ -857,8 +949,12 @@ async function greetUser(ctx) {
     await ctx.reply('By the way, we notice you might be in Nigeria. Want to switch to Pidgin for a more local vibe? Just say "Pidgin" anytime!');
   }
   if (isAdmin(userId)) {
-    const adminText = userState.usePidgin ? `Admin options, ${userState.firstName || 'boss'}:` : `Admin options, ${userState.firstName || 'esteemed user'}:`;
-    await ctx.reply(adminText, Markup.inlineKeyboard([[Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]]));
+    const adminText = userState.usePidgin
+      ? `Admin options, ${userState.firstName || 'boss'}:`
+      : `Admin options, ${userState.firstName || 'esteemed user'}:`;
+    await ctx.reply(adminText, Markup.inlineKeyboard([
+      [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
+    ]));
   }
 }
 
@@ -881,8 +977,12 @@ bot.hears('Pidgin', async (ctx) => {
   const mainMenu = getMainMenu(userState.wallets && userState.wallets.length > 0);
   await ctx.replyWithMarkdown(confirmMsg, { reply_markup: mainMenu.reply_markup });
   if (isAdmin(userId)) {
-    const adminText = userState.firstName ? `Admin options, ${userState.firstName} the boss:` : `Admin options, big boss:`;
-    await ctx.reply(adminText, Markup.inlineKeyboard([[Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]]));
+    const adminText = userState.firstName
+      ? `Admin options, ${userState.firstName} the boss:`
+      : `Admin options, big boss:`;
+    await ctx.reply(adminText, Markup.inlineKeyboard([
+      [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
+    ]));
   }
 });
 
@@ -966,7 +1066,7 @@ const getAdminMenu = () =>
     [Markup.button.callback('✅ Mark Transactions as Paid', 'admin_mark_paid')],
     [Markup.button.callback('👥 View All Users', 'admin_view_users')],
     [Markup.button.callback('📢 Broadcast Message', 'admin_broadcast_message')],
-    [Markup.button.callback('🔙 Back to Main Menu', 'admin_back_to_main')]
+    [Markup.button.callback('🔙 Back to Main Menu', 'admin_back_to_main')],
   ]);
 
 bot.action(/admin_(.+)/, async (ctx) => {
@@ -996,7 +1096,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
           const tx = doc.data();
           message += `*User ID:* ${tx.userId || 'N/A'}\n*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n*Amount Deposited:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n*Status:* ${tx.status || 'Pending'}\n*Chain:* ${tx.chain || 'N/A'}\n*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
         });
-        const inlineKeyboard = Markup.inlineKeyboard([[Markup.button.callback(userState.usePidgin ? '🔙 Back to Admin Menu' : '🔙 Back to Admin Menu', 'admin_back_to_main')]]);
+        const inlineKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback(userState.usePidgin ? '🔙 Back to Admin Menu' : '🔙 Back to Admin Menu', 'admin_back_to_main')]
+        ]);
         await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
         ctx.answerCbQuery();
       } catch (error) {
@@ -1008,7 +1110,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
       try {
         const usersSnapshot = await db.collection('users').get();
         if (usersSnapshot.empty) {
-          const errorMsg = userState.usePidgin ? '⚠️ No users dey to send message o.' : '⚠️ No users found to send messages.';
+          const errorMsg = userState.usePidgin
+            ? '⚠️ No users dey to send message o.'
+            : '⚠️ No users found to send messages.';
           await ctx.replyWithMarkdown(errorMsg);
           return ctx.answerCbQuery();
         }
@@ -1040,11 +1144,11 @@ bot.action(/admin_(.+)/, async (ctx) => {
           const txData = transaction.data();
           try {
             const payout = txData.payout || 'N/A';
-            const accountName = (txData.bankDetails && txData.bankDetails.accountName) ? txData.bankDetails.accountName : 'Valued User';
+            const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
             const userStateTx = await getUserState(txData.userId);
             const successMsg = userStateTx.usePidgin
-              ? `🎉 *Transaction Successful!*\n\nHello ${accountName},\n\nYour DirectPay order don complete o!\n\n*Crypto amount:* ${txData.amount} ${txData.asset}\n*Cash amount:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nThank you 💙.`
-              : `🎉 *Funds Credited Successfully!*\n\nHello ${accountName},\n\nYour DirectPay order has been completed.\n\n*Crypto amount:* ${txData.amount} ${txData.asset}\n*Cash amount:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nThank you 💙.`;
+              ? `🎉 *Transaction Successful!*\n\nHello ${accountName},\n\nYour DirectPay order don complete o! Here’s the gist:\n\n*Crypto amount:* ${txData.amount} ${txData.asset}\n*Cash amount:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nThank you 💙.`
+              : `🎉 *Funds Credited Successfully!*\n\nHello ${accountName},\n\nYour DirectPay order has been completed. Here are the details:\n\n*Crypto amount:* ${txData.amount} ${txData.asset}\n*Cash amount:* NGN ${payout}\n*Network:* ${txData.chain}\n*Date:* ${new Date(txData.timestamp).toLocaleString()}\n\nThank you 💙.`;
             await bot.telegram.sendPhoto(txData.userId, { source: PAYOUT_SUCCESS_IMAGE }, { caption: successMsg, parse_mode: 'Markdown' });
             logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
           } catch (error) {
@@ -1075,7 +1179,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
           const user = doc.data();
           message += `*User ID:* ${doc.id}\n*First Name:* ${user.firstName || 'N/A'}\n*Number of Wallets:* ${user.wallets.length}\n*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
         });
-        const inlineKeyboard = Markup.inlineKeyboard([[Markup.button.callback(userState.usePidgin ? '🔙 Back to Admin Menu' : '🔙 Back to Admin Menu', 'admin_back_to_main')]]);
+        const inlineKeyboard = Markup.inlineKeyboard([
+          [Markup.button.callback(userState.usePidgin ? '🔙 Back to Admin Menu' : '🔙 Back to Admin Menu', 'admin_back_to_main')]
+        ]);
         await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
         ctx.answerCbQuery();
       } catch (error) {
@@ -1087,7 +1193,9 @@ bot.action(/admin_(.+)/, async (ctx) => {
       try {
         const usersSnapshot = await db.collection('users').get();
         if (usersSnapshot.empty) {
-          const errorMsg = userState.usePidgin ? '⚠️ No users dey to broadcast o.' : '⚠️ No users available to broadcast.';
+          const errorMsg = userState.usePidgin
+            ? '⚠️ No users dey to broadcast o.'
+            : '⚠️ No users available to broadcast.';
           await ctx.replyWithMarkdown(errorMsg);
           return ctx.answerCbQuery();
         }
@@ -1128,7 +1236,9 @@ app.post(WEBHOOK_PATH, bodyParser.json(), async (req, res) => {
   let location = 'Unknown';
   try {
     const geoResponse = await axios.get(`http://ip-api.com/json/${clientIp}`);
-    if (geoResponse.data.status === 'success') location = geoResponse.data.country;
+    if (geoResponse.data.status === 'success') {
+      location = geoResponse.data.country;
+    }
   } catch (error) {
     logger.error(`Error fetching geolocation for IP ${clientIp}: ${error.message}`);
   }
@@ -1207,41 +1317,41 @@ Ping our support team at [@maxcswap](https://t.me/maxcswap) anytime o.
 
 If you haven’t received your transaction, follow these steps:
 
-1. Verify Wallet Address  
-2. Check Bank Linking  
-3. Monitor Transaction Status  
-4. Wait for Confirmation  
-5. Contact Support
+1. **Verify Wallet Address**
+2. **Check Bank Linking**
+3. **Monitor Transaction Status**
+4. **Wait for Confirmation**
+5. **Contact Support**
 `,
     pidgin: `
 **💰 Transaction No Show?**
 
 If your transaction never land, check:
 
-1. Wallet Address  
-2. Bank Linking  
-3. Transaction Status  
-4. Wait Small  
-5. Ping Support
+1. **Wallet Address**
+2. **Bank Linking**
+3. **Transaction Status**
+4. **Wait Small**
+5. **Ping Support**
 `
   },
   link_bank_tutorial: {
     english: `
 **🏦 How to Edit Your Bank Account**
 
-1. Go to "⚙️ Settings" > "✏️ Edit Linked Bank Details".  
-2. Select the wallet.  
-3. Enter updated bank details.  
-4. Confirm changes.  
+1. Go to "⚙️ Settings" > "✏️ Edit Linked Bank Details".
+2. Select the wallet.
+3. Enter updated bank details.
+4. Confirm changes.
 5. Done!
 `,
     pidgin: `
 **🏦 How to Edit Your Bank Account**
 
-1. Go "⚙️ Settings" > "✏️ Edit Linked Bank Details".  
-2. Pick the wallet.  
-3. Enter new bank details.  
-4. Confirm.  
+1. Go "⚙️ Settings" > "✏️ Edit Linked Bank Details".
+2. Pick the wallet.
+3. Enter new bank details.
+4. Confirm.
 5. Finished!
 `
   }
