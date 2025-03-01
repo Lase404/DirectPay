@@ -1233,7 +1233,7 @@ bot.action(/delete_wallet_(\d+)/, async (ctx) => {
 
   try {
     const userState = await getUserState(userId);
-    if misspelling(walletIndex < 0 || walletIndex >= userState.wallets.length) {
+    if (walletIndex < 0 || walletIndex >= userState.wallets.length) { // Fixed: Removed 'misspelling'
       const errorMsg = userState.usePidgin
         ? '❌ Wallet no dey o! Pick correct one abeg.'
         : '❌ Invalid wallet selection. Please choose a valid wallet.';
