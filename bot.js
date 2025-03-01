@@ -110,10 +110,7 @@ const chains = {
     apiUrl: 'https://api.blockradar.co/v1/wallets/e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1/addresses',
     supportedAssets: ['USDC', 'USDT'],
     network: 'Base',
-    assets: {
-      USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
-      USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3',
-    }
+    assets: { USDC: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3', USDT: 'a8aae94e-a2c3-424c-8db5-ea7415166ce3' }
   },
   Polygon: {
     id: 'f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a',
@@ -121,10 +118,7 @@ const chains = {
     apiUrl: 'https://api.blockradar.co/v1/wallets/f4fc4dc4-a0d5-4303-a60b-e58ec1fc6d0a/addresses',
     supportedAssets: ['USDC', 'USDT'],
     network: 'Polygon',
-    assets: {
-      USDC: 'f348e8e3-e0b4-4704-857e-c274ef000c00',
-      USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1',
-    }
+    assets: { USDC: 'f348e8e3-e0b4-4704-857e-c274ef000c00', USDT: 'c9d57a33-375b-46f7-b694-16e9b498e0e1' }
   },
   'BNB Smart Chain': {
     id: '7a844e91-5740-4589-9695-c74411adec7e',
@@ -132,10 +126,7 @@ const chains = {
     apiUrl: 'https://api.blockradar.co/v1/wallets/7a844e91-5740-4589-9695-c74411adec7e/addresses',
     supportedAssets: ['USDT', 'USDC'],
     network: 'BNB Smart Chain',
-    assets: {
-      USDC: 'ff479231-0dbb-4760-b695-e219a50934af',
-      USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb',
-    }
+    assets: { USDC: 'ff479231-0dbb-4760-b695-e219a50934af', USDT: '03a11a51-1422-4ac0-abc0-b2fed75e9fcb' }
   }
 };
 
@@ -361,13 +352,8 @@ const bankLinkingScene = new Scenes.WizardScene(
         ? '🏦 Abeg enter your bank name (e.g., Access Bank), my friend:'
         : '🏦 Please enter your bank name (e.g., Access Bank):';
 
-      try {
-        await ctx.replyWithMarkdown(prompt);
-        logger.info(`Bank name prompt sent to user ${userId}, session: ${JSON.stringify(ctx.session)}`);
-      } catch (sendError) {
-        logger.error(`Failed to send bank name prompt to user ${userId}: ${sendError.message}`);
-        throw sendError;
-      }
+      await ctx.replyWithMarkdown(prompt);
+      logger.info(`Bank name prompt sent to user ${userId}, session: ${JSON.stringify(ctx.session)}`);
 
       logger.info(`Advancing to step 2 for user ${userId}`);
       return ctx.wizard.next();
@@ -403,6 +389,7 @@ const bankLinkingScene = new Scenes.WizardScene(
         ? '🔢 Enter your 10-digit account number. No dey waste time o, money dey wait!'
         : '🔢 Please enter your 10-digit bank account number:';
       await ctx.replyWithMarkdown(prompt);
+      logger.info(`Account number prompt sent to user ${userId}`);
       return ctx.wizard.next();
     } catch (error) {
       logger.error(`Error in bank_linking_scene step 2 for user ${userId}: ${error.message}`);
@@ -417,7 +404,7 @@ const bankLinkingScene = new Scenes.WizardScene(
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const input = ctx.message.text.trim();
-    logger.info(`User ${userId} entered account number: ${input}`);
+    logger.info(`User ${userId} entered account number: ${input}, session: ${JSON.stringify(ctx.session)}`);
 
     try {
       const userState = await getUserState(userId);
@@ -745,7 +732,7 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   }
 });
 
-// Scene Setup with Persistent Session
+// Scene Setup
 const stage = new Scenes.Stage();
 stage.register(bankLinkingScene);
 
@@ -855,11 +842,6 @@ async function greetUser(ctx) {
     await ctx.replyWithMarkdown(greeting, {
       reply_markup: mainMenu.reply_markup,
     });
-
-    const location = ctx.session?.location || 'Unknown';
-    if (location === 'Nigeria' && !userState.usePidgin) {
-      await ctx.reply('By the way, we notice you might be in Nigeria. Want to switch to Pidgin for a more local vibe? Just say "Pidgin" anytime!');
-    }
 
     if (isAdmin(userId)) {
       const adminText = userState.firstName
@@ -1053,7 +1035,7 @@ bot.action(/view_wallet_(\d+)/, async (ctx) => {
         `🔹 *Creation Date:* ${new Date(wallet.creationDate).toLocaleString()}\n` +
         `🔹 *Total Deposits:* ${wallet.totalDeposits || 0} USDC/USDT\n` +
         `🔹 *Total Payouts:* ₦${wallet.totalPayouts || 0}`
-      : `🌟 *${wallet.name || `Wallet #${walletIndex + 1}`}*\n\n` +
+      : `🌟 *${wallet.name || `Wallet #${walletIndex + 1`}*\n\n` +
         `🔹 *Address:* \`${wallet.address}\`\n` +
         `🔹 *Network:* ${wallet.chain}\n` +
         `🔹 *Supported Assets:*\n` +
@@ -1149,6 +1131,7 @@ bot.on('text', async (ctx) => {
       delete ctx.session.awaitingRename;
     } catch (error) {
       logger.error(`Error renaming wallet for user ${userId}: ${error.message}`);
+      const userState = await getUserState(userId);
       const errorMsg = userState.usePidgin
         ? '⚠️ E no work o! Try again abeg.'
         : '⚠️ An error occurred while renaming. Please try again.';
@@ -1250,7 +1233,7 @@ bot.action(/delete_wallet_(\d+)/, async (ctx) => {
 
   try {
     const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
+    if misspelling(walletIndex < 0 || walletIndex >= userState.wallets.length) {
       const errorMsg = userState.usePidgin
         ? '❌ Wallet no dey o! Pick correct one abeg.'
         : '❌ Invalid wallet selection. Please choose a valid wallet.';
@@ -1346,24 +1329,16 @@ bot.action('settings_back_main', async (ctx) => {
     const userState = await getUserState(userId);
     const mainMenu = userState.wallets.length > 0 ? getWalletMenu() : getMainMenu();
     const menuText = userState.usePidgin
-      ? userState.firstName
-        ? `Welcome back to the menu, ${userState.firstName} wey sabi!`
-        : 'Welcome back to the menu, my friend!'
-      : userState.firstName
-        ? `Welcome back to the menu, ${userState.firstName}!`
-        : 'Welcome back to the menu!';
+      ? userState.firstName ? `Welcome back to the menu, ${userState.firstName} wey sabi!` : 'Welcome back to the menu, my friend!'
+      : userState.firstName ? `Welcome back to the menu, ${userState.firstName}!` : 'Welcome back to the menu!';
     await ctx.replyWithMarkdown(menuText, {
       reply_markup: mainMenu.reply_markup,
     });
 
     if (isAdmin(userId)) {
       const adminText = userState.usePidgin
-        ? userState.firstName
-          ? `Admin options, ${userState.firstName} the boss:`
-          : 'Admin options, big boss:'
-        : userState.firstName
-          ? `Admin options, ${userState.firstName}:`
-          : 'Admin options, esteemed user:';
+        ? userState.firstName ? `Admin options, ${userState.firstName} the boss:` : 'Admin options, big boss:'
+        : userState.firstName ? `Admin options, ${userState.firstName}:` : 'Admin options, esteemed user:';
       await ctx.reply(adminText, Markup.inlineKeyboard([
         [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
       ]));
@@ -1556,7 +1531,7 @@ bot.hears('📈 View Current Rates', async (ctx) => {
       ? `📈 *Current Exchange Rates (${now} WAT, ${date})*\n\n`
       : `📈 *Current Exchange Rates (${now} WAT, ${date})*\n\n`;
 
-    for (const asset of SUPPORTED_ASSETS) {
+        for (const asset of SUPPORTED_ASSETS) {
       const paycrestRate = exchangeRates[asset] || 0;
       const funnyComment = userState.usePidgin
         ? `*Ehen, ${userName}! DirectPay dey give you ₦${paycrestRate.toFixed(2)} per ${asset}. Na we dey run things o!*`
@@ -1717,40 +1692,24 @@ bot.action(/admin_(.+)/, async (ctx) => {
       case 'back_to_main':
         const mainMenu = userState.wallets.length > 0 ? getWalletMenu() : getMainMenu();
         const menuText = userState.usePidgin
-          ? userState.firstName
-            ? `Welcome back to the menu, ${userState.firstName} wey sabi!`
-            : 'Welcome back to the menu, my friend!'
-          : userState.firstName
-            ? `Welcome back to the menu, ${userState.firstName}!`
-            : 'Welcome back to the menu!';
-        await ctx.replyWithMarkdown(menuText, {
-          reply_markup: mainMenu.reply_markup,
-        });
+          ? userState.firstName ? `Welcome back to the menu, ${userState.firstName} wey sabi!` : 'Welcome back to the menu, my friend!'
+          : userState.firstName ? `Welcome back to the menu, ${userState.firstName}!` : 'Welcome back to the menu!';
+        await ctx.replyWithMarkdown(menuText, { reply_markup: mainMenu.reply_markup });
         if (isAdmin(userId)) {
           const adminText = userState.usePidgin
-            ? userState.firstName
-              ? `Admin options, ${userState.firstName} the boss:`
-              : 'Admin options, big boss:'
-            : userState.firstName
-              ? `Admin options, ${userState.firstName}:`
-              : 'Admin options, esteemed user:';
-          await ctx.reply(adminText, Markup.inlineKeyboard([
-            [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
-          ]));
+            ? userState.firstName ? `Admin options, ${userState.firstName} the boss:` : 'Admin options, big boss:'
+            : userState.firstName ? `Admin options, ${userState.firstName}:` : 'Admin options, esteemed user:';
+          await ctx.reply(adminText, Markup.inlineKeyboard([[Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]]));
         }
         await ctx.answerCbQuery();
         return;
 
       default:
-        message = userState.usePidgin
-          ? '❌ Option no dey o! Try again abeg.'
-          : '❌ Invalid option! Please try again.';
+        message = userState.usePidgin ? '❌ Option no dey o! Try again abeg.' : '❌ Invalid option! Please try again.';
     }
 
     if (ctx.session.adminMessageId) {
-      await ctx.telegram.editMessageText(userId, ctx.session.adminMessageId, undefined, message, {
-        parse_mode: 'Markdown',
-      });
+      await ctx.telegram.editMessageText(userId, ctx.session.adminMessageId, undefined, message, { parse_mode: 'Markdown' });
     } else {
       const sentMessage = await ctx.replyWithMarkdown(message);
       ctx.session.adminMessageId = sentMessage.message_id;
@@ -1763,7 +1722,6 @@ bot.action(/admin_(.+)/, async (ctx) => {
   }
 });
 
-// Handler for marking transactions as paid
 bot.action(/mark_tx_paid_(.+)/, async (ctx) => {
   const userId = ctx.from.id.toString();
   const txId = ctx.match[1];
@@ -1910,20 +1868,15 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
           ? `🏦 You never link bank o! Abeg link your bank to cash out this ${amount} ${data.asset}.`
           : `🏦 You haven’t linked a bank yet! Please link your bank to cash out this ${amount} ${data.asset}.`;
         await bot.telegram.sendMessage(userId, linkBankMsg, { parse_mode: 'Markdown' });
-        // Note: ctx.session isn’t available in webhook, so we’d need to handle this differently if triggered here
+        bot.session = bot.session || {}; // Ensure session exists
+        bot.session.walletIndex = userState.wallets.indexOf(wallet);
+        await bot.scene.enter('bank_linking_scene');
         res.status(200).json({ status: 'success' });
         return;
       }
 
       const referenceId = generateReferenceId();
-      const orderData = await createPaycrestOrder(
-        userId,
-        amount,
-        data.asset,
-        wallet.chain,
-        wallet.bank,
-        data.address
-      );
+      const orderData = await createPaycrestOrder(userId, amount, data.asset, wallet.chain, wallet.bank, data.address);
 
       const txData = {
         userId,
@@ -1945,14 +1898,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         : `🔄 *Processing Payout...*\n\nWe’re processing your *${amount} ${data.asset}* into *₦${txData.payout}*. It’ll hit your bank soon!`;
       await bot.telegram.sendMessage(userId, processingMsg, { parse_mode: 'Markdown' });
 
-      await withdrawFromBlockradar(
-        wallet.chain,
-        chains[wallet.chain].assets[data.asset],
-        orderData.depositAddress,
-        amount,
-        referenceId,
-        { userId }
-      );
+      await withdrawFromBlockradar(wallet.chain, chains[wallet.chain].assets[data.asset], orderData.depositAddress, amount, referenceId, { userId });
     }
 
     res.status(200).json({ status: 'success' });
