@@ -891,6 +891,7 @@ bot.hears(/^[Pp][Ii][Dd][Gg][Ii][Nn]$/, async (ctx) => {
 
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
+  const chain = 'Base'; // Declare chain outside try for catch scope
   try {
     logger.info(`User ${userId} requested wallet generation`);
     const userState = await getUserState(userId);
@@ -913,8 +914,7 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       : '🔄 *Generating Wallet...* Hold on, we’re preparing it fast!';
     const pendingMessage = await ctx.replyWithMarkdown(pendingMsg);
 
-    logger.info(`Generating wallet for user ${userId} on chain Base`);
-    const chain = 'Base';
+    logger.info(`Generating wallet for user ${userId} on chain ${chain}`);
     const walletAddress = await generateWallet(chain);
 
     userState.wallets.push({
@@ -947,23 +947,15 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
         `*Supported Assets:* USDC, USDT\n\n` +
         `Please link a bank account to proceed with using this wallet!`;
     await ctx.replyWithMarkdown(successMsg);
-    await ctx.scene.enter('bank_linking_scene');
-  } catch (error) {
-    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
-  }
-});
 
     logger.info(`Setting walletIndex to ${userState.wallets.length - 1} for user ${userId}`);
     ctx.session.walletIndex = userState.wallets.length - 1;
     logger.info(`Entering bank_linking_scene for user ${userId}`);
     await ctx.scene.enter('bank_linking_scene');
-    logger.info(`Successfully entered bank_linking_scene for user ${userId}, session: ${JSON.stringify(ctx.session)}`);
   } catch (error) {
-    logger.error(`Error generating wallet for user ${userId}: ${error.message}`);
-    const fallbackMsg = '⚠️ An error occurred while generating your wallet. Please try again later.';
-    await ctx.replyWithMarkdown(fallbackMsg);
+    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
   }
 });
 
