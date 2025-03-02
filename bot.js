@@ -1565,7 +1565,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         ? `💰 *Deposit Don Land!*\n\n` +
           `You don deposit *${amount} ${data.asset}* to your wallet (*${data.address.slice(-4)}*). E don enter safe!`
         : `💰 *Deposit Successful!*\n\n` +
-          `You’ve deposited *${amount} ${data.asset}* to your wallet (*${data.address.slice-4)}*). It’s safely received!`;
+          `You’ve deposited *${amount} ${data.asset}* to your wallet (*${data.address.slice(-4)}*). It’s safely received!`
       await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
         caption: depositMsg,
         parse_mode: 'Markdown',
