@@ -323,7 +323,28 @@ async function generateWallet(chain) {
   }
 }
 
-// Bank Linking Scene
+// Session Setup with Logging
+bot.use(session({
+  store: {
+    get: async (key) => {
+      const doc = await db.collection('sessions').doc(key).get();
+      const data = doc.exists ? doc.data() : undefined;
+      logger.info(`Session get for ${key}: ${JSON.stringify(data)}`);
+      return data;
+    },
+    set: async (key, sess) => {
+      await db.collection('sessions').doc(key).set(sess);
+      logger.info(`Session set for ${key}: ${JSON.stringify(sess)}`);
+    },
+    delete: async (key) => {
+      await db.collection('sessions').doc(key).delete();
+      logger.info(`Session deleted for ${key}`);
+    },
+  },
+}));
+bot.use(stage.middleware());
+
+// Updated Bank Linking Scene
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   async (ctx) => {
@@ -352,8 +373,13 @@ const bankLinkingScene = new Scenes.WizardScene(
         ? '🏦 Abeg enter your bank name (e.g., Access Bank), my friend:'
         : '🏦 Please enter your bank name (e.g., Access Bank):';
 
-      await ctx.replyWithMarkdown(prompt);
-      logger.info(`Bank name prompt sent to user ${userId}, session: ${JSON.stringify(ctx.session)}`);
+      try {
+        await ctx.replyWithMarkdown(prompt);
+        logger.info(`Bank name prompt sent to user ${userId}, session: ${JSON.stringify(ctx.session)}`);
+      } catch (sendError) {
+        logger.error(`Failed to send bank name prompt to user ${userId}: ${sendError.message}`);
+        throw sendError;
+      }
 
       logger.info(`Advancing to step 2 for user ${userId}`);
       return ctx.wizard.next();
@@ -389,7 +415,6 @@ const bankLinkingScene = new Scenes.WizardScene(
         ? '🔢 Enter your 10-digit account number. No dey waste time o, money dey wait!'
         : '🔢 Please enter your 10-digit bank account number:';
       await ctx.replyWithMarkdown(prompt);
-      logger.info(`Account number prompt sent to user ${userId}`);
       return ctx.wizard.next();
     } catch (error) {
       logger.error(`Error in bank_linking_scene step 2 for user ${userId}: ${error.message}`);
@@ -470,7 +495,7 @@ const bankLinkingScene = new Scenes.WizardScene(
   }
 );
 
-// Bank Linking Scene Actions
+// Bank Linking Scene Actions (unchanged for now)
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const bankData = ctx.session.bankData;
@@ -889,9 +914,9 @@ bot.hears(/^[Pp][Ii][Dd][Gg][Ii][Nn]$/, async (ctx) => {
   }
 });
 
+// Updated Wallet Generation Handler
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
-  const chain = 'Base'; // Declare chain outside try for catch scope
   try {
     logger.info(`User ${userId} requested wallet generation`);
     const userState = await getUserState(userId);
@@ -914,7 +939,8 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       : '🔄 *Generating Wallet...* Hold on, we’re preparing it fast!';
     const pendingMessage = await ctx.replyWithMarkdown(pendingMsg);
 
-    logger.info(`Generating wallet for user ${userId} on chain ${chain}`);
+    logger.info(`Generating wallet for user ${userId} on chain Base`);
+    const chain = 'Base';
     const walletAddress = await generateWallet(chain);
 
     userState.wallets.push({
@@ -952,10 +978,11 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
     ctx.session.walletIndex = userState.wallets.length - 1;
     logger.info(`Entering bank_linking_scene for user ${userId}`);
     await ctx.scene.enter('bank_linking_scene');
+    logger.info(`Successfully entered bank_linking_scene for user ${userId}, session: ${JSON.stringify(ctx.session)}`);
   } catch (error) {
-    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
+    logger.error(`Error generating wallet for user ${userId}: ${error.message}`);
+    const fallbackMsg = '⚠️ An error occurred while generating your wallet. Please try again later.';
+    await ctx.replyWithMarkdown(fallbackMsg);
   }
 });
 
@@ -1034,7 +1061,7 @@ bot.action(/view_wallet_(\d+)/, async (ctx) => {
         `🔹 *Creation Date:* ${new Date(wallet.creationDate).toLocaleString()}\n` +
         `🔹 *Total Deposits:* ${wallet.totalDeposits || 0} USDC/USDT\n` +
         `🔹 *Total Payouts:* ₦${wallet.totalPayouts || 0}`
-      : `🌟 *${wallet.name || `Wallet #${walletIndex + 1}`}*\n\n`
+      : `🌟 *${wallet.name || `Wallet #${walletIndex + 1}`}*\n\n` +
         `🔹 *Address:* \`${wallet.address}\`\n` +
         `🔹 *Network:* ${wallet.chain}\n` +
         `🔹 *Supported Assets:*\n` +
@@ -1232,7 +1259,7 @@ bot.action(/delete_wallet_(\d+)/, async (ctx) => {
 
   try {
     const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) { // Fixed: Removed 'misspelling'
+    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
       const errorMsg = userState.usePidgin
         ? '❌ Wallet no dey o! Pick correct one abeg.'
         : '❌ Invalid wallet selection. Please choose a valid wallet.';
@@ -1278,7 +1305,7 @@ bot.hears('⚙️ Settings', async (ctx) => {
     await ctx.replyWithMarkdown(menuText, Markup.inlineKeyboard([
       [Markup.button.callback(userState.usePidgin ? '🔄 Generate New Wallet' : '🔄 Generate New Wallet', 'settings_generate_wallet')],
       [Markup.button.callback(userState.usePidgin ? '💬 Support' : '💬 Support', 'settings_support')],
-      [Markup.button.callback(userState.usePidgin ? '🔙 Back to Menu' : '🔙 Back to Main Menu', 'settings_back_main')]
+            [Markup.button.callback(userState.usePidgin ? '🔙 Back to Menu' : '🔙 Back to Main Menu', 'settings_back_main')]
     ]));
   } catch (error) {
     logger.error(`Error in settings handler for user ${userId}: ${error.message}`);
@@ -1338,9 +1365,7 @@ bot.action('settings_back_main', async (ctx) => {
       const adminText = userState.usePidgin
         ? userState.firstName ? `Admin options, ${userState.firstName} the boss:` : 'Admin options, big boss:'
         : userState.firstName ? `Admin options, ${userState.firstName}:` : 'Admin options, esteemed user:';
-      await ctx.reply(adminText, Markup.inlineKeyboard([
-        [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
-      ]));
+      await ctx.reply(adminText, Markup.inlineKeyboard([[Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]]));
     }
     await ctx.answerCbQuery();
   } catch (error) {
@@ -1515,43 +1540,6 @@ bot.action('transactions_clear_filter', async (ctx) => {
     logger.error(`Error in transactions_clear_filter for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
     await ctx.answerCbQuery();
-  }
-});
-
-bot.hears('📈 View Current Rates', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    const now = new Date().toLocaleTimeString('en-US', { timeZone: 'Africa/Lagos', hour12: false });
-    const date = new Date().toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
-    const userName = userState.firstName || 'sharp person';
-
-    let ratesMessage = userState.usePidgin
-      ? `📈 *Current Exchange Rates (${now} WAT, ${date})*\n\n`
-      : `📈 *Current Exchange Rates (${now} WAT, ${date})*\n\n`;
-
-        for (const asset of SUPPORTED_ASSETS) {
-      const paycrestRate = exchangeRates[asset] || 0;
-      const funnyComment = userState.usePidgin
-        ? `*Ehen, ${userName}! DirectPay dey give you ₦${paycrestRate.toFixed(2)} per ${asset}. Na we dey run things o!*`
-        : `*Great news, ${userName}! DirectPay offers ₦${paycrestRate.toFixed(2)} per ${asset}. We’re the top choice!*`;
-
-      ratesMessage += `• *${asset}*\n` +
-        `  - Paycrest Rate: ₦${paycrestRate.toFixed(2)}\n` +
-        `  - ${funnyComment}\n\n`;
-    }
-
-    ratesMessage += userState.usePidgin
-      ? `No dulling o, ${userName}! DirectPay rates dey hot!`
-      : `Stay smart, ${userName}! DirectPay’s rates are unbeatable!`;
-    await ctx.replyWithMarkdown(ratesMessage, getMainMenu());
-  } catch (error) {
-    logger.error(`Error in View Current Rates for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again later abeg.'
-      : '⚠️ An error occurred while fetching rates. Please try again later.';
-    await ctx.replyWithMarkdown(errorMsg);
   }
 });
 
