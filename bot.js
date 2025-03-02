@@ -323,7 +323,7 @@ async function generateWallet(chain) {
   }
 }
 
-// Define and register the bankLinkingScene first
+// Define and register the bankLinkingScene
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   async (ctx) => {
@@ -474,7 +474,7 @@ const bankLinkingScene = new Scenes.WizardScene(
   }
 );
 
-// Register the scene with stage before using middleware
+// Register the scene with stage
 const stage = new Scenes.Stage();
 stage.register(bankLinkingScene);
 
@@ -632,36 +632,33 @@ bot.hears(/^[Pp][Ii][Dd][Gg][Ii][Nn]$/, async (ctx) => {
   }
 });
 
-// Updated Wallet Generation Handler
 bot.hears('💼 Generate Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
   try {
     logger.info(`User ${userId} requested wallet generation`);
     const userState = await getUserState(userId);
-    
-    if (!userState || typeof userState.wallets === 'undefined') {
-      logger.error(`Invalid user state for ${userId}: ${JSON.stringify(userState)}`);
-      throw new Error('User state is invalid or missing wallets');
-    }
 
+    // Check wallet limit
     if (userState.wallets.length >= MAX_WALLETS) {
       const errorMsg = userState.usePidgin
         ? `⚠️ You don reach max wallets o (${MAX_WALLETS})! Manage the ones you get first abeg.`
-        : `⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets before adding new ones.`;
+        : `⚠️ You have reached the maximum number of wallets (${MAX_WALLETS}). Please manage your existing wallets.`;
       await ctx.replyWithMarkdown(errorMsg);
       return;
     }
-    
+
+    // Show pending message
     const pendingMsg = userState.usePidgin
       ? '🔄 *Generating Wallet...* Hold small, we dey cook am hot-hot!'
-      : '🔄 *Generating Wallet...* Hold on, we’re preparing it fast!';
+      : '🔄 *Generating Wallet...* Please wait a moment!';
     const pendingMessage = await ctx.replyWithMarkdown(pendingMsg);
 
-    logger.info(`Generating wallet for user ${userId} on chain Base`);
+    // Generate wallet
     const chain = 'Base';
     const walletAddress = await generateWallet(chain);
 
-    userState.wallets.push({
+    // Update user state
+    const newWallet = {
       address: walletAddress,
       chain: chain,
       name: `Wallet ${userState.wallets.length + 1}`,
@@ -671,36 +668,41 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
       creationDate: new Date().toISOString(),
       totalDeposits: 0,
       totalPayouts: 0
-    });
+    };
+    userState.wallets.push(newWallet);
     userState.walletAddresses.push(walletAddress);
-
-    logger.info(`Updating user state with new wallet for user ${userId}`);
     await updateUserState(userId, {
       wallets: userState.wallets,
       walletAddresses: userState.walletAddresses,
     });
 
+    // Clean up and confirm
     await ctx.deleteMessage(pendingMessage.message_id);
     const successMsg = userState.usePidgin
-      ? `✅ *Wallet Generated Successfully!*\n\n` +
-        `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
-        `*Supported Assets:* USDC, USDT\n\n` +
-        `Abeg link your bank account quick-quick to use this wallet!`
+      ? `✅ *Wallet Don Land!*\n\n` +
+        `*Address:* \`${walletAddress}\`\n` +
+        `*Networks:* Base, BNB Smart Chain, Polygon\n` +
+        `*Assets:* USDC, USDT\n\n` +
+        `Abeg link your bank account now to start using am!`
       : `✅ *Wallet Generated Successfully!*\n\n` +
-        `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
-        `*Supported Assets:* USDC, USDT\n\n` +
-        `Please link a bank account to proceed with using this wallet!`;
+        `*Address:* \`${walletAddress}\`\n` +
+        `*Networks:* Base, BNB Smart Chain, Polygon\n` +
+        `*Assets:* USDC, USDT\n\n` +
+        `Please link your bank account to start using it!`;
     await ctx.replyWithMarkdown(successMsg);
 
-    logger.info(`Setting walletIndex to ${userState.wallets.length - 1} for user ${userId}`);
+    // Enter bank linking scene immediately
     ctx.session.walletIndex = userState.wallets.length - 1;
-    logger.info(`Attempting to enter bank_linking_scene for user ${userId}`);
+    logger.info(`Entering bank_linking_scene for user ${userId}, walletIndex: ${ctx.session.walletIndex}`);
     await ctx.scene.enter('bank_linking_scene');
-    logger.info(`Successfully entered bank_linking_scene for user ${userId}, session: ${JSON.stringify(ctx.session)}`);
+
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId}: ${error.message}`);
-    const fallbackMsg = '⚠️ An error occurred while generating your wallet. Please try again later.';
-    await ctx.replyWithMarkdown(fallbackMsg);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Wahala dey o! Try again later abeg.'
+      : '⚠️ An error occurred while generating your wallet. Please try again later.';
+    await ctx.replyWithMarkdown(errorMsg);
   }
 });
 
@@ -990,7 +992,7 @@ bot.action(/delete_wallet_(\d+)/, async (ctx) => {
 
     const wallet = userState.wallets[walletIndex];
     userState.wallets.splice(walletIndex, 1);
-    userState.walletAddresses = userState.walletAddresses.filter(addr => addr !== wallet.address);
+    userState.walletAddresses = userState.wallets.map(w => w.address); // Update walletAddresses
     await updateUserState(userId, { wallets: userState.wallets, walletAddresses: userState.walletAddresses });
 
     const successMsg = userState.usePidgin
@@ -1525,22 +1527,22 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     logger.info(`Blockradar Webhook Event: ${type}`, data);
 
     if (type === 'deposit') {
-      const userId = (await db.collection('users')
+      const userDoc = (await db.collection('users')
         .where('walletAddresses', 'array-contains', data.address)
-        .get()).docs[0]?.id;
+        .get()).docs[0];
 
-      if (!userId) {
+      if (!userDoc) {
         logger.warn(`No user found for wallet address: ${data.address}`);
-        res.status(404).json({ status: 'error', message: 'User not found' });
-        return;
+        return res.status(404).json({ status: 'error', message: 'User not found' });
       }
 
+      const userId = userDoc.id;
       const userState = await getUserState(userId);
       const wallet = userState.wallets.find(w => w.address === data.address);
+
       if (!wallet) {
         logger.warn(`Wallet not found for address: ${data.address}`);
-        res.status(404).json({ status: 'error', message: 'Wallet not found' });
-        return;
+        return res.status(404).json({ status: 'error', message: 'Wallet not found' });
       }
 
       if (!SUPPORTED_ASSETS.includes(data.asset)) {
@@ -1551,8 +1553,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
           caption: errorMsg,
           parse_mode: 'Markdown',
         });
-        res.status(200).json({ status: 'success' });
-        return;
+        return res.status(200).json({ status: 'success' });
       }
 
       const amount = parseFloat(data.amount);
@@ -1561,10 +1562,10 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
       await updateUserState(userId, { wallets: userState.wallets });
 
       const depositMsg = userState.usePidgin
-        ? `💰 *Deposit Successful!*\n\n` +
-          `You don deposit *${amount} ${data.asset}* to your wallet wey end with *${data.address.slice(-4)}*. E don land safe!`
+        ? `💰 *Deposit Don Land!*\n\n` +
+          `You don deposit *${amount} ${data.asset}* to your wallet (*${data.address.slice(-4)}*). E don enter safe!`
         : `💰 *Deposit Successful!*\n\n` +
-          `You’ve deposited *${amount} ${data.asset}* to your wallet ending in *${data.address.slice(-4)}*. It’s safely received!`;
+          `You’ve deposited *${amount} ${data.asset}* to your wallet (*${data.address.slice-4)}*). It’s safely received!`;
       await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
         caption: depositMsg,
         parse_mode: 'Markdown',
@@ -1572,15 +1573,13 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
 
       if (!wallet.bank) {
         const linkBankMsg = userState.usePidgin
-          ? `🏦 You never link bank o! Abeg link your bank to cash out this ${amount} ${data.asset}.`
-          : `🏦 You haven’t linked a bank yet! Please link your bank to cash out this ${amount} ${data.asset}.`;
-        await bot.telegram.sendMessage(userId, linkBankMsg, { parse_mode: 'Markdown' });
-        ctx.session.walletIndex = userState.wallets.indexOf(wallet);
-        logger.info(`Attempting to enter bank_linking_scene for unlinked wallet, user ${userId}`);
-        await ctx.scene.enter('bank_linking_scene');
-        logger.info(`Successfully entered bank_linking_scene for unlinked wallet, user ${userId}, session: ${JSON.stringify(ctx.session)}`);
-        res.status(200).json({ status: 'success' });
-        return;
+          ? `🏦 You never link bank o! Abeg go to "💼 View Wallet" and link your bank to cash out this ${amount} ${data.asset}.`
+          : `🏦 You haven’t linked a bank yet! Please go to "💼 View Wallet" to link your bank and cash out this ${amount} ${data.asset}.`;
+        await bot.telegram.sendMessage(userId, linkBankMsg, {
+          parse_mode: 'Markdown',
+          reply_markup: getWalletMenu().reply_markup
+        });
+        return res.status(200).json({ status: 'success' });
       }
 
       const referenceId = generateReferenceId();
