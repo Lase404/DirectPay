@@ -1547,7 +1547,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         const errorMsg = userState.usePidgin
           ? `❌ Wahala dey o! You send *${data.asset}* but we only dey accept USDC and USDT. Contact support abeg!`
           : `❌ Oops! You sent *${data.asset}*, but we only accept USDC and USDT. Please contact support!`;
-        await bot.telegram      sendPhoto(userId, { source: ERROR_IMAGE }, {
+        await bot.telegramsendPhoto(userId, { source: ERROR_IMAGE }, {
         caption: errorMsg,
         parse_mode: 'Markdown',
       });
