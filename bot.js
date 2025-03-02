@@ -947,6 +947,13 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
         `*Supported Assets:* USDC, USDT\n\n` +
         `Please link a bank account to proceed with using this wallet!`;
     await ctx.replyWithMarkdown(successMsg);
+    await ctx.scene.enter('bank_linking_scene');
+  } catch (error) {
+    logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ There was an issue generating your wallet. Please try again later.');
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
+  }
+});
 
     logger.info(`Setting walletIndex to ${userState.wallets.length - 1} for user ${userId}`);
     ctx.session.walletIndex = userState.wallets.length - 1;
