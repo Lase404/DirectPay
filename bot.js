@@ -1547,66 +1547,67 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         const errorMsg = userState.usePidgin
           ? `❌ Wahala dey o! You send *${data.asset}* but we only dey accept USDC and USDT. Contact support abeg!`
           : `❌ Oops! You sent *${data.asset}*, but we only accept USDC and USDT. Please contact support!`;
-        await bot.telegramsendPhoto(userId, { source: ERROR_IMAGE }, {
-        caption: errorMsg,
+        await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
+          caption: errorMsg,
+          parse_mode: 'Markdown',
+        });
+        res.status(200).json({ status: 'success' });
+        return;
+      }
+
+      const amount = parseFloat(data.amount);
+      wallet.amount = (wallet.amount || 0) + amount;
+      wallet.totalDeposits = (wallet.totalDeposits || 0) + amount;
+      await updateUserState(userId, { wallets: userState.wallets });
+
+      const depositMsg = userState.usePidgin
+        ? `💰 *Deposit Successful!*\n\n` +
+          `You don deposit *${amount} ${data.asset}* to your wallet wey end with *${data.address.slice(-4)}*. E don land safe!`
+        : `💰 *Deposit Successful!*\n\n` +
+          `You’ve deposited *${amount} ${data.asset}* to your wallet ending in *${data.address.slice(-4)}*. It’s safely received!`;
+      await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+        caption: depositMsg,
         parse_mode: 'Markdown',
       });
-      res.status(200).json({ status: 'success' });
-      return;
+
+      if (!wallet.bank) {
+        const linkBankMsg = userState.usePidgin
+          ? `🏦 You never link bank o! Abeg link your bank to cash out this ${amount} ${data.asset}.`
+          : `🏦 You haven’t linked a bank yet! Please link your bank to cash out this ${amount} ${data.asset}.`;
+        await bot.telegram.sendMessage(userId, linkBankMsg, { parse_mode: 'Markdown' });
+        ctx.session.walletIndex = userState.wallets.indexOf(wallet);
+        logger.info(`Attempting to enter bank_linking_scene for unlinked wallet, user ${userId}`);
+        await ctx.scene.enter('bank_linking_scene');
+        logger.info(`Successfully entered bank_linking_scene for unlinked wallet, user ${userId}, session: ${JSON.stringify(ctx.session)}`);
+        res.status(200).json({ status: 'success' });
+        return;
+      }
+
+      const referenceId = generateReferenceId();
+      const orderData = await createPaycrestOrder(userId, amount, data.asset, wallet.chain, wallet.bank, data.address);
+
+      const txData = {
+        userId,
+        referenceId,
+        status: 'Pending',
+        amount,
+        asset: data.asset,
+        chain: wallet.chain,
+        payout: calculatePayoutWithFee(amount, exchangeRates[data.asset]),
+        bankDetails: wallet.bank,
+        timestamp: new Date().toISOString(),
+        transactionHash: data.transactionHash,
+        blockradarRate: exchangeRates[data.asset],
+      };
+      await db.collection('transactions').add(txData);
+
+      const processingMsg = userState.usePidgin
+        ? `🔄 *Processing Payout...*\n\nWe dey process your *${amount} ${data.asset}* to *₦${txData.payout}*. E go soon land your bank!`
+        : `🔄 *Processing Payout...*\n\nWe’re processing your *${amount} ${data.asset}* into *₦${txData.payout}*. It’ll hit your bank soon!`;
+      await bot.telegram.sendMessage(userId, processingMsg, { parse_mode: 'Markdown' });
+
+      await withdrawFromBlockradar(wallet.chain, chains[wallet.chain].assets[data.asset], orderData.depositAddress, amount, referenceId, { userId });
     }
-
-    const amount = parseFloat(data.amount);
-    wallet.amount = (wallet.amount || 0) + amount;
-    wallet.totalDeposits = (wallet.totalDeposits || 0) + amount;
-    await updateUserState(userId, { wallets: userState.wallets });
-
-    const depositMsg = userState.usePidgin
-      ? `💰 *Deposit Successful!*\n\n` +
-        `You don deposit *${amount} ${data.asset}* to your wallet wey end with *${data.address.slice(-4)}*. E don land safe!`
-      : `💰 *Deposit Successful!*\n\n` +
-        `You’ve deposited *${amount} ${data.asset}* to your wallet ending in *${data.address.slice(-4)}*. It’s safely received!`;
-    await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
-      caption: depositMsg,
-      parse_mode: 'Markdown',
-    });
-
-    if (!wallet.bank) {
-      const linkBankMsg = userState.usePidgin
-        ? `🏦 You never link bank o! Abeg link your bank to cash out this ${amount} ${data.asset}.`
-        : `🏦 You haven’t linked a bank yet! Please link your bank to cash out this ${amount} ${data.asset}.`;
-      await bot.telegram.sendMessage(userId, linkBankMsg, { parse_mode: 'Markdown' });
-      ctx.session.walletIndex = userState.wallets.indexOf(wallet);
-      logger.info(`Attempting to enter bank_linking_scene for unlinked wallet, user ${userId}`);
-      await ctx.scene.enter('bank_linking_scene');
-      logger.info(`Successfully entered bank_linking_scene for unlinked wallet, user ${userId}, session: ${JSON.stringify(ctx.session)}`);
-      res.status(200).json({ status: 'success' });
-      return;
-    }
-
-    const referenceId = generateReferenceId();
-    const orderData = await createPaycrestOrder(userId, amount, data.asset, wallet.chain, wallet.bank, data.address);
-
-    const txData = {
-      userId,
-      referenceId,
-      status: 'Pending',
-      amount,
-      asset: data.asset,
-      chain: wallet.chain,
-      payout: calculatePayoutWithFee(amount, exchangeRates[data.asset]),
-      bankDetails: wallet.bank,
-      timestamp: new Date().toISOString(),
-      transactionHash: data.transactionHash,
-      blockradarRate: exchangeRates[data.asset],
-    };
-    await db.collection('transactions').add(txData);
-
-    const processingMsg = userState.usePidgin
-      ? `🔄 *Processing Payout...*\n\nWe dey process your *${amount} ${data.asset}* to *₦${txData.payout}*. E go soon land your bank!`
-      : `🔄 *Processing Payout...*\n\nWe’re processing your *${amount} ${data.asset}* into *₦${txData.payout}*. It’ll hit your bank soon!`;
-    await bot.telegram.sendMessage(userId, processingMsg, { parse_mode: 'Markdown' });
-
-    await withdrawFromBlockradar(wallet.chain, chains[wallet.chain].assets[data.asset], orderData.depositAddress, amount, referenceId, { userId });
     res.status(200).json({ status: 'success' });
   } catch (error) {
     logger.error(`Error in Blockradar webhook: ${error.message}`);
