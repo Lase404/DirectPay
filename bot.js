@@ -323,28 +323,7 @@ async function generateWallet(chain) {
   }
 }
 
-// Session Setup with Logging
-bot.use(session({
-  store: {
-    get: async (key) => {
-      const doc = await db.collection('sessions').doc(key).get();
-      const data = doc.exists ? doc.data() : undefined;
-      logger.info(`Session get for ${key}: ${JSON.stringify(data)}`);
-      return data;
-    },
-    set: async (key, sess) => {
-      await db.collection('sessions').doc(key).set(sess);
-      logger.info(`Session set for ${key}: ${JSON.stringify(sess)}`);
-    },
-    delete: async (key) => {
-      await db.collection('sessions').doc(key).delete();
-      logger.info(`Session deleted for ${key}`);
-    },
-  },
-}));
-bot.use(stage.middleware());
-
-// Updated Bank Linking Scene
+// Define and register the bankLinkingScene first
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   async (ctx) => {
@@ -495,272 +474,11 @@ const bankLinkingScene = new Scenes.WizardScene(
   }
 );
 
-// Bank Linking Scene Actions (unchanged for now)
-bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const bankData = ctx.session.bankData;
-  const walletIndex = ctx.session.walletIndex;
-
-  try {
-    let userState = await getUserState(userId);
-    const wallet = userState.wallets[walletIndex];
-
-    if (!wallet) {
-      const errorMsg = userState.usePidgin
-        ? '⚠️ No wallet dey here o! Click "💼 Generate Wallet" for menu to start.'
-        : '⚠️ No wallet selected. Please click "💼 Generate Wallet" from the menu to start.';
-      await ctx.replyWithMarkdown(errorMsg);
-      await ctx.answerCbQuery();
-      return ctx.scene.leave();
-    }
-
-    wallet.bank = {
-      bankName: bankData.bankName,
-      bankCode: bankData.bankCode,
-      accountNumber: bankData.accountNumber,
-      accountName: bankData.accountName,
-    };
-
-    await updateUserState(userId, { wallets: userState.wallets });
-
-    const confirmationMessage = userState.usePidgin
-      ? `👏 *Bank Account Linked Successfully!*\n\n` +
-        `Welcome to DirectPay! Here’s your new wallet setup, fresh like moimoi from Mama’s pot:\n\n` +
-        `*Wallet Address:* \`${wallet.address}\`\n` +
-        `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
-        `*Supported Assets:* USDC, USDT\n\n` +
-        `*Bank Name:* ${bankData.bankName}\n` +
-        `*Account Number:* ${bankData.accountNumber}\n` +
-        `*Account Holder:* ${bankData.accountName}\n\n` +
-        `Only USDC and USDT dey work here o, no try send Shiba Inu unless you wan hear "Wahala dey!" from support. Scan the QR code below to grab your address!`
-      : `👏 *Bank Account Linked Successfully!*\n\n` +
-        `Welcome to DirectPay! Here are the details of your new wallet setup:\n\n` +
-        `*Wallet Address:* \`${wallet.address}\`\n` +
-        `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
-        `*Supported Assets:* USDC, USDT\n\n` +
-        `*Bank Name:* ${bankData.bankName}\n` +
-        `*Account Number:* ${bankData.accountNumber}\n` +
-        `*Account Holder:* ${bankData.accountName}\n\n` +
-        `Please note, only USDC and USDT are supported across **Base, BNB Smart Chain, and Polygon**. If any other token is deposited, reach out to customer support for assistance. Scan the QR code below to copy your wallet address!`;
-
-    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(wallet.address)}`;
-    const qrCodeResponse = await axios.get(qrCodeUrl, { responseType: 'arraybuffer' });
-    const qrCodeBuffer = Buffer.from(qrCodeResponse.data);
-
-    const tempDir = path.join(__dirname, 'temp');
-    if (!fs.existsSync(tempDir)) {
-      fs.mkdirSync(tempDir, { recursive: true });
-      logger.info(`Created temp directory at ${tempDir}`);
-    }
-
-    const outputImagePath = path.join(tempDir, `wallet_generated_${userId}.png`);
-    await sharp(WALLET_GENERATED_IMAGE)
-      .composite([{ input: qrCodeBuffer, top: 550, left: 950 }])
-      .toFile(outputImagePath);
-
-    await bot.telegram.sendPhoto(userId, { source: outputImagePath }, {
-      caption: confirmationMessage,
-      parse_mode: 'Markdown',
-    });
-
-    fs.unlinkSync(outputImagePath);
-
-    if (!userState.firstName) {
-      const namePrompt = userState.usePidgin
-        ? `📋 One small question: This bank account wey you link (${bankData.accountName}), na for you or for another person?\n\n` +
-          `[✅ Na me o!] [❌ Na third party]`
-        : `📋 One quick question: Is this bank account (${bankData.accountName}) yours or someone else’s?\n\n` +
-          `[✅ It’s mine!] [❌ It’s a third party’s]`;
-      await ctx.replyWithMarkdown(namePrompt, Markup.inlineKeyboard([
-        [Markup.button.callback(userState.usePidgin ? '✅ Na me o!' : '✅ It’s mine!', 'bank_is_mine')],
-        [Markup.button.callback(userState.usePidgin ? '❌ Na third party' : '❌ It’s a third party’s', 'bank_is_third_party')],
-      ]));
-    } else {
-      const mainMenu = getWalletMenu();
-      const menuText = userState.usePidgin
-        ? `Here’s your wallet menu, ${userState.firstName} wey sabi road:`
-        : `Here’s your wallet menu, ${userState.firstName}:`;
-      await bot.telegram.sendMessage(userId, menuText, {
-        reply_markup: mainMenu.reply_markup,
-        parse_mode: 'Markdown',
-      });
-      if (isAdmin(userId)) {
-        const adminText = userState.usePidgin
-          ? `Admin options, ${userState.firstName} the boss:`
-          : `Admin options, ${userState.firstName}:`;
-        await bot.telegram.sendMessage(userId, adminText, Markup.inlineKeyboard([
-          [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
-        ]));
-      }
-    }
-
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
-      `*Username:* @${ctx.from.username || 'N/A'}\n` +
-      `*First Name:* ${userState.firstName || 'Not set yet'}\n` +
-      `*Bank Name:* ${wallet.bank.bankName}\n` +
-      `*Account Number:* ${wallet.bank.accountNumber}\n` +
-      `*Account Holder:* ${wallet.bank.accountName}`, { parse_mode: 'Markdown' });
-    logger.info(`User ${userId} linked a bank account: ${JSON.stringify(wallet.bank)}`);
-
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  } catch (error) {
-    logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '❌ E no work o! Try again later abeg.'
-      : '❌ An error occurred while confirming your bank details. Please try again later.';
-    await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
-      caption: errorMsg,
-      parse_mode: 'Markdown',
-    });
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  }
-});
-
-bankLinkingScene.action('bank_is_mine', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const bankData = ctx.session.bankData;
-
-  try {
-    const userState = await getUserState(userId);
-    const firstName = bankData.accountName.split(' ')[0];
-    await updateUserState(userId, { firstName });
-
-    const confirmMsg = userState.usePidgin
-      ? `Ehen! Good choice, ${firstName}! We go dey call you ${firstName} from now on, sharp person wey sabi road. Here’s your wallet menu:`
-      : `Great! We’ll call you ${firstName} from now on. Here’s your wallet menu, ${firstName}:`;
-    const mainMenu = getWalletMenu();
-    await ctx.replyWithMarkdown(confirmMsg, {
-      reply_markup: mainMenu.reply_markup,
-    });
-
-    if (isAdmin(userId)) {
-      const adminText = userState.usePidgin
-        ? `Admin options, ${firstName} the boss:`
-        : `Admin options, ${firstName}:`;
-      await ctx.reply(adminText, Markup.inlineKeyboard([
-        [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
-      ]));
-    }
-
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  } catch (error) {
-    logger.error(`Error in bank_is_mine handler for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Something no work o! Try again abeg.'
-      : '⚠️ An error occurred. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  }
-});
-
-bankLinkingScene.action('bank_is_third_party', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const userState = await getUserState(userId);
-  const prompt = userState.usePidgin
-    ? 'Okay o! Who you be then? Abeg tell us your first name and last name so we fit know you well-well:\n(Reply with "FirstName LastName", e.g., "Chioma Eze")'
-    : 'Alright! What’s your name then? Please provide your first name and last name so we can identify you:\n(Reply with "FirstName LastName", e.g., "Chioma Eze")';
-  await ctx.replyWithMarkdown(prompt);
-  ctx.session.awaitingName = true;
-  await ctx.answerCbQuery();
-});
-
-bankLinkingScene.on('text', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (ctx.session.awaitingName) {
-    try {
-      const input = ctx.message.text.trim();
-      const userState = await getUserState(userId);
-      const nameParts = input.split(' ');
-      if (nameParts.length < 2) {
-        const errorMsg = userState.usePidgin
-          ? '❌ E no complete o! Abeg give us your first name and last name together (e.g., "Chioma Eze").'
-          : '❌ That’s not complete! Please provide both your first name and last name (e.g., "Chioma Eze").';
-        await ctx.replyWithMarkdown(errorMsg);
-        return;
-      }
-
-      const firstName = nameParts[0];
-      await updateUserState(userId, { firstName });
-
-      const confirmMsg = userState.usePidgin
-        ? `Correct! From now on, we go dey call you ${firstName}, fine person wey dey run things! Here’s your wallet menu:`
-        : `Perfect! From now on, we’ll call you ${firstName}. Here’s your wallet menu, ${firstName}:`;
-      const mainMenu = getWalletMenu();
-      await ctx.replyWithMarkdown(confirmMsg, {
-        reply_markup: mainMenu.reply_markup,
-      });
-
-      if (isAdmin(userId)) {
-        const adminText = userState.usePidgin
-          ? `Admin options, ${firstName} the boss:`
-          : `Admin options, ${firstName}:`;
-        await ctx.reply(adminText, Markup.inlineKeyboard([
-          [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
-        ]));
-      }
-
-      delete ctx.session.awaitingName;
-      ctx.scene.leave();
-    } catch (error) {
-      logger.error(`Error in name input handler for user ${userId}: ${error.message}`);
-      const userState = await getUserState(userId);
-      const errorMsg = userState.usePidgin
-        ? '⚠️ Something no work o! Try again abeg.'
-        : '⚠️ An error occurred. Please try again.';
-      await ctx.replyWithMarkdown(errorMsg);
-      delete ctx.session.awaitingName;
-      ctx.scene.leave();
-    }
-  }
-});
-
-bankLinkingScene.action('confirm_bank_no', async (ctx) => {
-  try {
-    const userState = await getUserState(ctx.from.id.toString());
-    const msg = userState.usePidgin
-      ? '⚠️ Let’s try again o!'
-      : '⚠️ Let’s try again.';
-    await ctx.replyWithMarkdown(msg);
-    await ctx.scene.reenter();
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in confirm_bank_no handler: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  }
-});
-
-bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
-  try {
-    const userState = await getUserState(ctx.from.id.toString());
-    const msg = userState.usePidgin
-      ? '❌ Bank linking don cancel o!'
-      : '❌ Bank linking process has been canceled.';
-    await ctx.replyWithMarkdown(msg);
-    delete ctx.session.walletIndex;
-    delete ctx.session.bankData;
-    delete ctx.session.processType;
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  } catch (error) {
-    logger.error(`Error in cancel_bank_linking handler: ${error.message}`);
-    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
-    await ctx.answerCbQuery();
-    ctx.scene.leave();
-  }
-});
-
-// Scene Setup
+// Register the scene with stage before using middleware
 const stage = new Scenes.Stage();
 stage.register(bankLinkingScene);
 
+// Apply session and stage middleware
 bot.use(session({
   store: {
     get: async (key) => {
@@ -976,7 +694,7 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
 
     logger.info(`Setting walletIndex to ${userState.wallets.length - 1} for user ${userId}`);
     ctx.session.walletIndex = userState.wallets.length - 1;
-    logger.info(`Entering bank_linking_scene for user ${userId}`);
+    logger.info(`Attempting to enter bank_linking_scene for user ${userId}`);
     await ctx.scene.enter('bank_linking_scene');
     logger.info(`Successfully entered bank_linking_scene for user ${userId}, session: ${JSON.stringify(ctx.session)}`);
   } catch (error) {
@@ -1244,7 +962,9 @@ bot.action(/edit_bank_(\d+)/, async (ctx) => {
     }
 
     ctx.session.walletIndex = walletIndex;
+    logger.info(`Entering bank_linking_scene for editing bank, user ${userId}, walletIndex: ${walletIndex}`);
     await ctx.scene.enter('bank_linking_scene');
+    logger.info(`Successfully entered bank_linking_scene for editing, user ${userId}`);
     await ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error in edit_bank for user ${userId}: ${error.message}`);
@@ -1305,7 +1025,7 @@ bot.hears('⚙️ Settings', async (ctx) => {
     await ctx.replyWithMarkdown(menuText, Markup.inlineKeyboard([
       [Markup.button.callback(userState.usePidgin ? '🔄 Generate New Wallet' : '🔄 Generate New Wallet', 'settings_generate_wallet')],
       [Markup.button.callback(userState.usePidgin ? '💬 Support' : '💬 Support', 'settings_support')],
-            [Markup.button.callback(userState.usePidgin ? '🔙 Back to Menu' : '🔙 Back to Main Menu', 'settings_back_main')]
+      [Markup.button.callback(userState.usePidgin ? '🔙 Back to Menu' : '🔙 Back to Main Menu', 'settings_back_main')]
     ]));
   } catch (error) {
     logger.error(`Error in settings handler for user ${userId}: ${error.message}`);
@@ -1827,67 +1547,66 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         const errorMsg = userState.usePidgin
           ? `❌ Wahala dey o! You send *${data.asset}* but we only dey accept USDC and USDT. Contact support abeg!`
           : `❌ Oops! You sent *${data.asset}*, but we only accept USDC and USDT. Please contact support!`;
-        await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
-          caption: errorMsg,
-          parse_mode: 'Markdown',
-        });
-        res.status(200).json({ status: 'success' });
-        return;
-      }
-
-      const amount = parseFloat(data.amount);
-      wallet.amount = (wallet.amount || 0) + amount;
-      wallet.totalDeposits = (wallet.totalDeposits || 0) + amount;
-      await updateUserState(userId, { wallets: userState.wallets });
-
-      const depositMsg = userState.usePidgin
-        ? `💰 *Deposit Successful!*\n\n` +
-          `You don deposit *${amount} ${data.asset}* to your wallet wey end with *${data.address.slice(-4)}*. E don land safe!`
-        : `💰 *Deposit Successful!*\n\n` +
-          `You’ve deposited *${amount} ${data.asset}* to your wallet ending in *${data.address.slice(-4)}*. It’s safely received!`;
-      await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
-        caption: depositMsg,
+        await bot.telegram      sendPhoto(userId, { source: ERROR_IMAGE }, {
+        caption: errorMsg,
         parse_mode: 'Markdown',
       });
-
-      if (!wallet.bank) {
-        const linkBankMsg = userState.usePidgin
-          ? `🏦 You never link bank o! Abeg link your bank to cash out this ${amount} ${data.asset}.`
-          : `🏦 You haven’t linked a bank yet! Please link your bank to cash out this ${amount} ${data.asset}.`;
-        await bot.telegram.sendMessage(userId, linkBankMsg, { parse_mode: 'Markdown' });
-        bot.session = bot.session || {}; // Ensure session exists
-        bot.session.walletIndex = userState.wallets.indexOf(wallet);
-        await bot.scene.enter('bank_linking_scene');
-        res.status(200).json({ status: 'success' });
-        return;
-      }
-
-      const referenceId = generateReferenceId();
-      const orderData = await createPaycrestOrder(userId, amount, data.asset, wallet.chain, wallet.bank, data.address);
-
-      const txData = {
-        userId,
-        referenceId,
-        status: 'Pending',
-        amount,
-        asset: data.asset,
-        chain: wallet.chain,
-        payout: calculatePayoutWithFee(amount, exchangeRates[data.asset]),
-        bankDetails: wallet.bank,
-        timestamp: new Date().toISOString(),
-        transactionHash: data.transactionHash,
-        blockradarRate: exchangeRates[data.asset],
-      };
-      await db.collection('transactions').add(txData);
-
-      const processingMsg = userState.usePidgin
-        ? `🔄 *Processing Payout...*\n\nWe dey process your *${amount} ${data.asset}* to *₦${txData.payout}*. E go soon land your bank!`
-        : `🔄 *Processing Payout...*\n\nWe’re processing your *${amount} ${data.asset}* into *₦${txData.payout}*. It’ll hit your bank soon!`;
-      await bot.telegram.sendMessage(userId, processingMsg, { parse_mode: 'Markdown' });
-
-      await withdrawFromBlockradar(wallet.chain, chains[wallet.chain].assets[data.asset], orderData.depositAddress, amount, referenceId, { userId });
+      res.status(200).json({ status: 'success' });
+      return;
     }
 
+    const amount = parseFloat(data.amount);
+    wallet.amount = (wallet.amount || 0) + amount;
+    wallet.totalDeposits = (wallet.totalDeposits || 0) + amount;
+    await updateUserState(userId, { wallets: userState.wallets });
+
+    const depositMsg = userState.usePidgin
+      ? `💰 *Deposit Successful!*\n\n` +
+        `You don deposit *${amount} ${data.asset}* to your wallet wey end with *${data.address.slice(-4)}*. E don land safe!`
+      : `💰 *Deposit Successful!*\n\n` +
+        `You’ve deposited *${amount} ${data.asset}* to your wallet ending in *${data.address.slice(-4)}*. It’s safely received!`;
+    await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+      caption: depositMsg,
+      parse_mode: 'Markdown',
+    });
+
+    if (!wallet.bank) {
+      const linkBankMsg = userState.usePidgin
+        ? `🏦 You never link bank o! Abeg link your bank to cash out this ${amount} ${data.asset}.`
+        : `🏦 You haven’t linked a bank yet! Please link your bank to cash out this ${amount} ${data.asset}.`;
+      await bot.telegram.sendMessage(userId, linkBankMsg, { parse_mode: 'Markdown' });
+      ctx.session.walletIndex = userState.wallets.indexOf(wallet);
+      logger.info(`Attempting to enter bank_linking_scene for unlinked wallet, user ${userId}`);
+      await ctx.scene.enter('bank_linking_scene');
+      logger.info(`Successfully entered bank_linking_scene for unlinked wallet, user ${userId}, session: ${JSON.stringify(ctx.session)}`);
+      res.status(200).json({ status: 'success' });
+      return;
+    }
+
+    const referenceId = generateReferenceId();
+    const orderData = await createPaycrestOrder(userId, amount, data.asset, wallet.chain, wallet.bank, data.address);
+
+    const txData = {
+      userId,
+      referenceId,
+      status: 'Pending',
+      amount,
+      asset: data.asset,
+      chain: wallet.chain,
+      payout: calculatePayoutWithFee(amount, exchangeRates[data.asset]),
+      bankDetails: wallet.bank,
+      timestamp: new Date().toISOString(),
+      transactionHash: data.transactionHash,
+      blockradarRate: exchangeRates[data.asset],
+    };
+    await db.collection('transactions').add(txData);
+
+    const processingMsg = userState.usePidgin
+      ? `🔄 *Processing Payout...*\n\nWe dey process your *${amount} ${data.asset}* to *₦${txData.payout}*. E go soon land your bank!`
+      : `🔄 *Processing Payout...*\n\nWe’re processing your *${amount} ${data.asset}* into *₦${txData.payout}*. It’ll hit your bank soon!`;
+    await bot.telegram.sendMessage(userId, processingMsg, { parse_mode: 'Markdown' });
+
+    await withdrawFromBlockradar(wallet.chain, chains[wallet.chain].assets[data.asset], orderData.depositAddress, amount, referenceId, { userId });
     res.status(200).json({ status: 'success' });
   } catch (error) {
     logger.error(`Error in Blockradar webhook: ${error.message}`);
@@ -1908,4 +1627,266 @@ app.listen(PORT, async () => {
 
 process.on('unhandledRejection', (reason, promise) => {
   logger.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
+});
+
+// Bank Linking Scene Actions
+bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const bankData = ctx.session.bankData;
+  const walletIndex = ctx.session.walletIndex;
+
+  try {
+    let userState = await getUserState(userId);
+    const wallet = userState.wallets[walletIndex];
+
+    if (!wallet) {
+      const errorMsg = userState.usePidgin
+        ? '⚠️ No wallet dey here o! Click "💼 Generate Wallet" for menu to start.'
+        : '⚠️ No wallet selected. Please click "💼 Generate Wallet" from the menu to start.';
+      await ctx.replyWithMarkdown(errorMsg);
+      await ctx.answerCbQuery();
+      return ctx.scene.leave();
+    }
+
+    wallet.bank = {
+      bankName: bankData.bankName,
+      bankCode: bankData.bankCode,
+      accountNumber: bankData.accountNumber,
+      accountName: bankData.accountName,
+    };
+
+    await updateUserState(userId, { wallets: userState.wallets });
+
+    const confirmationMessage = userState.usePidgin
+      ? `👏 *Bank Account Linked Successfully!*\n\n` +
+        `Welcome to DirectPay! Here’s your new wallet setup, fresh like moimoi from Mama’s pot:\n\n` +
+        `*Wallet Address:* \`${wallet.address}\`\n` +
+        `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
+        `*Supported Assets:* USDC, USDT\n\n` +
+        `*Bank Name:* ${bankData.bankName}\n` +
+        `*Account Number:* ${bankData.accountNumber}\n` +
+        `*Account Holder:* ${bankData.accountName}\n\n` +
+        `Only USDC and USDT dey work here o, no try send Shiba Inu unless you wan hear "Wahala dey!" from support. Scan the QR code below to grab your address!`
+      : `👏 *Bank Account Linked Successfully!*\n\n` +
+        `Welcome to DirectPay! Here are the details of your new wallet setup:\n\n` +
+        `*Wallet Address:* \`${wallet.address}\`\n` +
+        `*Supported Networks:* Base, BNB Smart Chain, Polygon (Matic)\n` +
+        `*Supported Assets:* USDC, USDT\n\n` +
+        `*Bank Name:* ${bankData.bankName}\n` +
+        `*Account Number:* ${bankData.accountNumber}\n` +
+        `*Account Holder:* ${bankData.accountName}\n\n` +
+        `Please note, only USDC and USDT are supported across **Base, BNB Smart Chain, and Polygon**. If any other token is deposited, reach out to customer support for assistance. Scan the QR code below to copy your wallet address!`;
+
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(wallet.address)}`;
+    const qrCodeResponse = await axios.get(qrCodeUrl, { responseType: 'arraybuffer' });
+    const qrCodeBuffer = Buffer.from(qrCodeResponse.data);
+
+    const tempDir = path.join(__dirname, 'temp');
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+      logger.info(`Created temp directory at ${tempDir}`);
+    }
+
+    const outputImagePath = path.join(tempDir, `wallet_generated_${userId}.png`);
+    await sharp(WALLET_GENERATED_IMAGE)
+      .composite([{ input: qrCodeBuffer, top: 550, left: 950 }])
+      .toFile(outputImagePath);
+
+    await bot.telegram.sendPhoto(userId, { source: outputImagePath }, {
+      caption: confirmationMessage,
+      parse_mode: 'Markdown',
+    });
+
+    fs.unlinkSync(outputImagePath);
+
+    if (!userState.firstName) {
+      const namePrompt = userState.usePidgin
+        ? `📋 One small question: This bank account wey you link (${bankData.accountName}), na for you or for another person?\n\n` +
+          `[✅ Na me o!] [❌ Na third party]`
+        : `📋 One quick question: Is this bank account (${bankData.accountName}) yours or someone else’s?\n\n` +
+          `[✅ It’s mine!] [❌ It’s a third party’s]`;
+      await ctx.replyWithMarkdown(namePrompt, Markup.inlineKeyboard([
+        [Markup.button.callback(userState.usePidgin ? '✅ Na me o!' : '✅ It’s mine!', 'bank_is_mine')],
+        [Markup.button.callback(userState.usePidgin ? '❌ Na third party' : '❌ It’s a third party’s', 'bank_is_third_party')],
+      ]));
+    } else {
+      const mainMenu = getWalletMenu();
+      const menuText = userState.usePidgin
+        ? `Here’s your wallet menu, ${userState.firstName} wey sabi road:`
+        : `Here’s your wallet menu, ${userState.firstName}:`;
+      await bot.telegram.sendMessage(userId, menuText, {
+        reply_markup: mainMenu.reply_markup,
+        parse_mode: 'Markdown',
+      });
+      if (isAdmin(userId)) {
+        const adminText = userState.usePidgin
+          ? `Admin options, ${userState.firstName} the boss:`
+          : `Admin options, ${userState.firstName}:`;
+        await bot.telegram.sendMessage(userId, adminText, Markup.inlineKeyboard([
+          [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
+        ]));
+      }
+    }
+
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n` +
+      `*Username:* @${ctx.from.username || 'N/A'}\n` +
+      `*First Name:* ${userState.firstName || 'Not set yet'}\n` +
+      `*Bank Name:* ${wallet.bank.bankName}\n` +
+      `*Account Number:* ${wallet.bank.accountNumber}\n` +
+      `*Account Holder:* ${wallet.bank.accountName}`, { parse_mode: 'Markdown' });
+    logger.info(`User ${userId} linked a bank account: ${JSON.stringify(wallet.bank)}`);
+
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  } catch (error) {
+    logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '❌ E no work o! Try again later abeg.'
+      : '❌ An error occurred while confirming your bank details. Please try again later.';
+    await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
+      caption: errorMsg,
+      parse_mode: 'Markdown',
+    });
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  }
+});
+
+bankLinkingScene.action('bank_is_mine', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const bankData = ctx.session.bankData;
+
+  try {
+    const userState = await getUserState(userId);
+    const firstName = bankData.accountName.split(' ')[0];
+    await updateUserState(userId, { firstName });
+
+    const confirmMsg = userState.usePidgin
+      ? `Ehen! Good choice, ${firstName}! We go dey call you ${firstName} from now on, sharp person wey sabi road. Here’s your wallet menu:`
+      : `Great! We’ll call you ${firstName} from now on. Here’s your wallet menu, ${firstName}:`;
+    const mainMenu = getWalletMenu();
+    await ctx.replyWithMarkdown(confirmMsg, {
+      reply_markup: mainMenu.reply_markup,
+    });
+
+    if (isAdmin(userId)) {
+      const adminText = userState.usePidgin
+        ? `Admin options, ${firstName} the boss:`
+        : `Admin options, ${firstName}:`;
+      await ctx.reply(adminText, Markup.inlineKeyboard([
+        [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
+      ]));
+    }
+
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  } catch (error) {
+    logger.error(`Error in bank_is_mine handler for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Something no work o! Try again abeg.'
+      : '⚠️ An error occurred. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  }
+});
+
+bankLinkingScene.action('bank_is_third_party', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const prompt = userState.usePidgin
+    ? 'Okay o! Who you be then? Abeg tell us your first name and last name so we fit know you well-well:\n(Reply with "FirstName LastName", e.g., "Chioma Eze")'
+    : 'Alright! What’s your name then? Please provide your first name and last name so we can identify you:\n(Reply with "FirstName LastName", e.g., "Chioma Eze")';
+  await ctx.replyWithMarkdown(prompt);
+  ctx.session.awaitingName = true;
+  await ctx.answerCbQuery();
+});
+
+bankLinkingScene.on('text', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  if (ctx.session.awaitingName) {
+    try {
+      const input = ctx.message.text.trim();
+      const userState = await getUserState(userId);
+      const nameParts = input.split(' ');
+      if (nameParts.length < 2) {
+        const errorMsg = userState.usePidgin
+          ? '❌ E no complete o! Abeg give us your first name and last name together (e.g., "Chioma Eze").'
+          : '❌ That’s not complete! Please provide both your first name and last name (e.g., "Chioma Eze").';
+        await ctx.replyWithMarkdown(errorMsg);
+        return;
+      }
+
+      const firstName = nameParts[0];
+      await updateUserState(userId, { firstName });
+
+      const confirmMsg = userState.usePidgin
+        ? `Correct! From now on, we go dey call you ${firstName}, fine person wey dey run things! Here’s your wallet menu:`
+        : `Perfect! From now on, we’ll call you ${firstName}. Here’s your wallet menu, ${firstName}:`;
+      const mainMenu = getWalletMenu();
+      await ctx.replyWithMarkdown(confirmMsg, {
+        reply_markup: mainMenu.reply_markup,
+      });
+
+      if (isAdmin(userId)) {
+        const adminText = userState.usePidgin
+          ? `Admin options, ${firstName} the boss:`
+          : `Admin options, ${firstName}:`;
+        await ctx.reply(adminText, Markup.inlineKeyboard([
+          [Markup.button.callback('🔧 Admin Panel', 'open_admin_panel')]
+        ]));
+      }
+
+      delete ctx.session.awaitingName;
+      ctx.scene.leave();
+    } catch (error) {
+      logger.error(`Error in name input handler for user ${userId}: ${error.message}`);
+      const userState = await getUserState(userId);
+      const errorMsg = userState.usePidgin
+        ? '⚠️ Something no work o! Try again abeg.'
+        : '⚠️ An error occurred. Please try again.';
+      await ctx.replyWithMarkdown(errorMsg);
+      delete ctx.session.awaitingName;
+      ctx.scene.leave();
+    }
+  }
+});
+
+bankLinkingScene.action('confirm_bank_no', async (ctx) => {
+  try {
+    const userState = await getUserState(ctx.from.id.toString());
+    const msg = userState.usePidgin
+      ? '⚠️ Let’s try again o!'
+      : '⚠️ Let’s try again.';
+    await ctx.replyWithMarkdown(msg);
+    await ctx.scene.reenter();
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error in confirm_bank_no handler: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  }
+});
+
+bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
+  try {
+    const userState = await getUserState(ctx.from.id.toString());
+    const msg = userState.usePidgin
+      ? '❌ Bank linking don cancel o!'
+      : '❌ Bank linking process has been canceled.';
+    await ctx.replyWithMarkdown(msg);
+    delete ctx.session.walletIndex;
+    delete ctx.session.bankData;
+    delete ctx.session.processType;
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  } catch (error) {
+    logger.error(`Error in cancel_bank_linking handler: ${error.message}`);
+    await ctx.replyWithMarkdown('⚠️ An error occurred. Please try again.');
+    await ctx.answerCbQuery();
+    ctx.scene.leave();
+  }
 });
