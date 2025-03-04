@@ -1967,7 +1967,7 @@ async function handlePaymentOrderRefunded(data, res) {
     await db.collection('transactions').doc(txDoc.id).update({ status: 'Refunded' });
 
     const refundMsg = userState.usePidgin
-      ? `❌ *Order Don Refund o!*\n\nSorry ${txData.firstName || 'Valued User'}, your order with *Ref ID:* \`${reference}\` don refund.\n*Reason:* We get problem process am. Money don go back to your payment way.\nIf e be mistake, contact [@maxcswap](https://t.me/maxcswap) o!\nThank you for understand.'
+      ? `❌ *Order Don Refund o!*\n\nSorry ${txData.firstName || 'Valued User'}, your order with *Ref ID:* \`${reference}\` don refund.\n*Reason:* We get problem process am. Money don go back to your payment way.\nIf e be mistake, contact [@maxcswap](https://t.me/maxcswap) o!\nThank you for understand.`
       : `❌ *Your DirectPay order has been refunded.*\n\nHello ${txData.firstName || 'Valued User'},\n\nWe regret to inform you that your DirectPay order with *Reference ID:* \`${reference}\` has been refunded.\n*Reason:* We experienced issues while processing your order. Rest assured, the funds have been returned to your original payment method.\n\nIf you believe this is a mistake or need further assistance, please don't hesitate to contact our support team at [@maxcswap](https://t.me/maxcswap).\n\nThank you for your understanding.`;
     await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
       caption: refundMsg,
