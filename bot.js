@@ -1717,12 +1717,17 @@ const TEMP_FOLDER = path.join(__dirname, 'temp');
 if (!fs.existsSync(TEMP_FOLDER)) {
   fs.mkdirSync(TEMP_FOLDER);
 }
+const { createReadStream, unlink } = require('fs');
+const { promisify } = require('util');
+const unlinkAsync = promisify(unlink);
+
 
 // =================== Handle Bank Linking Actions ===================
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const bankData = ctx.session.bankData;
   const walletIndex = ctx.session.walletIndex;
+  const tempFilePath = path.join(__dirname, `temp_qr_${userId}_${Date.now()}.png`);
 
   try {
     let userState = await getUserState(userId);
@@ -1751,20 +1756,31 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     const qrCodeResponse = await axios.get(qrCodeUrl, { responseType: 'arraybuffer' });
     const qrCodeBuffer = Buffer.from(qrCodeResponse.data);
 
-    // Check if base image exists
+    // Validate and process the base image
     if (!fs.existsSync(WALLET_GENERATED_IMAGE)) {
       throw new Error(`Base image not found at ${WALLET_GENERATED_IMAGE}`);
     }
 
-    // Overlay QR code and save to temporary file
-    const qrCodePosition = { top: 100, left: 100 }; // Adjust as needed
-    const tempFilePath = path.join(TEMP_FOLDER, `wallet_${userId}_${Date.now()}.png`);
-    
+    // Check base image metadata to ensure it’s valid
+    const baseImageMetadata = await sharp(WALLET_GENERATED_IMAGE).metadata();
+    logger.info(`Base image metadata: ${JSON.stringify(baseImageMetadata)}`);
+    if (!baseImageMetadata.width || !baseImageMetadata.height) {
+      throw new Error('Base image has invalid dimensions or format');
+    }
+
+    const qrCodePosition = { top: 100, left: 100 }; // Adjust based on your design
     await sharp(WALLET_GENERATED_IMAGE)
-      .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }) // Max 1280x1280
+      .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }) // Ensure within Telegram limits
       .composite([{ input: qrCodeBuffer, top: qrCodePosition.top, left: qrCodePosition.left }])
-      .png() // Ensure PNG format
-      .toFile(tempFilePath);
+      .png() // Force PNG output for compatibility
+      .toFile(tempFilePath); // Save to temporary file
+
+    // Verify the output image dimensions
+    const outputMetadata = await sharp(tempFilePath).metadata();
+    logger.info(`Output image metadata: ${JSON.stringify(outputMetadata)}`);
+    if (outputMetadata.width > 10000 || outputMetadata.height > 10000) {
+      throw new Error(`Output image dimensions (${outputMetadata.width}x${outputMetadata.height}) exceed Telegram's 10,000px limit`);
+    }
 
     const confirmationMessage = userState.usePidgin
       ? `✅ *Bank Account Don Link!*\n\n` +
@@ -1784,16 +1800,13 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
         `• *Address:* \`${walletAddress}\`\n\n` +
         `You can now receive payouts to this bank account.`;
 
-    // Send the temporary file
-    await ctx.replyWithPhoto({ source: tempFilePath }, {
+    await ctx.replyWithPhoto({ source: createReadStream(tempFilePath) }, {
       caption: confirmationMessage,
       parse_mode: 'Markdown',
     });
 
-    // Clean up the temporary file after sending
-    fs.unlink(tempFilePath, (err) => {
-      if (err) logger.error(`Error deleting temp file ${tempFilePath}: ${err.message}`);
-    });
+    // Clean up the temporary file
+    await unlinkAsync(tempFilePath);
 
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
@@ -1807,6 +1820,16 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       ? '❌ Error link bank o! Try again later. If problem dey, contact [@maxcswap](https://t.me/maxcswap).'
       : '❌ An error occurred while confirming your bank details. Please try again later or contact [@maxcswap](https://t.me/maxcswap) for support.';
     await ctx.replyWithMarkdown(errorMsg);
+
+    // Clean up temp file if it exists
+    if (fs.existsSync(tempFilePath)) {
+      try {
+        await unlinkAsync(tempFilePath);
+      } catch (cleanupError) {
+        logger.error(`Failed to clean up temp file ${tempFilePath}: ${cleanupError.message}`);
+      }
+    }
+
     await ctx.answerCbQuery();
     ctx.scene.leave();
   }
