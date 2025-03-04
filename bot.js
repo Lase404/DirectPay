@@ -1721,13 +1721,11 @@ const { createReadStream, unlink } = require('fs');
 const { promisify } = require('util');
 const unlinkAsync = promisify(unlink);
 
-
-// =================== Handle Bank Linking Actions ===================
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   const bankData = ctx.session.bankData;
   const walletIndex = ctx.session.walletIndex;
-  const tempFilePath = path.join(__dirname, `temp_qr_${userId}_${Date.now()}.png`);
+  const tempFilePath = path.join(__dirname, `temp_qr_${userId}_${Date.now()}.png`); // Unique temp file
 
   try {
     let userState = await getUserState(userId);
@@ -1752,35 +1750,21 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     // Generate QR code for the wallet address
     const walletAddress = userState.wallets[walletIndex].address;
-    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(walletAddress)}`;
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=200x200&data=${encodeURIComponent(walletAddress)}`; // Matches working test
     const qrCodeResponse = await axios.get(qrCodeUrl, { responseType: 'arraybuffer' });
     const qrCodeBuffer = Buffer.from(qrCodeResponse.data);
 
-    // Validate and process the base image
+    // Overlay QR code onto the base image, resize, and save to temp file
     if (!fs.existsSync(WALLET_GENERATED_IMAGE)) {
       throw new Error(`Base image not found at ${WALLET_GENERATED_IMAGE}`);
     }
 
-    // Check base image metadata to ensure it’s valid
-    const baseImageMetadata = await sharp(WALLET_GENERATED_IMAGE).metadata();
-    logger.info(`Base image metadata: ${JSON.stringify(baseImageMetadata)}`);
-    if (!baseImageMetadata.width || !baseImageMetadata.height) {
-      throw new Error('Base image has invalid dimensions or format');
-    }
-
-    const qrCodePosition = { top: 100, left: 100 }; // Adjust based on your design
+    const qrCodePosition = { top: 250, left: 210 }; // Matches working test
     await sharp(WALLET_GENERATED_IMAGE)
-      .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }) // Ensure within Telegram limits
+      .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }) // Max 1280x1280
       .composite([{ input: qrCodeBuffer, top: qrCodePosition.top, left: qrCodePosition.left }])
-      .png() // Force PNG output for compatibility
+      .png() // Ensure PNG format
       .toFile(tempFilePath); // Save to temporary file
-
-    // Verify the output image dimensions
-    const outputMetadata = await sharp(tempFilePath).metadata();
-    logger.info(`Output image metadata: ${JSON.stringify(outputMetadata)}`);
-    if (outputMetadata.width > 10000 || outputMetadata.height > 10000) {
-      throw new Error(`Output image dimensions (${outputMetadata.width}x${outputMetadata.height}) exceed Telegram's 10,000px limit`);
-    }
 
     const confirmationMessage = userState.usePidgin
       ? `✅ *Bank Account Don Link!*\n\n` +
@@ -1800,6 +1784,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
         `• *Address:* \`${walletAddress}\`\n\n` +
         `You can now receive payouts to this bank account.`;
 
+    // Send the photo using a read stream from the temp file
     await ctx.replyWithPhoto({ source: createReadStream(tempFilePath) }, {
       caption: confirmationMessage,
       parse_mode: 'Markdown',
