@@ -834,10 +834,9 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
         : `• *${asset}*: ₦${rate}\n`;
     }
     ratesMessage += userState.usePidgin
-      ? `\nThese rates dey work for your deposits and payouts o.'
-      : `\nThese rates will be applied during your deposits and payouts.`;
-
-    await ctx.replyWithMarkdown(ratesMessage);
+      ? `\nThese rates dey work for your deposits and payouts o.'`
+      : `\nThese rates will be applied during your deposits and payouts.`
+      await ctx.replyWithMarkdown(ratesMessage);
 
     const prompt = userState.usePidgin
       ? '📂 Pick network for your new wallet, my friend:'
