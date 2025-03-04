@@ -659,6 +659,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
       ctx.scene.leave();
     } catch (error) {
       logger.error(`Error generating receipt for user ${userId}: ${error.message}`);
+      const userState = await getUserState(userId);
       const errorMsg = userState.usePidgin
         ? '⚠️ Error make receipt o! Try again later.'
         : '⚠️ An error occurred while generating the receipt. Please try again later.';
@@ -834,18 +835,60 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
         : `• *${asset}*: ₦${rate}\n`;
     }
     ratesMessage += userState.usePidgin
-      ? `\nThese rates dey work for your deposits and payouts o.'`
-      : `\nThese rates will be applied during your deposits and payouts.`
-      await ctx.replyWithMarkdown(ratesMessage);
+      ? `\nThese rates dey work for your deposits and payouts o.` // Fixed syntax error
+      : `\nThese rates will be applied during your deposits and payouts.`;
+    await ctx.replyWithMarkdown(ratesMessage);
 
-    const prompt = userState.usePidgin
-      ? '📂 Pick network for your new wallet, my friend:'
-      : '📂 *Select the network for which you want to generate a wallet:*';
-    await ctx.replyWithMarkdown(prompt, Markup.inlineKeyboard([
-      [Markup.button.callback('Base', 'generate_wallet_Base')],
-      [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-      [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-    ]));
+    const chain = 'Base'; // Default to Base since it's EVM-compatible
+    const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet on *${chain}*... Please wait a moment.`);
+
+    try {
+      const walletAddress = await generateWallet(chain);
+      userState.wallets.push({
+        address: walletAddress,
+        chain: chain,
+        supportedAssets: chains[chain].supportedAssets,
+        bank: null,
+        amount: 0,
+        creationDate: new Date().toISOString(),
+        totalDeposits: 0,
+        totalPayouts: 0
+      });
+      userState.walletAddresses.push(walletAddress);
+
+      await updateUserState(userId, {
+        wallets: userState.wallets,
+        walletAddresses: userState.walletAddresses,
+      });
+
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `💼 Wallet generated for user ${userId} on ${chain}: ${walletAddress}`, { parse_mode: 'Markdown' });
+      logger.info(`Wallet generated for user ${userId} on ${chain}: ${walletAddress}`);
+
+      const newWalletIndex = userState.wallets.length - 1;
+      ctx.session.walletIndex = newWalletIndex;
+
+      await ctx.deleteMessage(generatingMessage.message_id);
+
+      const successMsg = userState.usePidgin
+        ? `✅ *Wallet Don Land!*\n\n` +
+          `*Networks:* Base, BNB Smart Chain, Polygon (EVM Compatible)\n` +
+          `*Assets:* USDC, USDT\n` +
+          `*Address:* \`${walletAddress}\`\n\n` +
+          `Abeg link your bank account to start using am! Click "🏦 Link Bank Account" to proceed.`
+        : `✅ *Wallet Generated Successfully!*\n\n` +
+          `*Networks:* Base, BNB Smart Chain, Polygon (EVM Compatible)\n` +
+          `*Assets:* USDC, USDT\n` +
+          `*Address:* \`${walletAddress}\`\n\n` +
+          `Please link your bank account to start using it! Click "🏦 Link Bank Account" to proceed.`;
+      await ctx.replyWithMarkdown(successMsg, { reply_markup: getMainMenu(true, false) });
+    } catch (error) {
+      logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
+      const errorMsg = userState.usePidgin
+        ? '⚠️ Wahala dey o! Try again later abeg.'
+        : '⚠️ There was an issue generating your wallet. Please try again later.';
+      await ctx.replyWithMarkdown(errorMsg);
+      await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error generating wallet for user ${userId}: ${error.message}`, { parse_mode: 'Markdown' });
+    }
   } catch (error) {
     logger.error(`Error handling Generate Wallet for user ${userId}: ${error.message}`);
     const userState = await getUserState(userId);
@@ -856,30 +899,650 @@ bot.hears('💼 Generate Wallet', async (ctx) => {
   }
 });
 
-bot.action(/generate_wallet_(.+)/, async (ctx) => {
+// =================== View Wallet Handler ===================
+bot.hears('💼 View Wallet', async (ctx) => {
   const userId = ctx.from.id.toString();
-  const selectedChainRaw = ctx.match[1];
-  const selectedChainKey = chainMapping[selectedChainRaw.toLowerCase()];
-  if (!selectedChainKey) {
-    await ctx.replyWithMarkdown('⚠️ Invalid network selection. Please try again.');
+  const ip = ctx.requestIp || 'Unknown';
+  let suggestPidgin = false;
+
+  if (ip.startsWith('41.') || ip.startsWith('197.') || ip.startsWith('105.')) {
+    suggestPidgin = true;
+  }
+
+  try {
+    const userState = await getUserState(userId);
+    
+    if (userState.wallets.length === 0) {
+      const errorMsg = userState.usePidgin
+        ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
+        : '❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.';
+      await ctx.replyWithMarkdown(errorMsg);
+      if (suggestPidgin && !userState.usePidgin) {
+        await ctx.replyWithMarkdown('👋 Looks like you might be in Nigeria! Try switching to Pidgin by typing "Pidgin" for a local vibe.');
+      }
+      return;
+    }
+
+    const pageSize = 3; // Reduced for better readability
+    const totalPages = Math.ceil(userState.wallets.length / pageSize);
+    ctx.session.walletsPage = ctx.session.walletsPage || 1;
+
+    const generateWalletPage = async (page) => {
+      const start = (page - 1) * pageSize;
+      const end = Math.min(start + pageSize, userState.wallets.length);
+      const wallets = userState.wallets.slice(start, end).sort((a, b) => new Date(b.creationDate) - new Date(a.creationDate)); // Sort by creation date, newest first
+
+      let message = userState.usePidgin
+        ? `💼 *Your Wallets o!* (Page ${page}/${totalPages})\n\n`
+        : `💼 *Your Wallets* (Page ${page}/${totalPages}):\n\n`;
+      wallets.forEach((wallet, index) => {
+        const walletNumber = start + index + 1;
+        message += userState.usePidgin
+          ? `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n` +
+            `• *Address:* \`${wallet.address}\`\n` +
+            `• *Chain:* ${wallet.chain}\n` +
+            `• *Created:* ${new Date(wallet.creationDate).toLocaleDateString()}\n` +
+            `• *Bank:* ${wallet.bank ? `${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})` : '❌ Not Linked'}\n\n`
+          : `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n` +
+            `• *Address:* \`${wallet.address}\`\n` +
+            `• *Chain:* ${wallet.chain}\n` +
+            `• *Created:* ${new Date(wallet.creationDate).toLocaleDateString()}\n` +
+            `• *Bank Linked:* ${wallet.bank ? `${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})` : '❌ Not Linked'}\n\n`;
+      });
+
+      const navigationButtons = [];
+      if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `wallet_page_${page - 1}`));
+      if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${page + 1}`));
+      navigationButtons.push(Markup.button.callback('🔄 Refresh', `wallet_page_${page}`));
+
+      return { message, inlineKeyboard: Markup.inlineKeyboard([navigationButtons]) };
+    };
+
+    const { message, inlineKeyboard } = await generateWalletPage(ctx.session.walletsPage);
+    await ctx.replyWithMarkdown(message, inlineKeyboard);
+    if (suggestPidgin && !userState.usePidgin) {
+      await ctx.replyWithMarkdown('👋 Looks like you might be in Nigeria! Try switching to Pidgin by typing "Pidgin" for a local vibe.');
+    }
+  } catch (error) {
+    logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again later abeg.'
+      : '⚠️ An error occurred while fetching your wallets. Please try again later.';
+    await ctx.replyWithMarkdown(errorMsg);
+  }
+});
+
+bot.action(/wallet_page_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const requestedPage = parseInt(ctx.match[1], 10);
+
+  try {
+    const userState = await getUserState(userId);
+    const pageSize = 3;
+    const totalPages = Math.ceil(userState.wallets.length / pageSize);
+
+    if (requestedPage < 1 || requestedPage > totalPages) {
+      await ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true });
+      return;
+    }
+
+    ctx.session.walletsPage = requestedPage;
+
+    const generateWalletPage = async (page) => {
+      const start = (page - 1) * pageSize;
+      const end = Math.min(start + pageSize, userState.wallets.length);
+      const wallets = userState.wallets.slice(start, end).sort((a, b) => new Date(b.creationDate) - new Date(a.creationDate));
+
+      let message = userState.usePidgin
+        ? `💼 *Your Wallets o!* (Page ${page}/${totalPages})\n\n`
+        : `💼 *Your Wallets* (Page ${page}/${totalPages}):\n\n`;
+      wallets.forEach((wallet, index) => {
+        const walletNumber = start + index + 1;
+        message += userState.usePidgin
+          ? `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n` +
+            `• *Address:* \`${wallet.address}\`\n` +
+            `• *Chain:* ${wallet.chain}\n` +
+            `• *Created:* ${new Date(wallet.creationDate).toLocaleDateString()}\n` +
+            `• *Bank:* ${wallet.bank ? `${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})` : '❌ Not Linked'}\n\n`
+          : `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n` +
+            `• *Address:* \`${wallet.address}\`\n` +
+            `• *Chain:* ${wallet.chain}\n` +
+            `• *Created:* ${new Date(wallet.creationDate).toLocaleDateString()}\n` +
+            `• *Bank Linked:* ${wallet.bank ? `${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})` : '❌ Not Linked'}\n\n`;
+      });
+
+      const navigationButtons = [];
+      if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `wallet_page_${page - 1}`));
+      if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${page + 1}`));
+      navigationButtons.push(Markup.button.callback('🔄 Refresh', `wallet_page_${page}`));
+
+      return { message, inlineKeyboard: Markup.inlineKeyboard([navigationButtons]) };
+    };
+
+    const { message, inlineKeyboard } = await generateWalletPage(requestedPage);
+    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+    ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error navigating wallet pages for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Error turn page o! Try again later.'
+      : '⚠️ An error occurred while navigating wallets. Please try again later.';
+    await ctx.replyWithMarkdown(errorMsg);
+    ctx.answerCbQuery();
+  }
+});
+
+// =================== Transactions Handler ===================
+bot.hears(/💰\s*Transactions/i, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const userState = await getUserState(userId);
+
+    if (userState.wallets.length === 0) {
+      const errorMsg = userState.usePidgin
+        ? '❌ You no get wallet o! No transactions yet.'
+        : '❌ You have no wallets, so there are no transactions yet.';
+      await ctx.replyWithMarkdown(errorMsg);
+      return;
+    }
+
+    const initialPrompt = userState.usePidgin
+      ? '💰 *Transactions o!*\n\nAbeg pick how you want see your transactions:'
+      : '💰 *Transactions*\n\nPlease choose how you’d like to view your transactions:';
+
+    const inlineKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('📋 All Transactions', 'tx_all')],
+      [Markup.button.callback('✅ Completed', 'tx_status_Completed')],
+      [Markup.button.callback('❌ Failed', 'tx_status_Failed')],
+      [Markup.button.callback('⏳ Pending', 'tx_status_Pending')],
+      [Markup.button.callback('🔄 Refunded', 'tx_status_Refunded')],
+      [Markup.button.callback('🪙 Filter by Asset', 'tx_filter_asset')],
+      [Markup.button.callback('📅 Filter by Date', 'tx_filter_date')]
+    ]);
+
+    await ctx.replyWithMarkdown(initialPrompt, inlineKeyboard);
+  } catch (error) {
+    logger.error(`Error initiating transactions for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Wahala dey o! Try again later abeg.'
+      : '⚠️ An error occurred. Please try again later.';
+    await ctx.replyWithMarkdown(errorMsg);
+  }
+});
+
+async function displayTransactions(ctx, query, page = 1, filterDescription = '') {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const pageSize = 5;
+
+  const transactionsSnapshot = await query
+    .limit(pageSize)
+    .offset((page - 1) * pageSize)
+    .get();
+
+  const totalDocsSnapshot = await query.count().get();
+  const totalDocs = totalDocsSnapshot.data().count;
+  const totalPages = Math.ceil(totalDocs / pageSize);
+
+  let message = userState.usePidgin
+    ? `💰 *Your Transactions o!*${filterDescription} (Page ${page}/${totalPages})\n\n`
+    : `💰 *Your Transactions*${filterDescription} (Page ${page}/${totalPages})\n\n`;
+
+  if (transactionsSnapshot.empty) {
+    message += userState.usePidgin
+      ? 'No transactions match this filter o!'
+      : 'No transactions match this filter.';
+  } else {
+    transactionsSnapshot.forEach((doc) => {
+      const tx = doc.data();
+      message += userState.usePidgin
+        ? `*Ref ID:* \`${tx.referenceId || 'N/A'}\`\n` +
+          `• *Asset:* ${tx.asset || 'N/A'}\n` +
+          `• *Amount:* ${tx.amount || 'N/A'}\n` +
+          `• *Payout:* ₦${tx.payout || 'N/A'}\n` +
+          `• *Status:* ${tx.status || 'Pending'}\n` +
+          `• *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleDateString() : 'N/A'}\n` +
+          `• *Chain:* ${tx.chain || 'N/A'}\n\n`
+        : `*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n` +
+          `• *Asset:* ${tx.asset || 'N/A'}\n` +
+          `• *Amount:* ${tx.amount || 'N/A'}\n` +
+          `• *Payout:* ₦${tx.payout || 'N/A'}\n` +
+          `• *Status:* ${tx.status || 'Pending'}\n` +
+          `• *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleDateString() : 'N/A'}\n` +
+          `• *Chain:* ${tx.chain || 'N/A'}\n\n`;
+    });
+  }
+
+  const navigationButtons = [];
+  if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `tx_page_${page - 1}_${filterDescription.replace(/\s/g, '_')}`));
+  if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `tx_page_${page + 1}_${filterDescription.replace(/\s/g, '_')}`));
+  navigationButtons.push(Markup.button.callback('🔄 Refresh', `tx_page_${page}_${filterDescription.replace(/\s/g, '_')}`));
+  navigationButtons.push(Markup.button.callback('🔙 Back to Filters', 'tx_back'));
+
+  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
+  await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+}
+
+bot.action('tx_all', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const query = db.collection('transactions')
+      .where('userId', '==', userId)
+      .orderBy('timestamp', 'desc');
+
+    await displayTransactions(ctx, query, 1, '');
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error displaying all transactions for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again later.'
+      : '⚠️ An error occurred while fetching transactions. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+  }
+});
+
+bot.action(/tx_status_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const status = ctx.match[1];
+  try {
+    const query = db.collection('transactions')
+      .where('userId', '==', userId)
+      .where('status', '==', status)
+      .orderBy('timestamp', 'desc');
+
+    const filterDescription = ` - ${status} Transactions`;
+    await displayTransactions(ctx, query, 1, filterDescription);
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error displaying ${status} transactions for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again later.'
+      : '⚠️ An error occurred while fetching transactions. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+  }
+});
+
+bot.action('tx_filter_asset', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  try {
+    const assetPrompt = userState.usePidgin
+      ? '🪙 *Filter by Asset o!*\n\nPick asset wey you want see transactions for:'
+      : '🪙 *Filter by Asset*\n\nSelect the asset you’d like to filter transactions by:';
+
+    const inlineKeyboard = Markup.inlineKeyboard([
+      [Markup.button.callback('USDC', 'tx_asset_USDC')],
+      [Markup.button.callback('USDT', 'tx_asset_USDT')],
+      [Markup.button.callback('🔙 Back to Filters', 'tx_back')]
+    ]);
+
+    await ctx.editMessageText(assetPrompt, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error initiating asset filter for user ${userId}: ${error.message}`);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again later.'
+      : '⚠️ An error occurred. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+  }
+});
+
+bot.action(/tx_asset_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const asset = ctx.match[1];
+  try {
+    const query = db.collection('transactions')
+      .where('userId', '==', userId)
+      .where('asset', '==', asset)
+      .orderBy('timestamp', 'desc');
+
+    const filterDescription = ` - ${asset} Transactions`;
+    await displayTransactions(ctx, query, 1, filterDescription);
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error displaying ${asset} transactions for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again later.'
+      : '⚠️ An error occurred while fetching transactions. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+  }
+});
+
+bot.action('tx_filter_date', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  try {
+    const datePrompt = userState.usePidgin
+      ? '📅 *Filter by Date o!*\n\nPick month wey you want see transactions for:'
+      : '📅 *Filter by Date*\n\nSelect the month you’d like to filter transactions by:';
+
+    const currentDate = new Date();
+    const months = [];
+    for (let i = 0; i < 3; i++) {
+      const date = new Date(currentDate.getFullYear(), currentDate.getMonth() - i, 1);
+      const monthName = date.toLocaleString('default', { month: 'long', year: 'numeric' });
+      months.push([Markup.button.callback(monthName, `tx_date_${date.getFullYear()}_${date.getMonth()}`)]);
+    }
+    months.push([Markup.button.callback('🔙 Back to Filters', 'tx_back')]);
+
+    const inlineKeyboard = Markup.inlineKeyboard(months);
+    await ctx.editMessageText(datePrompt, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error initiating date filter for user ${userId}: ${error.message}`);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again later.'
+      : '⚠️ An error occurred. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+  }
+});
+
+bot.action(/tx_date_(\d+)_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const year = parseInt(ctx.match[1], 10);
+  const month = parseInt(ctx.match[2], 10);
+  try {
+    const startDate = new Date(year, month, 1);
+    const endDate = new Date(year, month + 1, 0, 23, 59, 59, 999);
+
+    const query = db.collection('transactions')
+      .where('userId', '==', userId)
+      .where('timestamp', '>=', startDate.toISOString())
+      .where('timestamp', '<=', endDate.toISOString())
+      .orderBy('timestamp', 'desc');
+
+    const filterDescription = ` - ${startDate.toLocaleString('default', { month: 'long', year: 'numeric' })}`;
+    await displayTransactions(ctx, query, 1, filterDescription);
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error displaying transactions for date filter for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again later.'
+      : '⚠️ An error occurred while fetching transactions. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+  }
+});
+
+bot.action(/tx_page_(\d+)_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const page = parseInt(ctx.match[1], 10);
+  const filterDescription = ctx.match[2].replace(/_/g, ' ');
+
+  try {
+    let query = db.collection('transactions')
+      .where('userId', '==', userId)
+      .orderBy('timestamp', 'desc');
+
+    if (filterDescription.includes('Completed') || filterDescription.includes('Failed') || 
+        filterDescription.includes('Pending') || filterDescription.includes('Refunded')) {
+      const status = filterDescription.split(' - ')[1].replace(' Transactions', '');
+      query = query.where('status', '==', status);
+    } else if (filterDescription.includes('USDC') || filterDescription.includes('USDT')) {
+      const asset = filterDescription.split(' - ')[1].replace(' Transactions', '');
+      query = query.where('asset', '==', asset);
+    } else if (filterDescription.match(/\w+ \d{4}/)) {
+      const [month, year] = filterDescription.split(' - ')[1].split(' ');
+      const startDate = new Date(`${month} 1, ${year}`);
+      const endDate = new Date(year, startDate.getMonth() + 1, 0, 23, 59, 59, 999);
+      query = query.where('timestamp', '>=', startDate.toISOString())
+                   .where('timestamp', '<=', endDate.toISOString());
+    }
+
+    await displayTransactions(ctx, query, page, filterDescription);
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Error navigating transaction page for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Error turn page o! Try again later.'
+      : '⚠️ An error occurred while navigating transactions. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    await ctx.answerCbQuery();
+  }
+});
+
+bot.action('tx_back', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const initialPrompt = userState.usePidgin
+    ? '💰 *Transactions o!*\n\nAbeg pick how you want see your transactions:'
+    : '💰 *Transactions*\n\nPlease choose how you’d like to view your transactions:';
+
+  const inlineKeyboard = Markup.inlineKeyboard([
+    [Markup.button.callback('📋 All Transactions', 'tx_all')],
+    [Markup.button.callback('✅ Completed', 'tx_status_Completed')],
+    [Markup.button.callback('❌ Failed', 'tx_status_Failed')],
+    [Markup.button.callback('⏳ Pending', 'tx_status_Pending')],
+    [Markup.button.callback('🔄 Refunded', 'tx_status_Refunded')],
+    [Markup.button.callback('🪙 Filter by Asset', 'tx_filter_asset')],
+    [Markup.button.callback('📅 Filter by Date', 'tx_filter_date')]
+  ]);
+
+  await ctx.editMessageText(initialPrompt, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+  await ctx.answerCbQuery();
+});
+
+// =================== Additional Handlers ===================
+bot.hears('🏦 Link Bank Account', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const userState = await getUserState(userId);
+    if (userState.wallets.length === 0) {
+      const errorMsg = userState.usePidgin
+        ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
+        : '❌ You have no wallets. Please click "💼 Generate Wallet" to start.';
+      await ctx.replyWithMarkdown(errorMsg);
+      return;
+    }
+
+    const lastWalletIndex = userState.wallets.length - 1;
+    if (userState.wallets[lastWalletIndex].bank) {
+      const errorMsg = userState.usePidgin
+        ? '⚠️ This wallet don get bank o! Pick another or generate new one.'
+        : '⚠️ This wallet is already linked to a bank! Please select another or generate a new one.';
+      await ctx.replyWithMarkdown(errorMsg);
+      return;
+    }
+
+    ctx.session.walletIndex = lastWalletIndex;
+    logger.info(`Entering bank_linking_scene for user ${userId}, walletIndex: ${ctx.session.walletIndex}`);
+    await ctx.scene.enter('bank_linking_scene');
+  } catch (error) {
+    logger.error(`Error initiating bank linking for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Wahala dey o! Try again later abeg.'
+      : '⚠️ An error occurred. Please try again later.';
+    await ctx.replyWithMarkdown(errorMsg);
+  }
+});
+
+bot.hears('⚙️ Settings', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  try {
+    const userState = await getUserState(userId);
+    const menuText = userState.usePidgin
+      ? '⚙️ *Settings Menu o!*'
+      : '⚙️ *Settings Menu*';
+    await ctx.replyWithMarkdown(menuText, getSettingsMenu());
+  } catch (error) {
+    logger.error(`Error in settings handler for user ${userId}: ${error.message}`);
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ E no work o! Try again abeg.'
+      : '⚠️ An error occurred in settings. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+  }
+});
+
+bot.action(/settings_(.+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const action = ctx.match[1];
+
+  if (!isAdmin(userId)) {
+    await ctx.reply('⚠️ Unauthorized access.');
     return ctx.answerCbQuery();
   }
 
-  const chain = selectedChainKey;
+  switch (action) {
+    case 'generate_wallet':
+      const userState = await getUserState(userId);
+      const prompt = userState.usePidgin
+        ? '💼 *Generate New Wallet o!*\n\nWallet go dey on Base sharp-sharp:'
+        : '💼 *Generate New Wallet*\n\nWallet will be generated on Base automatically:';
+      await ctx.replyWithMarkdown(prompt, Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Generate', 'generate_wallet_Base')],
+      ]));
+      break;
+
+    case 'edit_bank':
+      try {
+        const userState = await getUserState(userId);
+        if (userState.wallets.length === 0) {
+          const errorMsg = userState.usePidgin
+            ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
+            : '❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.';
+          await ctx.replyWithMarkdown(errorMsg);
+          return;
+        }
+
+        if (userState.wallets.length === 1) {
+          ctx.session.walletIndex = 0;
+          await ctx.scene.enter('bank_linking_scene');
+        } else {
+          let keyboard = userState.wallets.map((wallet, index) => [
+            Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_wallet_edit_bank_${index}`)
+          ]);
+          const prompt = userState.usePidgin
+            ? 'Pick wallet to edit bank o:'
+            : 'Please select the wallet for which you want to edit the bank details:';
+          await ctx.reply(prompt, Markup.inlineKeyboard(keyboard));
+        }
+      } catch (error) {
+        logger.error(`Error handling Edit Linked Bank Details in Settings for user ${userId}: ${error.message}`);
+        const userState = await getUserState(userId);
+        const errorMsg = userState.usePidgin
+          ? '⚠️ Error edit bank o! Try again later.'
+          : '⚠️ An error occurred while editing your bank details. Please try again later.';
+        await ctx.replyWithMarkdown(errorMsg);
+      }
+      break;
+
+    case 'support':
+      const supportMsg = userState.usePidgin
+        ? '🛠️ *Support o!*\n\nPick option below:'
+        : '🛠️ *Support Section*\n\nSelect an option below:';
+      await ctx.replyWithMarkdown(supportMsg, Markup.inlineKeyboard([
+        [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
+        [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
+        [Markup.button.callback('💬 Contact Support', 'support_contact')],
+      ]));
+      break;
+
+    case 'generate_receipt':
+      try {
+        const userState = await getUserState(userId);
+        if (userState.wallets.length === 0) {
+          const errorMsg = userState.usePidgin
+            ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
+            : '❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.';
+          await ctx.replyWithMarkdown(errorMsg);
+          return;
+        }
+
+        let keyboard = userState.wallets.map((wallet, index) => [
+          Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_receipt_wallet_${index}`)
+        ]);
+        const prompt = userState.usePidgin
+          ? 'Pick wallet for receipt o:'
+          : 'Please select the wallet for which you want to generate a transaction receipt:';
+        await ctx.reply(prompt, Markup.inlineKeyboard(keyboard));
+      } catch (error) {
+        logger.error(`Error handling Generate Transaction Receipt in Settings for user ${userId}: ${error.message}`);
+        const userState = await getUserState(userId);
+        const errorMsg = userState.usePidgin
+          ? '⚠️ Error make receipt o! Try again later.'
+          : '⚠️ An error occurred while generating the receipt. Please try again later.';
+        await ctx.replyWithMarkdown(errorMsg);
+      }
+      break;
+
+    case 'back_to_main':
+      await greetUser(ctx);
+      break;
+
+    default:
+      await ctx.answerCbQuery('⚠️ Unknown settings option selected.');
+  }
+  await ctx.answerCbQuery();
+});
+
+bot.action(/select_wallet_edit_bank_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = parseInt(ctx.match[1], 10);
+
+  if (isNaN(walletIndex)) {
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Bad wallet pick o! Try again.'
+      : '⚠️ Invalid wallet selection. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    return ctx.answerCbQuery();
+  }
+
+  ctx.session.walletIndex = walletIndex;
+  await ctx.scene.enter('bank_linking_scene');
+  ctx.answerCbQuery();
+});
+
+bot.action(/select_receipt_wallet_(\d+)/, async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const walletIndex = parseInt(ctx.match[1], 10);
+
+  if (isNaN(walletIndex)) {
+    const userState = await getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '⚠️ Bad wallet pick o! Try again.'
+      : '⚠️ Invalid wallet selection. Please try again.';
+    await ctx.replyWithMarkdown(errorMsg);
+    return ctx.answerCbQuery();
+  }
+
+  ctx.session.walletIndex = walletIndex;
+  await ctx.scene.enter('receipt_generation_scene');
+  ctx.answerCbQuery();
+});
+
+bot.action('generate_wallet_Base', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const chain = 'Base';
 
   await ctx.answerCbQuery();
 
   const generatingMessage = await ctx.replyWithMarkdown(`🔄 Generating Wallet for *${chain}*... Please wait a moment.`);
 
   try {
-    const walletAddress = await generateWallet(chain);
-
     const userState = await getUserState(userId);
     if (userState.wallets.length >= MAX_WALLETS) {
       await ctx.replyWithMarkdown(`⚠️ You cannot generate more than ${MAX_WALLETS} wallets.`);
       await ctx.deleteMessage(generatingMessage.message_id);
       return;
     }
+
+    const walletAddress = await generateWallet(chain);
 
     userState.wallets.push({
       address: walletAddress,
@@ -908,13 +1571,15 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
 
     const successMsg = userState.usePidgin
       ? `✅ *Wallet Don Land!*\n\n` +
-        `*Networks:* Base, BNB Smart Chain, Polygon\n` +
-        `*Assets:* USDC, USDT\n\n` +
-        `Abeg link your bank account to start using am! Click "🏦 Link Bank Account" to proceed. We go show you the wallet address after you link your bank.`
+        `*Networks:* Base, BNB Smart Chain, Polygon (EVM Compatible)\n` +
+        `*Assets:* USDC, USDT\n` +
+        `*Address:* \`${walletAddress}\`\n\n` +
+        `Abeg link your bank account to start using am! Click "🏦 Link Bank Account" to proceed.`
       : `✅ *Wallet Generated Successfully!*\n\n` +
-        `*Networks:* Base, BNB Smart Chain, Polygon\n` +
-        `*Assets:* USDC, USDT\n\n` +
-        `Please link your bank account to start using it! Click "🏦 Link Bank Account" to proceed. We’ll show you the wallet address once your bank is linked.`;
+        `*Networks:* Base, BNB Smart Chain, Polygon (EVM Compatible)\n` +
+        `*Assets:* USDC, USDT\n` +
+        `*Address:* \`${walletAddress}\`\n\n` +
+        `Please link your bank account to start using it! Click "🏦 Link Bank Account" to proceed.`;
     await ctx.replyWithMarkdown(successMsg, { reply_markup: getMainMenu(true, false) });
   } catch (error) {
     logger.error(`Error generating wallet for user ${userId} on ${chain}: ${error.message}`);
@@ -927,232 +1592,7 @@ bot.action(/generate_wallet_(.+)/, async (ctx) => {
   }
 });
 
-// =================== View Wallet Handler ===================
-bot.hears('💼 View Wallet', async (ctx, next) => {
-  const userId = ctx.from.id.toString();
-  const ip = ctx.requestIp || 'Unknown'; // Get client IP using requestIp
-  let suggestPidgin = false;
-
-  // Simple IP-based check for Nigeria (e.g., common Nigerian IP ranges)
-  if (ip.startsWith('41.') || ip.startsWith('197.') || ip.startsWith('105.')) {
-    suggestPidgin = true;
-  }
-
-  try {
-    const userState = await getUserState(userId);
-    
-    if (userState.wallets.length === 0) {
-      const errorMsg = userState.usePidgin
-        ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
-        : '❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.';
-      await ctx.replyWithMarkdown(errorMsg);
-      if (suggestPidgin && !userState.usePidgin) {
-        await ctx.replyWithMarkdown('👋 Looks like you might be in Nigeria! Try switching to Pidgin by typing "Pidgin" for a local vibe.');
-      }
-      return;
-    }
-
-    const pageSize = 5;
-    const totalPages = Math.ceil(userState.wallets.length / pageSize);
-    ctx.session.walletsPage = ctx.session.walletsPage || 1;
-
-    const generateWalletPage = (page) => {
-      const start = (page - 1) * pageSize;
-      const end = start + pageSize;
-      const wallets = userState.wallets.slice(start, end);
-
-      let message = userState.usePidgin
-        ? `💼 *Your Wallets o!* (Page ${page}/${totalPages})\n\n`
-        : `💼 *Your Wallets* (Page ${page}/${totalPages}):\n\n`;
-      wallets.forEach((wallet, index) => {
-        const walletNumber = start + index + 1;
-        message += userState.usePidgin
-          ? `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n• *Chain:* ${wallet.chain}\n• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n`
-          : `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n• *Chain:* ${wallet.chain}\n• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n`;
-      });
-
-      const navigationButtons = [];
-      if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `wallet_page_${page - 1}`));
-      if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${page + 1}`));
-      navigationButtons.push(Markup.button.callback('🔄 Refresh', `wallet_page_${page}`));
-
-      return { message, inlineKeyboard: Markup.inlineKeyboard([navigationButtons]) };
-    };
-
-    const { message, inlineKeyboard } = generateWalletPage(ctx.session.walletsPage);
-    await ctx.replyWithMarkdown(message, inlineKeyboard);
-    if (suggestPidgin && !userState.usePidgin) {
-      await ctx.replyWithMarkdown('👋 Looks like you might be in Nigeria! Try switching to Pidgin by typing "Pidgin" for a local vibe.');
-    }
-  } catch (error) {
-    logger.error(`Error handling View Wallet for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again later abeg.'
-      : '⚠️ An error occurred while fetching your wallets. Please try again later.';
-    await ctx.replyWithMarkdown(errorMsg);
-  }
-});
-
-bot.action(/wallet_page_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const requestedPage = parseInt(ctx.match[1], 10);
-
-  try {
-    const userState = await getUserState(userId);
-    const pageSize = 5;
-    const totalPages = Math.ceil(userState.wallets.length / pageSize);
-
-    if (requestedPage < 1 || requestedPage > totalPages) {
-      await ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true }');
-      return;
-    }
-
-    ctx.session.walletsPage = requestedPage;
-
-    const start = (requestedPage - 1) * pageSize;
-    const end = start + pageSize;
-    const wallets = userState.wallets.slice(start, end);
-
-    let message = userState.usePidgin
-      ? `💼 *Your Wallets o!* (Page ${requestedPage}/${totalPages})\n\n`
-      : `💼 *Your Wallets* (Page ${requestedPage}/${totalPages}):\n\n`;
-    wallets.forEach((wallet, index) => {
-      const walletNumber = start + index + 1;
-      message += userState.usePidgin
-        ? `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n• *Chain:* ${wallet.chain}\n• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n`
-        : `*Wallet ${walletNumber} (${wallet.name || 'Unnamed'}):*\n• *Chain:* ${wallet.chain}\n• *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n`;
-    });
-
-    const navigationButtons = [];
-    if (requestedPage > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `wallet_page_${requestedPage - 1}`));
-    if (requestedPage < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${requestedPage + 1}`));
-    navigationButtons.push(Markup.button.callback('🔄 Refresh', `wallet_page_${requestedPage}`));
-
-    const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error navigating wallet pages for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Error turn page o! Try again later.'
-      : '⚠️ An error occurred while navigating wallets. Please try again later.';
-    await ctx.replyWithMarkdown(errorMsg);
-    ctx.answerCbQuery();
-  }
-});
-
-bot.action(/view_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  try {
-    const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      const errorMsg = userState.usePidgin
-        ? '❌ Wallet no dey o! Pick correct one abeg.'
-        : '❌ Invalid wallet selection. Please choose a valid wallet.';
-      await ctx.replyWithMarkdown(errorMsg);
-      await ctx.answerCbQuery();
-      return;
-    }
-
-    const wallet = userState.wallets[walletIndex];
-    const transactionsSnapshot = await db.collection('transactions')
-      .where('walletAddress', '==', wallet.address)
-      .orderBy('timestamp', 'desc')
-      .limit(10)
-      .get();
-
-    let transactionDetails = '';
-    let totalDeposits = 0;
-    let totalPayouts = 0;
-    transactionsSnapshot.forEach((doc) => {
-      const tx = doc.data();
-      totalDeposits += tx.amount || 0;
-      totalPayouts += parseFloat(tx.payout || 0);
-      transactionDetails += userState.usePidgin
-        ? `*Ref ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`
-        : `*Reference ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-    });
-
-    const message = userState.usePidgin
-      ? `🌟 *${wallet.name || `Wallet #${walletIndex + 1}`}*\n\n` +
-        `🔹 *Address:* \`${wallet.address}\`\n` +
-        `🔹 *Network:* ${wallet.chain}\n` +
-        `🔹 *Assets:* USDC, USDT\n` +
-        `🔹 *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n` +
-        (wallet.bank ? `🔹 *Bank Details:*\n   - 🏦 *Bank:* ${wallet.bank.bankName}\n   - 💳 *Account:* ****${wallet.bank.accountNumber.slice(-4)}\n   - 👤 *Holder:* ${wallet.bank.accountName}\n` : '') +
-        `🔹 *Creation Date:* ${new Date(wallet.creationDate).toLocaleString()}\n` +
-        `🔹 *Total Deposits:* ${totalDeposits.toFixed(2)} USDC/USDT\n` +
-        `🔹 *Total Payouts:* ₦${totalPayouts.toFixed(2)}\n` +
-        (transactionDetails ? `🔹 *Recent Transactions:*\n${transactionDetails}` : '🔹 *No transactions yet.*\n') +
-        `🔧 *Actions:*`
-      : `🌟 *${wallet.name || `Wallet #${walletIndex + 1}`}*\n\n` +
-        `🔹 *Address:* \`${wallet.address}\`\n` +
-        `🔹 *Network:* ${wallet.chain}\n` +
-        `🔹 *Supported Assets:* USDC, USDT\n` +
-        `🔹 *Bank Linked:* ${wallet.bank ? '✅ Yes' : '❌ No'}\n` +
-        (wallet.bank ? `🔹 *Bank Details:*\n   - 🏦 *Bank:* ${wallet.bank.bankName}\n   - 💳 *Account:* ****${wallet.bank.accountNumber.slice(-4)}\n   - 👤 *Holder:* ${wallet.bank.accountName}\n` : '') +
-        `🔹 *Creation Date:* ${new Date(wallet.creationDate).toLocaleString()}\n` +
-        `🔹 *Total Deposits:* ${totalDeposits.toFixed(2)} USDC/USDT\n` +
-        `🔹 *Total Payouts:* ₦${totalPayouts.toFixed(2)}\n` +
-        (transactionDetails ? `🔹 *Recent Transactions:*\n${transactionDetails}` : '🔹 *No transactions yet.*\n') +
-        `🔧 *Actions:*`;
-
-    const inlineKeyboard = Markup.inlineKeyboard([
-      [Markup.button.callback('✏️ Rename', `rename_wallet_${walletIndex}`)],
-      [Markup.button.callback('🏦 Edit Bank', `edit_bank_${walletIndex}`)],
-      [Markup.button.callback('🗑️ Delete', `delete_wallet_${walletIndex}`)]
-    ]);
-
-    await ctx.replyWithMarkdown(message, inlineKeyboard);
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in view_wallet for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again later abeg.'
-      : '⚠️ An error occurred. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-    await ctx.answerCbQuery();
-  }
-});
-
-bot.action(/rename_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  try {
-    const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      const errorMsg = userState.usePidgin
-        ? '❌ Wallet no dey o! Pick correct one abeg.'
-        : '❌ Invalid wallet selection. Please choose a valid wallet.';
-      await ctx.replyWithMarkdown(errorMsg);
-      await ctx.answerCbQuery();
-      return;
-    }
-
-    const prompt = userState.usePidgin
-      ? `Abeg enter new name for this wallet (e.g., "My Main Wallet"):`
-      : `Please enter a new name for this wallet (e.g., "My Main Wallet"):`;
-    await ctx.replyWithMarkdown(prompt);
-    ctx.session.awaitingRename = walletIndex;
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in rename_wallet for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again abeg.'
-      : '⚠️ An error occurred. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-    await ctx.answerCbQuery();
-  }
-});
-
+// =================== Text Input Handler ===================
 bot.on('text', async (ctx) => {
   const userId = ctx.from.id.toString();
   let userState;
@@ -1272,812 +1712,6 @@ bot.on('text', async (ctx) => {
   }
 });
 
-bot.action(/edit_bank_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  try {
-    const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      const errorMsg = userState.usePidgin
-        ? '❌ Wallet no dey o! Pick correct one abeg.'
-        : '❌ Invalid wallet selection. Please choose a valid wallet.';
-      await ctx.replyWithMarkdown(errorMsg);
-      await ctx.answerCbQuery();
-      return;
-    }
-
-    ctx.session.walletIndex = walletIndex;
-    logger.info(`Entering bank_linking_scene for editing bank, user ${userId}, walletIndex: ${walletIndex}`);
-    await ctx.scene.enter('bank_linking_scene');
-    logger.info(`Successfully entered bank_linking_scene for editing, user ${userId}`);
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error in edit_bank for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again abeg.'
-      : '⚠️ An error occurred. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-    await ctx.answerCbQuery();
-  }
-});
-
-bot.action(/delete_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  try {
-    const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      const errorMsg = userState.usePidgin
-        ? '❌ Wallet no dey o! Pick correct one abeg.'
-        : '❌ Invalid wallet selection. Please choose a valid wallet.';
-      await ctx.replyWithMarkdown(errorMsg);
-      await ctx.answerCbQuery();
-      return;
-    }
-
-    const wallet = userState.wallets[walletIndex];
-    userState.wallets.splice(walletIndex, 1);
-    userState.walletAddresses = userState.wallets.map(w => w.address);
-    await updateUserState(userId, { wallets: userState.wallets, walletAddresses: userState.walletAddresses });
-
-    const successMsg = userState.usePidgin
-      ? `🗑️ Wallet "${wallet.name || `Wallet #${walletIndex + 1}`}" don delete o!`
-      : `🗑️ Wallet "${wallet.name || `Wallet #${walletIndex + 1}`}" has been deleted successfully!`;
-    await ctx.replyWithMarkdown(successMsg);
-    await ctx.answerCbQuery();
-
-    if (userState.wallets.length === 0) {
-      const mainMenu = getMainMenu(false, false);
-      const menuText = userState.usePidgin
-        ? 'No wallets remain o! Here’s your main menu:'
-        : 'No wallets remaining! Here’s your main menu:';
-      await ctx.replyWithMarkdown(menuText, { reply_markup: mainMenu.reply_markup });
-    } else {
-      await bot.hears('💼 View Wallet')(ctx);
-    }
-  } catch (error) {
-    logger.error(`Error in delete_wallet for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again abeg.'
-      : '⚠️ An error occurred while deleting the wallet. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-    await ctx.answerCbQuery();
-  }
-});
-
-bot.hears('🏦 Link Bank Account', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    if (userState.wallets.length === 0) {
-      const errorMsg = userState.usePidgin
-        ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
-        : '❌ You have no wallets. Please click "💼 Generate Wallet" to start.';
-      await ctx.replyWithMarkdown(errorMsg);
-      return;
-    }
-
-    const lastWalletIndex = userState.wallets.length - 1;
-    if (userState.wallets[lastWalletIndex].bank) {
-      const errorMsg = userState.usePidgin
-        ? '⚠️ This wallet don get bank o! Pick another or generate new one.'
-        : '⚠️ This wallet is already linked to a bank! Please select another or generate a new one.';
-      await ctx.replyWithMarkdown(errorMsg);
-      return;
-    }
-
-    ctx.session.walletIndex = lastWalletIndex;
-    logger.info(`Entering bank_linking_scene for user ${userId}, walletIndex: ${ctx.session.walletIndex}`);
-    await ctx.scene.enter('bank_linking_scene');
-  } catch (error) {
-    logger.error(`Error initiating bank linking for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Wahala dey o! Try again later abeg.'
-      : '⚠️ An error occurred. Please try again later.';
-    await ctx.replyWithMarkdown(errorMsg);
-  }
-});
-
-bot.hears('⚙️ Settings', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    const menuText = userState.usePidgin
-      ? '⚙️ *Settings Menu o!*'
-      : '⚙️ *Settings Menu*';
-    await ctx.replyWithMarkdown(menuText, getSettingsMenu());
-  } catch (error) {
-    logger.error(`Error in settings handler for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again abeg.'
-      : '⚠️ An error occurred in settings. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-  }
-});
-
-bot.action(/settings_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const action = ctx.match[1];
-
-  if (!isAdmin(userId)) {
-    await ctx.reply('⚠️ Unauthorized access.');
-    return ctx.answerCbQuery();
-  }
-
-  switch (action) {
-    case 'generate_wallet':
-      const userState = await getUserState(userId);
-      const prompt = userState.usePidgin
-        ? '💼 *Generate New Wallet o!*\n\nPick network for your new wallet, my friend:'
-        : '💼 *Generate New Wallet*\n\nSelect the network for which you want to generate a new wallet:';
-      await ctx.replyWithMarkdown(prompt, Markup.inlineKeyboard([
-        [Markup.button.callback('Base', 'generate_wallet_Base')],
-        [Markup.button.callback('Polygon', 'generate_wallet_Polygon')],
-        [Markup.button.callback('BNB Smart Chain', 'generate_wallet_BNB Smart Chain')],
-      ]));
-      break;
-
-    case 'edit_bank':
-      try {
-        const userState = await getUserState(userId);
-        if (userState.wallets.length === 0) {
-          const errorMsg = userState.usePidgin
-            ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
-            : '❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.';
-          await ctx.replyWithMarkdown(errorMsg);
-          return;
-        }
-
-        if (userState.wallets.length === 1) {
-          ctx.session.walletIndex = 0;
-          await ctx.scene.enter('bank_linking_scene');
-        } else {
-          let keyboard = userState.wallets.map((wallet, index) => [
-            Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_wallet_edit_bank_${index}`)
-          ]);
-          const prompt = userState.usePidgin
-            ? 'Pick wallet to edit bank o:'
-            : 'Please select the wallet for which you want to edit the bank details:';
-          await ctx.reply(prompt, Markup.inlineKeyboard(keyboard));
-        }
-      } catch (error) {
-        logger.error(`Error handling Edit Linked Bank Details in Settings for user ${userId}: ${error.message}`);
-        const userState = await getUserState(userId);
-        const errorMsg = userState.usePidgin
-          ? '⚠️ Error edit bank o! Try again later.'
-          : '⚠️ An error occurred while editing your bank details. Please try again later.';
-        await ctx.replyWithMarkdown(errorMsg);
-      }
-      break;
-
-    case 'support':
-      const supportMsg = userState.usePidgin
-        ? '🛠️ *Support o!*\n\nPick option below:'
-        : '🛠️ *Support Section*\n\nSelect an option below:';
-      await ctx.replyWithMarkdown(supportMsg, Markup.inlineKeyboard([
-        [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
-        [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-        [Markup.button.callback('💬 Contact Support', 'support_contact')],
-      ]));
-      break;
-
-    case 'generate_receipt':
-      try {
-        const userState = await getUserState(userId);
-        if (userState.wallets.length === 0) {
-          const errorMsg = userState.usePidgin
-            ? '❌ You no get wallet o! Click "💼 Generate Wallet" to start.'
-            : '❌ You have no wallets. Please generate a wallet first using the "💼 Generate Wallet" option.';
-          await ctx.replyWithMarkdown(errorMsg);
-          return;
-        }
-
-        let keyboard = userState.wallets.map((wallet, index) => [
-          Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_receipt_wallet_${index}`)
-        ]);
-        const prompt = userState.usePidgin
-          ? 'Pick wallet for receipt o:'
-          : 'Please select the wallet for which you want to generate a transaction receipt:';
-        await ctx.reply(prompt, Markup.inlineKeyboard(keyboard));
-      } catch (error) {
-        logger.error(`Error handling Generate Transaction Receipt in Settings for user ${userId}: ${error.message}`);
-        const userState = await getUserState(userId);
-        const errorMsg = userState.usePidgin
-          ? '⚠️ Error make receipt o! Try again later.'
-          : '⚠️ An error occurred while generating the receipt. Please try again later.';
-        await ctx.replyWithMarkdown(errorMsg);
-      }
-      break;
-
-    case 'back_to_main':
-      await greetUser(ctx);
-      break;
-
-    default:
-      await ctx.answerCbQuery('⚠️ Unknown settings option selected.');
-  }
-    await ctx.answerCbQuery();
-});
-
-bot.action(/select_wallet_edit_bank_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  if (isNaN(walletIndex)) {
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Bad wallet pick o! Try again.'
-      : '⚠️ Invalid wallet selection. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-    return ctx.answerCbQuery();
-  }
-
-  ctx.session.walletIndex = walletIndex;
-  await ctx.scene.enter('bank_linking_scene');
-  ctx.answerCbQuery();
-});
-
-bot.action(/select_receipt_wallet_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-
-  if (isNaN(walletIndex)) {
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Bad wallet pick o! Try again.'
-      : '⚠️ Invalid wallet selection. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-    return ctx.answerCbQuery();
-  }
-
-  ctx.session.walletIndex = walletIndex;
-  await ctx.scene.enter('receipt_generation_scene');
-  ctx.answerCbQuery();
-});
-
-bot.hears(/ℹ️\s*Support/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    const supportMsg = userState.usePidgin
-      ? '🛠️ *Support o!*\n\nPick option below:'
-      : '🛠️ *Support Section*\n\nSelect an option below:';
-    await ctx.replyWithMarkdown(supportMsg, Markup.inlineKeyboard([
-      [Markup.button.callback('❓ How It Works', 'support_how_it_works')],
-      [Markup.button.callback('⚠️ Transaction Not Received', 'support_not_received')],
-      [Markup.button.callback('💬 Contact Support', 'support_contact')],
-    ]));
-  } catch (error) {
-    logger.error(`Error in support handler for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again abeg.'
-      : '⚠️ An error occurred. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-  }
-});
-
-const detailedTutorials = {
-  how_it_works: userState.usePidgin
-    ? `**📘 How DirectPay Work o!**\n\n1. *Make Wallet:* Click "💼 Generate Wallet", pick network, get your address.\n2. *Link Bank:* After wallet, give us your bank details for fast cash.\n3. *Get Money:* Share wallet address, we turn crypto to NGN quick-quick.\n4. *Check Transactions:* Use "💰 Transactions" to see all.\n5. *Help:* Ask us anytime with "ℹ️ Support".\n\n🔒 *Safe o!* We use top security for your money and info.\n💬 *Need Help?* Talk to [@maxcswap](https://t.me/maxcswap).`
-    : `**📘 How DirectPay Works**\n\n1. **Generate Your Wallet:**\n   - Navigate to the "💼 Generate Wallet" option.\n   - Select your preferred network (Base, Polygon, BNB Smart Chain).\n   - Receive a unique wallet address where you can receive crypto payments.\n2. **Link Your Bank Account:**\n   - After generating your wallet, provide your bank details to securely receive payouts directly into your bank account.\n3. **Receive Payments:**\n   - Share your wallet address with clients or payment sources.\n   - Once a deposit is made, DirectPay will automatically convert the crypto to NGN at current exchange rates.\n4. **Monitor Transactions:**\n   - Use the "💰 Transactions" option to view all your deposit and payout activities.\n5. **Support & Assistance:**\n   - Access detailed support tutorials anytime from the "ℹ️ Support" section.\n\n**🔒 Security:**\nYour funds are secure with us. We utilize industry-standard encryption and security protocols to ensure your assets and information remain safe.\n\n**💬 Need Help?**\nVisit the support section or contact our support team at [@maxcswap](https://t.me/maxcswap) for any assistance.`,
-  transaction_guide: userState.usePidgin
-    ? `**💰 Transaction No Come?**\n\nIf your money no show, do this:\n1. *Check Address:* Make sure sender use correct wallet address.\n2. *Check Bank:* Confirm your bank dey linked. If no, go "⚙️ Settings" > "🏦 Link Bank Account".\n3. *See Status:* Use "💰 Transactions" to check if e dey process.\n4. *Wait Small:* E fit take time if network dey jam.\n5. *Talk to Us:* If still no work, contact [@maxcswap](https://t.me/maxcswap) with your details.\n`
-    : `**💰 Transaction Not Received?**\n\nIf you haven't received your transaction, follow these steps to troubleshoot:\n1. **Verify Wallet Address:**\n   - Ensure that the sender used the correct wallet address provided by DirectPay.\n2. **Check Bank Linking:**\n   - Make sure your bank account is correctly linked.\n   - If not linked, go to "⚙️ Settings" > "🏦 Link Bank Account" to add your bank details.\n3. **Monitor Transaction Status:**\n   - Use the "💰 Transactions" section to check the status of your deposit.\n   - Pending status indicates that the deposit is being processed.\n4. **Wait for Confirmation:**\n   - Deposits might take a few minutes to reflect depending on the network congestion.\n5. **Contact Support:**\n   - If the issue persists after following the above steps, reach out to our support team at [@maxcswap](https://t.me/maxcswap) with your transaction details for further assistance.`,
-  link_bank_tutorial: userState.usePidgin
-    ? `**🏦 How to Edit Bank o!**\n*Edit Your Bank Account:*\n1. *Go to Edit:* Click "⚙️ Settings" > "✏️ Edit Linked Bank Details".\n2. *Pick Wallet:* Choose wallet to change bank.\n3. *Give New Details:* Enter new bank name or account number.\n4. *Confirm:* Check new account holder name.\n5. *Finish:* Your bank don update sharp-sharp!`
-    : `**🏦 How to Edit Your Bank Account**\n*Editing an Existing Bank Account:*\n1. **Navigate to Bank Editing:**\n   - Click on "⚙️ Settings" > "✏️ Edit Linked Bank Details" from the main menu.\n2. **Select the Wallet:**\n   - Choose the wallet whose bank account you wish to edit.\n3. **Provide New Bank Details:**\n   - Enter the updated bank name or account number as required.\n4. **Verify Changes:**\n   - Confirm the updated account holder name.\n5. **Completion:**\n   - Your bank account details have been updated successfully.`,
-};
-
-bot.hears(/📘\s*Learn About Base/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    await sendBaseContent(ctx, 0, true);
-  } catch (error) {
-    logger.error(`Error in learn about base handler for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ E no work o! Try again abeg.'
-      : '⚠️ An error occurred. Please try again.';
-    await ctx.replyWithMarkdown(errorMsg);
-  }
-});
-
-const baseContent = [
-  {
-    title: 'Welcome to Base',
-    text: userState.usePidgin
-      ? 'Base na secure, cheap Ethereum Layer 2 wey make apps easy to use o!'
-      : 'Base is a secure, low-cost, and developer-friendly Ethereum Layer 2 network. It offers a seamless way to onboard into the world of decentralized applications.',
-  },
-  {
-    title: 'Why Choose Base?',
-    text: userState.usePidgin
-      ? '- *Low Fees:* Less cost for transactions.\n- *Fast:* Quick confirmations.\n- *Safe:* Built on Ethereum security.\n- *Easy for Devs:* Work with EVM tools.'
-      : '- **Lower Fees**: Significantly reduced transaction costs.\n- **Faster Transactions**: Swift confirmation times.\n- **Secure**: Built on Ethereum’s robust security.\n- **Developer-Friendly**: Compatible with EVM tools and infrastructure.',
-  },
-  {
-    title: 'Getting Started',
-    text: userState.usePidgin
-      ? 'To start, bridge your money from Ethereum to Base with [Bridge Assets to Base](https://base.org/bridge).'
-      : 'To start using Base, you can bridge your assets from Ethereum to Base using the official bridge at [Bridge Assets to Base](https://base.org/bridge).',
-  },
-  {
-    title: 'Learn More',
-    text: userState.usePidgin
-      ? 'Check [Base Docs](https://docs.base.org) for more gist!'
-      : 'Visit the official documentation at [Base Documentation](https://docs.base.org) for in-depth guides and resources.',
-  },
-];
-
-async function sendBaseContent(ctx, index, isNew = true) {
-  const userState = await getUserState(ctx.from.id.toString());
-  const content = baseContent[index];
-  const totalPages = baseContent.length;
-
-  const navigationButtons = [];
-  if (index > 0) navigationButtons.push(Markup.button.callback('⬅️ Back', `base_page_${index - 1}`));
-  if (index < totalPages - 1) navigationButtons.push(Markup.button.callback('Next ➡️', `base_page_${index + 1}`));
-  navigationButtons.push(Markup.button.callback('🔚 Exit', 'exit_base'));
-
-  const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
-
-  if (isNew) {
-    const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-    ctx.session.baseMessageId = sentMessage.message_id;
-  } else {
-    try {
-      await ctx.editMessageText(`**${content.title}**\n\n${content.text}`, {
-        parse_mode: 'Markdown',
-        reply_markup: inlineKeyboard.reply_markup,
-      });
-    } catch (error) {
-      const sentMessage = await ctx.replyWithMarkdown(`**${content.title}**\n\n${content.text}`, inlineKeyboard);
-      ctx.session.baseMessageId = sentMessage.message_id;
-    }
-  }
-}
-
-bot.action(/base_page_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1], 10);
-  if (isNaN(index) || index < 0 || index >= baseContent.length) {
-    await ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true }');
-    return;
-  }
-  await sendBaseContent(ctx, index, false);
-  await ctx.answerCbQuery();
-});
-
-bot.action('exit_base', async (ctx) => {
-  if (ctx.session.baseMessageId) {
-    await ctx.deleteMessage(ctx.session.baseMessageId).catch(() => {});
-    ctx.session.baseMessageId = null;
-  }
-  const userState = await getUserState(ctx.from.id.toString());
-  const msg = userState.usePidgin
-    ? 'Thank you for learn about Base o!'
-    : 'Thank you for learning about Base!';
-  await ctx.replyWithMarkdown(msg);
-  await ctx.answerCbQuery();
-});
-
-bot.action('support_how_it_works', async (ctx) => {
-  const userState = await getUserState(ctx.from.id.toString());
-  await ctx.replyWithMarkdown(detailedTutorials.how_it_works);
-  await ctx.answerCbQuery();
-});
-
-bot.action('support_not_received', async (ctx) => {
-  const userState = await getUserState(ctx.from.id.toString());
-  await ctx.replyWithMarkdown(detailedTutorials.transaction_guide);
-  await ctx.answerCbQuery();
-});
-
-bot.action('support_contact', async (ctx) => {
-  const userState = await getUserState(ctx.from.id.toString());
-  const msg = userState.usePidgin
-    ? 'You fit contact support at [@maxcswap](https://t.me/maxcswap) o!'
-    : 'You can contact our support team at [@maxcswap](https://t.me/maxcswap).';
-  await ctx.replyWithMarkdown(msg);
-  await ctx.answerCbQuery();
-});
-
-bot.hears(/💰\s*Transactions/i, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  try {
-    const userState = await getUserState(userId);
-    const pageSize = 5;
-    ctx.session.transactionsPage = ctx.session.transactionsPage || 1;
-
-    const generateTransactionPage = async (page, walletFilter = null) => {
-      let transactionsSnapshot;
-      if (walletFilter) {
-        transactionsSnapshot = await db.collection('transactions')
-          .where('walletAddress', '==', walletFilter)
-          .orderBy('timestamp', 'desc')
-          .limit(pageSize)
-          .offset((page - 1) * pageSize)
-          .get();
-      } else {
-        transactionsSnapshot = await db.collection('transactions')
-          .orderBy('timestamp', 'desc')
-          .limit(pageSize)
-          .offset((page - 1) * pageSize)
-          .get();
-      }
-      const totalDocs = await db.collection('transactions').count().get();
-      const totalPages = Math.ceil(totalDocs.data().count / pageSize);
-
-      let message = userState.usePidgin
-        ? `💰 *Your Transactions o!* (Page ${page}/${totalPages})${walletFilter ? ' - Filtered by Wallet' : ''}\n\n`
-        : `💰 *Your Transactions* (Page ${page}/${totalPages})${walletFilter ? ' - Filtered by Wallet' : ''}:\n\n`;
-      transactionsSnapshot.forEach((doc) => {
-        const tx = doc.data();
-        message += userState.usePidgin
-          ? `*Ref ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`
-          : `*Reference ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-      });
-
-      const navigationButtons = [];
-      if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `transaction_page_${page - 1}${walletFilter ? `_${walletFilter}` : ''}`));
-      if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `transaction_page_${page + 1}${walletFilter ? `_${walletFilter}` : ''}`));
-      navigationButtons.push(Markup.button.callback('🔄 Refresh', `transaction_page_${page}${walletFilter ? `_${walletFilter}` : ''}`));
-      if (userState.wallets.length > 1) {
-        const filterButtons = userState.wallets.map((w, idx) => Markup.button.callback(`Filter ${w.chain}`, `filter_transactions_${idx}`));
-        navigationButtons.push(...filterButtons);
-      }
-      navigationButtons.push(Markup.button.callback('📤 Export Report', `export_transactions_${page}${walletFilter ? `_${walletFilter}` : ''}`));
-
-      return { message, inlineKeyboard: Markup.inlineKeyboard([navigationButtons]) };
-    };
-
-    const { message, inlineKeyboard } = await generateTransactionPage(ctx.session.transactionsPage);
-    await ctx.replyWithMarkdown(message, inlineKeyboard);
-  } catch (error) {
-    logger.error(`Error fetching transactions for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Unable to fetch transactions o! Try again later.'
-      : '⚠️ Unable to fetch transactions. Please try again later.';
-    await ctx.replyWithMarkdown(errorMsg);
-  }
-});
-
-bot.action(/transaction_page_(\d+)(?:_(.+))?/ , async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const requestedPage = parseInt(ctx.match[1], 10);
-  const walletAddress = ctx.match[2];
-
-  try {
-    const userState = await getUserState(userId);
-    const pageSize = 5;
-    const totalDocs = await db.collection('transactions').count().get();
-    const totalPages = Math.ceil(totalDocs.data().count / pageSize);
-
-    if (requestedPage < 1 || requestedPage > totalPages) {
-      await ctx.answerCbQuery('⚠️ Invalid page number.', { show_alert: true }');
-      return;
-    }
-
-    ctx.session.transactionsPage = requestedPage;
-
-    const { message, inlineKeyboard } = await generateTransactionPage(requestedPage, walletAddress);
-    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error navigating transaction pages for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Error turn page o! Try again later.'
-      : '⚠️ An error occurred while navigating transactions. Please try again later.';
-    await ctx.replyWithMarkdown(errorMsg);
-    await ctx.answerCbQuery();
-  }
-});
-
-bot.action(/filter_transactions_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-  try {
-    const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      const errorMsg = userState.usePidgin
-        ? '⚠️ Bad wallet pick o! Try again.'
-        : '⚠️ Invalid wallet selection. Please try again.';
-      await ctx.replyWithMarkdown(errorMsg);
-      return ctx.answerCbQuery();
-    }
-
-    ctx.session.transactionsPage = 1;
-    const walletAddress = userState.wallets[walletIndex].address;
-    const { message, inlineKeyboard } = await generateTransactionPage(1, walletAddress);
-    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-    await ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error filtering transactions for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Error filter transactions o! Try again later.'
-      : '⚠️ An error occurred while filtering transactions. Please try again later.';
-    await ctx.replyWithMarkdown(errorMsg);
-    await ctx.answerCbQuery();
-  }
-});
-
-bot.action(/export_receipt_(\d+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const walletIndex = parseInt(ctx.match[1], 10);
-  try {
-    const userState = await getUserState(userId);
-    if (walletIndex < 0 || walletIndex >= userState.wallets.length) {
-      const errorMsg = userState.usePidgin
-        ? '⚠️ Bad wallet pick o! Try again.'
-        : '⚠️ Invalid wallet selection. Please try again.';
-      await ctx.replyWithMarkdown(errorMsg);
-      return ctx.answerCbQuery();
-    }
-
-    const wallet = userState.wallets[walletIndex];
-    const transactionsSnapshot = await db.collection('transactions')
-      .where('walletAddress', '==', wallet.address)
-      .orderBy('timestamp', 'desc')
-      .get();
-
-    let receiptContent = userState.usePidgin
-      ? `🧾 *Receipt for ${wallet.name || `Wallet #${walletIndex + 1}`} - ${wallet.chain}*\n`
-      : `🧾 *Transaction Receipt for ${wallet.name || `Wallet #${walletIndex + 1}`} - ${wallet.chain}*\n`;
-    transactionsSnapshot.forEach((doc) => {
-      const tx = doc.data();
-      receiptContent += userState.usePidgin
-        ? `*Ref ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`
-        : `*Reference ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-    });
-
-    await bot.telegram.sendMessage(userId, `📤 *Exported Receipt:*\n\n${receiptContent}`, { parse_mode: 'Markdown' });
-    const successMsg = userState.usePidgin
-      ? '✅ Receipt don export o!'
-      : '✅ Receipt exported successfully!';
-    await ctx.answerCbQuery(successMsg);
-  } catch (error) {
-    logger.error(`Error exporting receipt for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Error export receipt o! Try again later.'
-      : '⚠️ An error occurred while exporting the receipt. Please try again later.';
-    await ctx.answerCbQuery(errorMsg, { show_alert: true });
-  }
-});
-
-bot.action(/export_transactions_(\d+)(?:_(.+))?/ , async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const page = parseInt(ctx.match[1], 10);
-  const walletAddress = ctx.match[2];
-  try {
-    const userState = await getUserState(userId);
-    const transactionsSnapshot = await db.collection('transactions')
-      .where('walletAddress', '==', walletAddress || '')
-      .orderBy('timestamp', 'desc')
-      .offset((page - 1) * 5)
-      .limit(5)
-      .get();
-
-    let reportContent = userState.usePidgin
-      ? `📊 *Transaction Report o!* (Page ${page})\n`
-      : `📊 *Transaction Report* (Page ${page})\n`;
-    transactionsSnapshot.forEach((doc) => {
-      const tx = doc.data();
-      reportContent += userState.usePidgin
-        ? `*Ref ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`
-        : `*Reference ID:* \`${tx.referenceId || 'N/A'}\` | *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'} | *Status:* ${tx.status || 'Pending'} | *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-    });
-
-    await bot.telegram.sendMessage(userId, `📤 *Exported Transaction Report:*\n\n${reportContent}`, { parse_mode: 'Markdown' });
-    const successMsg = userState.usePidgin
-      ? '✅ Report don export o!'
-      : '✅ Transaction report exported successfully!';
-    await ctx.answerCbQuery(successMsg);
-  } catch (error) {
-    logger.error(`Error exporting transactions for user ${userId}: ${error.message}`);
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ Error export report o! Try again later.'
-      : '⚠️ An error occurred while exporting the transaction report. Please try again later.';
-    await ctx.answerCbQuery(errorMsg, { show_alert: true });
-  }
-});
-
-bot.action('open_admin_panel', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    const userState = await getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '⚠️ You no be admin o! Only big bosses fit enter here.'
-      : '⚠️ Unauthorized access.';
-    await ctx.replyWithMarkdown(errorMsg);
-    return ctx.answerCbQuery();
-  }
-
-  ctx.session.adminMessageId = null;
-  const userState = await getUserState(userId);
-  const menuText = userState.usePidgin
-    ? `👨‍💼 **Admin Panel o!**\n\nPick option below, ${userState.firstName || 'Oga'} the boss:`
-    : `👨‍💼 **Admin Panel**\n\nSelect an option below, ${userState.firstName || 'esteemed user'}:`;
-  const sentMessage = await ctx.replyWithMarkdown(menuText, getAdminMenu());
-  ctx.session.adminMessageId = sentMessage.message_id;
-  await ctx.answerCbQuery();
-});
-
-bot.action(/admin_(.+)/, async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) {
-    await ctx.reply('⚠️ Unauthorized access.');
-    return ctx.answerCbQuery();
-  }
-
-  const action = ctx.match[1];
-  const userState = await getUserState(userId);
-
-  switch (action) {
-    case 'view_transactions':
-      try {
-        const transactionsSnapshot = await db.collection('transactions').orderBy('timestamp', 'desc').limit(10).get();
-        if (transactionsSnapshot.empty) {
-          await ctx.answerCbQuery(userState.usePidgin ? 'No transactions dey o!' : 'No transactions found.', { show_alert: true }');
-          return;
-        }
-
-        let message = userState.usePidgin
-          ? '📋 **Recent Transactions o!**\n\n'
-          : '📋 **Recent Transactions**:\n\n';
-        transactionsSnapshot.forEach((doc) => {
-          const tx = doc.data();
-          message += userState.usePidgin
-            ? `*User ID:* ${tx.userId || 'N/A'}\n*Ref ID:* \`${tx.referenceId || 'N/A'}\`\n*Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n*Status:* ${tx.status || 'Pending'}\n*Chain:* ${tx.chain || 'N/A'}\n*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`
-            : `*User ID:* ${tx.userId || 'N/A'}\n*Reference ID:* \`${tx.referenceId || 'N/A'}\`\n*Amount Deposited:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n*Status:* ${tx.status || 'Pending'}\n*Chain:* ${tx.chain || 'N/A'}\n*Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n\n`;
-        });
-
-        const inlineKeyboard = Markup.inlineKeyboard([[Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]]);
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        await ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all transactions: ${error.message}`);
-        await ctx.answerCbQuery(userState.usePidgin ? '⚠️ Unable to fetch transactions o!' : '⚠️ Unable to fetch transactions.', { show_alert: true });
-      }
-      break;
-
-    case 'send_message':
-      try {
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          const errorMsg = userState.usePidgin
-            ? '⚠️ No users dey o! No one to send message.'
-            : '⚠️ No users found to send messages.';
-          await ctx.replyWithMarkdown(errorMsg);
-          return ctx.answerCbQuery();
-        }
-        await ctx.scene.enter('send_message_scene');
-        await ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error initiating send message: ${error.message}`);
-        const errorMsg = userState.usePidgin
-          ? '⚠️ Error start message o! Try again later.'
-          : '⚠️ An error occurred while initiating the message. Please try again later.';
-        await ctx.replyWithMarkdown(errorMsg);
-        await ctx.answerCbQuery();
-      }
-      break;
-
-    case 'mark_paid':
-      try {
-        const pendingTransactions = await db.collection('transactions').where('status', '==', 'Pending').get();
-        if (pendingTransactions.empty) {
-          await ctx.answerCbQuery(userState.usePidgin ? 'No pending transactions dey o!' : 'No pending transactions found.', { show_alert: true }');
-          return;
-        }
-
-        const batch = db.batch();
-        pendingTransactions.forEach((transaction) => {
-          const docRef = db.collection('transactions').doc(transaction.id);
-          batch.update(docRef, { status: 'Paid' });
-        });
-
-        await batch.commit();
-
-        pendingTransactions.forEach(async (transaction) => {
-          const txData = transaction.data();
-          try {
-            const payout = txData.payout || 'N/A';
-            const accountName = txData.bankDetails && txData.bankDetails.accountName ? txData.bankDetails.accountName : 'Valued User';
-
-            const successMsg = userState.usePidgin
-              ? `🎉 *Money Don Pay!*\n\n*Ref ID:* \`${txData.referenceId || 'N/A'}\`\n*Amount:* ${txData.amount} ${txData.asset}\n*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n*Account Name:* ${accountName}\n*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n*Payout:* ₦${payout}\n\nThank you for use *DirectPay*! Money don land your bank!'
-              : `🎉 *Transaction Successful!*\n\n*Reference ID:* \`${txData.referenceId || 'N/A'}\`\n*Amount Paid:* ${txData.amount} ${txData.asset}\n*Bank:* ${txData.bankDetails.bankName || 'N/A'}\n*Account Name:* ${accountName}\n*Account Number:* ****${txData.bankDetails.accountNumber.slice(-4)}\n*Payout (NGN):* ₦${payout}\n\nThank you for using *DirectPay*! Your funds have been securely transferred to your bank account.`;
-            await bot.telegram.sendMessage(txData.userId, successMsg, { parse_mode: 'Markdown' });
-            logger.info(`Notified user ${txData.userId} about paid transaction ${txData.referenceId}`);
-          } catch (error) {
-            logger.error(`Error notifying user ${txData.userId}: ${error.message}`);
-          }
-        });
-
-        const confirmMsg = userState.usePidgin
-          ? '✅ All pending transactions don mark as paid o!'
-          : '✅ All pending transactions have been marked as paid.';
-        await ctx.editMessageText(confirmMsg, { reply_markup: getAdminMenu() });
-        await ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error marking transactions as paid: ${error.message}`);
-        await ctx.answerCbQuery(userState.usePidgin ? '⚠️ Error mark paid o! Try again later.' : '⚠️ Error marking transactions as paid. Please try again later.', { show_alert: true });
-      }
-      break;
-
-    case 'view_users':
-      try {
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          await ctx.answerCbQuery(userState.usePidgin ? 'No users dey o!' : 'No users found., { show_alert: true }');
-          return;
-        }
-
-        let message = userState.usePidgin
-          ? '👥 **All Users o!**\n\n'
-          : '👥 **All Users**:\n\n';
-        usersSnapshot.forEach((doc) => {
-          const user = doc.data();
-          message += userState.usePidgin
-            ? `*User ID:* ${doc.id}\n*Name:* ${user.firstName || 'N/A'}\n*Wallets:* ${user.wallets.length}\n*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`
-            : `*User ID:* ${doc.id}\n*First Name:* ${user.firstName || 'N/A'}\n*Number of Wallets:* ${user.wallets.length}\n*Bank Linked:* ${user.wallets.some(wallet => wallet.bank) ? 'Yes' : 'No'}\n\n`;
-        });
-
-        const inlineKeyboard = Markup.inlineKeyboard([[Markup.button.callback('🔙 Back to Admin Menu', 'admin_back_to_main')]]);
-        await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
-        await ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error fetching all users: ${error.message}`);
-        await ctx.answerCbQuery(userState.usePidgin ? '⚠️ Unable to fetch users o!' : '⚠️ Unable to fetch users., { show_alert: true }');
-      }
-      break;
-
-    case 'broadcast_message':
-      try {
-        const usersSnapshot = await db.collection('users').get();
-        if (usersSnapshot.empty) {
-          const errorMsg = userState.usePidgin
-            ? '⚠️ No users dey o! No one to send message.'
-            : '⚠️ No users available to broadcast.';
-          await ctx.replyWithMarkdown(errorMsg);
-          return ctx.answerCbQuery();
-        }
-        ctx.session.awaitingBroadcastMessage = true;
-        const prompt = userState.usePidgin
-          ? '📢 Abeg type message to send to all users, or send pic:'
-          : '📢 Please enter the message you want to broadcast to all users. You can also attach an image with your message:';
-        await ctx.replyWithMarkdown(prompt);
-        await ctx.answerCbQuery();
-      } catch (error) {
-        logger.error(`Error initiating broadcast message: ${error.message}`);
-        const errorMsg = userState.usePidgin
-          ? '⚠️ Error start broadcast o! Try again later.'
-          : '⚠️ An error occurred while initiating the broadcast. Please try again later.';
-        await ctx.replyWithMarkdown(errorMsg);
-        await ctx.answerCbQuery();
-      }
-      break;
-
-    case 'back_to_main':
-      await greetUser(ctx);
-      break;
-
-    default:
-      await ctx.answerCbQuery(userState.usePidgin ? '⚠️ Unknown action o! Pick from menu.' : '⚠️ Unknown action. Please select an option from the menu., { show_alert: true }');
-  }
-});
-
 // =================== Handle Bank Linking Actions ===================
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -2172,23 +1806,11 @@ bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
   ctx.scene.leave();
 });
 
-// =================== Webhook Signature Verification ===================
-function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
-  const hmac = crypto.createHmac('sha256', secretKey);
-  hmac.update(requestBody);
-  const calculatedSignature = hmac.digest('hex');
-  try {
-    return crypto.timingSafeEqual(Buffer.from(calculatedSignature), Buffer.from(signatureHeader));
-  } catch (error) {
-    return false;
-  }
-}
-
 // =================== Paycrest Webhook Handler ===================
 app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), async (req, res) => {
   const signature = req.headers['x-paycrest-signature'];
   const rawBody = req.body;
-  const clientIp = req.clientIp; // Using requestIp to get client IP
+  const clientIp = req.clientIp;
 
   if (!signature) {
     logger.error(`No Paycrest signature found in headers from IP: ${clientIp}`);
@@ -2373,7 +1995,7 @@ async function handlePaymentOrderRefunded(data, res) {
 
 // =================== Blockradar Webhook Handler ===================
 app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
-  const clientIp = req.clientIp; // Using requestIp to get client IP
+  const clientIp = req.clientIp;
   try {
     const event = req.body;
     logger.info(`Received Blockradar webhook from IP: ${clientIp} - ${JSON.stringify(event)}`);
@@ -2547,3 +2169,4 @@ app.listen(PORT, () => {
 // =================== Shutdown Handlers ===================
 process.once('SIGINT', () => bot.stop('SIGINT'));
 process.once('SIGTERM', () => bot.stop('SIGTERM'));
+   
