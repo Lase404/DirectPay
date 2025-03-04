@@ -790,10 +790,10 @@ async function greetUser(ctx) {
 
   const greeting = walletExists
     ? userState.usePidgin
-      ? `👋 Wetin dey, ${userState.firstName} wey sabi! Welcome back to **DirectPay**, your fast crypto-to-cash hookup!\n\n💡 **Quick Start:**\n1. Link bank with "🏦 Link Bank Account"\n2. Grab your wallet address\n3. Send stablecoins, cash dey your account sharp-sharp!\n\nWe get good rates and real-time updates for you. Your money safe with us!\n\nMake we start!'
+      ? `👋 Wetin dey, ${userState.firstName} wey sabi! Welcome back to **DirectPay**, your fast crypto-to-cash hookup!\n\n💡 **Quick Start:**\n1. Link bank with "🏦 Link Bank Account"\n2. Grab your wallet address\n3. Send stablecoins, cash dey your account sharp-sharp!\n\nWe get good rates and real-time updates for you. Your money safe with us!\n\nMake we start!`
       : `👋 Hello, ${userState.firstName}!\n\nWelcome back to **DirectPay**, your gateway to seamless crypto transactions.\n\n💡 **Quick Start Guide:**\n1. **Add Your Bank Account**\n2. **Access Your Dedicated Wallet Address**\n3. **Send Stablecoins and Receive Cash Instantly**\n\nWe offer competitive rates and real-time updates to keep you informed. Your funds are secure, and you'll have cash in your account promptly!\n\nLet's get started!`
     : userState.usePidgin
-      ? `👋 Welcome, ${userState.firstName}!\n\nThank you for picking **DirectPay**. Make we start your crypto journey together. Use menu below to begin.'
+      ? `👋 Welcome, ${userState.firstName}!\n\nThank you for picking **DirectPay**. Make we start your crypto journey together. Use menu below to begin.`
       : `👋 Welcome, ${userState.firstName}!\n\nThank you for choosing **DirectPay**. Let's embark on your crypto journey together. Use the menu below to get started.`;
 
   if (adminUser) {
