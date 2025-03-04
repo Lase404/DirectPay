@@ -1739,8 +1739,20 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     await updateUserState(userId, { wallets: userState.wallets });
 
-    const qrCodeBuffer = await sharp(WALLET_GENERATED_IMAGE)
-      .composite([{ input: Buffer.from('QR_CODE_HERE'), top: 10, left: 10 }]) // Placeholder for QR code generation
+    // Generate QR code for the wallet address
+    const walletAddress = userState.wallets[walletIndex].address;
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodeURIComponent(walletAddress)}`;
+    const qrCodeResponse = await axios.get(qrCodeUrl, { responseType: 'arraybuffer' });
+    const qrCodeBuffer = Buffer.from(qrCodeResponse.data);
+
+    // Overlay QR code onto the base image
+    if (!fs.existsSync(WALLET_GENERATED_IMAGE)) {
+      throw new Error(`Base image not found at ${WALLET_GENERATED_IMAGE}`);
+    }
+
+    const qrCodePosition = { top: 1920, left: 1600 }; // Adjust these coordinates based on your image design
+    const outputBuffer = await sharp(WALLET_GENERATED_IMAGE)
+      .composite([{ input: qrCodeBuffer, top: qrCodePosition.top, left: qrCodePosition.left }])
       .toBuffer();
 
     const confirmationMessage = userState.usePidgin
@@ -1750,7 +1762,7 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
         `*Account Holder:* ${bankData.accountName}\n\n` +
         `📂 *Wallet Details:*\n` +
         `• *Chain:* ${userState.wallets[walletIndex].chain}\n` +
-        `• *Address:* \`${userState.wallets[walletIndex].address}\`\n\n` +
+        `• *Address:* \`${walletAddress}\`\n\n` +
         `You fit start receive payouts now o!`
       : `✅ *Bank Account Linked Successfully!*\n\n` +
         `*Bank Name:* ${bankData.bankName}\n` +
@@ -1758,10 +1770,10 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
         `*Account Holder:* ${bankData.accountName}\n\n` +
         `📂 *Linked Wallet Details:*\n` +
         `• *Chain:* ${userState.wallets[walletIndex].chain}\n` +
-        `• *Address:* \`${userState.wallets[walletIndex].address}\`\n\n` +
+        `• *Address:* \`${walletAddress}\`\n\n` +
         `You can now receive payouts to this bank account.`;
 
-    await ctx.replyWithPhoto({ source: qrCodeBuffer }, {
+    await ctx.replyWithPhoto({ source: outputBuffer }, {
       caption: confirmationMessage,
       parse_mode: 'Markdown',
     });
@@ -1775,35 +1787,12 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     logger.error(`Error in confirm_bank_yes handler for user ${userId}: ${error.message}`);
     const userState = await getUserState(userId);
     const errorMsg = userState.usePidgin
-      ? '❌ Error link bank o! Try again later.'
-      : '❌ An error occurred while confirming your bank details. Please try again later.';
+      ? '❌ Error link bank o! Try again later. If problem dey, contact [@maxcswap](https://t.me/maxcswap).'
+      : '❌ An error occurred while confirming your bank details. Please try again later or contact [@maxcswap](https://t.me/maxcswap) for support.';
     await ctx.replyWithMarkdown(errorMsg);
     await ctx.answerCbQuery();
     ctx.scene.leave();
   }
-});
-
-bankLinkingScene.action('confirm_bank_no', async (ctx) => {
-  const userState = await getUserState(ctx.from.id.toString());
-  const errorMsg = userState.usePidgin
-    ? '⚠️ Let’s try again o!'
-    : '⚠️ Let\'s try again.';
-  await ctx.replyWithMarkdown(errorMsg);
-  await ctx.scene.reenter();
-  await ctx.answerCbQuery();
-});
-
-bankLinkingScene.action('cancel_bank_linking', async (ctx) => {
-  const userState = await getUserState(ctx.from.id.toString());
-  const errorMsg = userState.usePidgin
-    ? '❌ Bank linking don cancel o!'
-    : '❌ Bank linking process has been canceled.';
-  await ctx.replyWithMarkdown(errorMsg);
-  delete ctx.session.walletIndex;
-  delete ctx.session.bankData;
-  delete ctx.session.processType;
-  await ctx.answerCbQuery();
-  ctx.scene.leave();
 });
 
 // =================== Paycrest Webhook Handler ===================
