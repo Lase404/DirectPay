@@ -1712,6 +1712,12 @@ bot.on('text', async (ctx) => {
   }
 });
 
+// Ensure temp folder exists
+const TEMP_FOLDER = path.join(__dirname, 'temp');
+if (!fs.existsSync(TEMP_FOLDER)) {
+  fs.mkdirSync(TEMP_FOLDER);
+}
+
 // =================== Handle Bank Linking Actions ===================
 bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -1741,19 +1747,24 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
 
     // Generate QR code for the wallet address
     const walletAddress = userState.wallets[walletIndex].address;
-    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=1000x1000&data=${encodeURIComponent(walletAddress)}`;
+    const qrCodeUrl = `https://api.qrserver.com/v1/create-qr-code/?size=300x300&data=${encodeURIComponent(walletAddress)}`;
     const qrCodeResponse = await axios.get(qrCodeUrl, { responseType: 'arraybuffer' });
     const qrCodeBuffer = Buffer.from(qrCodeResponse.data);
 
-    // Overlay QR code onto the base image
+    // Check if base image exists
     if (!fs.existsSync(WALLET_GENERATED_IMAGE)) {
       throw new Error(`Base image not found at ${WALLET_GENERATED_IMAGE}`);
     }
 
-    const qrCodePosition = { top: 1920, left: 1600 }; // Adjust these coordinates based on your image design
-    const outputBuffer = await sharp(WALLET_GENERATED_IMAGE)
+    // Overlay QR code and save to temporary file
+    const qrCodePosition = { top: 100, left: 100 }; // Adjust as needed
+    const tempFilePath = path.join(TEMP_FOLDER, `wallet_${userId}_${Date.now()}.png`);
+    
+    await sharp(WALLET_GENERATED_IMAGE)
+      .resize({ width: 1280, height: 1280, fit: 'inside', withoutEnlargement: true }) // Max 1280x1280
       .composite([{ input: qrCodeBuffer, top: qrCodePosition.top, left: qrCodePosition.left }])
-      .toBuffer();
+      .png() // Ensure PNG format
+      .toFile(tempFilePath);
 
     const confirmationMessage = userState.usePidgin
       ? `✅ *Bank Account Don Link!*\n\n` +
@@ -1773,9 +1784,15 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
         `• *Address:* \`${walletAddress}\`\n\n` +
         `You can now receive payouts to this bank account.`;
 
-    await ctx.replyWithPhoto({ source: outputBuffer }, {
+    // Send the temporary file
+    await ctx.replyWithPhoto({ source: tempFilePath }, {
       caption: confirmationMessage,
       parse_mode: 'Markdown',
+    });
+
+    // Clean up the temporary file after sending
+    fs.unlink(tempFilePath, (err) => {
+      if (err) logger.error(`Error deleting temp file ${tempFilePath}: ${err.message}`);
     });
 
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n*Account Name:* ${userState.wallets[walletIndex].bank.accountName}\n*Bank Name:* ${userState.wallets[walletIndex].bank.bankName}\n*Account Number:* ****${userState.wallets[walletIndex].bank.accountNumber.slice(-4)}`, { parse_mode: 'Markdown' });
