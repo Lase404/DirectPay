@@ -352,7 +352,42 @@ function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
     return false;
   }
 }
+// Simple Levenshtein distance function for fuzzy matching
+function levenshteinDistance(a, b) {
+  const matrix = Array(b.length + 1).fill(null).map(() => Array(a.length + 1).fill(null));
+  for (let i = 0; i <= a.length; i++) matrix[0][i] = i;
+  for (let j = 0; j <= b.length; j++) matrix[j][0] = j;
+  for (let j = 1; j <= b.length; j++) {
+    for (let i = 1; i <= a.length; i++) {
+      const indicator = a[i - 1] === b[j - 1] ? 0 : 1;
+      matrix[j][i] = Math.min(
+        matrix[j][i - 1] + 1, // deletion
+        matrix[j - 1][i] + 1, // insertion
+        matrix[j - 1][i - 1] + indicator // substitution
+      );
+    }
+  }
+  return matrix[b.length][a.length];
+}
 
+function findClosestBank(input, bankList) {
+  const inputLower = input.toLowerCase().trim();
+  let bestMatch = null;
+  let minDistance = Infinity;
+
+  bankList.forEach((bank) => {
+    bank.aliases.forEach((alias) => {
+      const distance = levenshteinDistance(inputLower, alias);
+      if (distance < minDistance) {
+        minDistance = distance;
+        bestMatch = bank;
+      }
+    });
+  });
+
+  // Suggest if distance is low but not exact match (e.g., <= 3)
+  return { bank: bestMatch, distance: minDistance };
+}
 // =================== Define Scenes ===================
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
@@ -375,8 +410,8 @@ const bankLinkingScene = new Scenes.WizardScene(
     ctx.session.bankData.step = 1;
     const userState = await getUserState(userId);
     const prompt = userState.usePidgin
-      ? '🏦 Enter your bank name (e.g., Access Bank):'
-      : '🏦 Please enter your bank name (e.g., Access Bank):';
+      ? '🏦 Enter your bank name (e.g., GTBank, Access):'
+      : '🏦 Please enter your bank name (e.g., GTBank, Access):';
     await ctx.replyWithMarkdown(prompt);
     return ctx.wizard.next();
   },
@@ -385,18 +420,31 @@ const bankLinkingScene = new Scenes.WizardScene(
     const input = ctx.message.text.trim();
     logger.info(`User ${userId} entered bank name: ${input}`);
 
-    const bankNameInput = input.toLowerCase();
-    const bank = bankList.find((b) => b.aliases.includes(bankNameInput));
-
     const userState = await getUserState(userId);
-    if (!bank) {
+    const { bank, distance } = findClosestBank(input, bankList);
+
+    if (!bank || distance > 3) { // Threshold for no match
       const errorMsg = userState.usePidgin
-        ? '❌ Bank name no correct. Try valid bank name:\n\n' + bankList.map(b => `• ${b.name}`).join('\n')
-        : '❌ Invalid bank name. Please enter a valid bank name from our supported list:\n\n' + bankList.map(b => `• ${b.name}`).join('\n');
+        ? `❌ Bank name no match o. Check your spelling or try:\n\n${bankList.map(b => `• ${b.name}`).join('\n')}`
+        : `❌ No matching bank found. Check your spelling or try:\n\n${bankList.map(b => `• ${b.name}`).join('\n')}`;
       await ctx.replyWithMarkdown(errorMsg);
       return; // Stay on the same step
     }
 
+    if (distance > 0 && distance <= 3) { // Suggest close match
+      const confirmMsg = userState.usePidgin
+        ? `You mean *${bank.name}*? You type "${input}".\n\nCorrect?`
+        : `Did you mean *${bank.name}*? You entered "${input}".\n\nIs this correct?`;
+      ctx.session.bankData.suggestedBank = bank;
+      const sentMessage = await ctx.replyWithMarkdown(confirmMsg, Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes', 'confirm_suggested_bank')],
+        [Markup.button.callback('❌ No', 'retry_bank_name')]
+      ]));
+      ctx.session.suggestionMessageId = sentMessage.message_id; // Store message ID for deletion
+      return; // Wait for confirmation
+    }
+
+    // Exact match found
     ctx.session.bankData.bankName = bank.name;
     ctx.session.bankData.bankCode = bank.code;
     ctx.session.bankData.step = 2;
@@ -471,9 +519,47 @@ const bankLinkingScene = new Scenes.WizardScene(
     }
   },
   async (ctx) => {
-    return; // Placeholder for action handlers
+    return;
   }
 );
+
+bankLinkingScene.action('confirm_suggested_bank', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const suggestedBank = ctx.session.bankData.suggestedBank;
+
+  ctx.session.bankData.bankName = suggestedBank.name;
+  ctx.session.bankData.bankCode = suggestedBank.code;
+  ctx.session.bankData.step = 2;
+
+  const prompt = userState.usePidgin
+    ? '🔢 Enter your 10-digit account number:'
+    : '🔢 Please enter your 10-digit bank account number:';
+  await ctx.replyWithMarkdown(prompt);
+  await ctx.answerCbQuery();
+  ctx.wizard.next();
+});
+
+bankLinkingScene.action('retry_bank_name', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+
+  // Delete the suggestion message if it exists
+  if (ctx.session.suggestionMessageId) {
+    try {
+      await ctx.telegram.deleteMessage(ctx.chat.id, ctx.session.suggestionMessageId);
+      delete ctx.session.suggestionMessageId; // Clear the stored ID
+    } catch (error) {
+      logger.error(`Failed to delete suggestion message for user ${userId}: ${error.message}`);
+    }
+  }
+
+  const prompt = userState.usePidgin
+    ? '🏦 Enter the correct bank name one more time (e.g., GTBank, Access):'
+    : '🏦 Please enter the correct bank name one more time (e.g., GTBank, Access):';
+  await ctx.replyWithMarkdown(prompt);
+  await ctx.answerCbQuery();
+});
 
 const sendMessageScene = new Scenes.WizardScene(
   'send_message_scene',
@@ -933,7 +1019,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
     }
 
     const pageSize = 3;
-    const totalPages = Math.ceil(userState.wallets.length / pageSize);
+    const totalPages = Math.max(1, Math.ceil(userState.wallets.length / pageSize)); // Ensure at least 1 page
     ctx.session.walletsPage = ctx.session.walletsPage || 1;
 
     const generateWalletPage = async (page) => {
@@ -944,7 +1030,7 @@ bot.hears('💼 View Wallet', async (ctx) => {
       const timestamp = new Date().toISOString();
       let message = userState.usePidgin
         ? `💼 *Your Wallets* (Page ${page}/${totalPages})\n*Updated:* ${timestamp}\n\n`
-        : `💼 *Your Wallets* (Page ${page}/${totalPages}):\n*Updated:* ${timestamp}\n\n`;
+        : `💼 *Your Wallets* (Page ${page}/${totalPages})\n*Updated:* ${timestamp}\n\n`;
       wallets.forEach((wallet, index) => {
         const walletNumber = start + index + 1;
         message += userState.usePidgin
@@ -960,6 +1046,10 @@ bot.hears('💼 View Wallet', async (ctx) => {
             `• *Bank Linked:* ${wallet.bank ? `${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})` : 'Not Linked'}\n\n`;
       });
 
+      if (wallets.length === 0) {
+        message += userState.usePidgin ? 'No wallets on this page yet.' : 'No wallets on this page yet.';
+      }
+
       const navigationButtons = [];
       if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `wallet_page_${page - 1}`));
       if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${page + 1}`));
@@ -969,7 +1059,8 @@ bot.hears('💼 View Wallet', async (ctx) => {
     };
 
     const { message, inlineKeyboard } = await generateWalletPage(ctx.session.walletsPage);
-    await ctx.replyWithMarkdown(message, inlineKeyboard);
+    const sentMessage = await ctx.replyWithMarkdown(message, inlineKeyboard);
+    ctx.session.walletMessageId = sentMessage.message_id; // Store message ID for editing
     if (suggestPidgin && !userState.usePidgin) {
       await ctx.replyWithMarkdown('👋 You dey Nigeria? Type "Pidgin" to switch if you like.');
     }
@@ -990,10 +1081,10 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
   try {
     const userState = await getUserState(userId);
     const pageSize = 3;
-    const totalPages = Math.ceil(userState.wallets.length / pageSize);
+    const totalPages = Math.max(1, Math.ceil(userState.wallets.length / pageSize));
 
     if (requestedPage < 1 || requestedPage > totalPages) {
-      await ctx.answerCbQuery('⚠️ Page no dey.', { show_alert: true });
+      await ctx.answerCbQuery(userState.usePidgin ? '⚠️ Page no dey.' : '⚠️ Page not found.', { show_alert: true });
       return;
     }
 
@@ -1004,9 +1095,10 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
       const end = Math.min(start + pageSize, userState.wallets.length);
       const wallets = userState.wallets.slice(start, end).sort((a, b) => new Date(b.creationDate) - new Date(a.creationDate));
 
+      const timestamp = new Date().toISOString();
       let message = userState.usePidgin
-        ? `💼 *Your Wallets* (Page ${page}/${totalPages})\n\n`
-        : `💼 *Your Wallets* (Page ${page}/${totalPages}):\n\n`;
+        ? `💼 *Your Wallets* (Page ${page}/${totalPages})\n*Updated:* ${timestamp}\n\n`
+        : `💼 *Your Wallets* (Page ${page}/${totalPages})\n*Updated:* ${timestamp}\n\n`;
       wallets.forEach((wallet, index) => {
         const walletNumber = start + index + 1;
         message += userState.usePidgin
@@ -1022,6 +1114,10 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
             `• *Bank Linked:* ${wallet.bank ? `${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})` : 'Not Linked'}\n\n`;
       });
 
+      if (wallets.length === 0) {
+        message += userState.usePidgin ? 'No wallets on this page yet.' : 'No wallets on this page yet.';
+      }
+
       const navigationButtons = [];
       if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `wallet_page_${page - 1}`));
       if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `wallet_page_${page + 1}`));
@@ -1031,7 +1127,15 @@ bot.action(/wallet_page_(\d+)/, async (ctx) => {
     };
 
     const { message, inlineKeyboard } = await generateWalletPage(requestedPage);
-    await ctx.editMessageText(message, { parse_mode: 'Markdown', reply_markup: inlineKeyboard.reply_markup });
+    if (ctx.session.walletMessageId) {
+      await ctx.telegram.editMessageText(ctx.chat.id, ctx.session.walletMessageId, null, message, {
+        parse_mode: 'Markdown',
+        reply_markup: inlineKeyboard.reply_markup
+      });
+    } else {
+      const sentMessage = await ctx.replyWithMarkdown(message, inlineKeyboard);
+      ctx.session.walletMessageId = sentMessage.message_id;
+    }
     ctx.answerCbQuery();
   } catch (error) {
     logger.error(`Error navigating wallet pages for user ${userId}: ${error.message}`);
