@@ -77,10 +77,10 @@ for (const key of requiredKeys) {
   }
 }
 
-const WALLET_GENERATED_IMAGE = './images/wallet_generated_base.png';
-const DEPOSIT_SUCCESS_IMAGE = './images/deposit_success.png';
-const PAYOUT_SUCCESS_IMAGE = './images/payout_success.png';
-const ERROR_IMAGE = './images/error.png';
+const WALLET_GENERATED_IMAGE = './wallet_generated_base.png';
+const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
+const PAYOUT_SUCCESS_IMAGE = './payout_success.png';
+const ERROR_IMAGE = './error.png';
 
 // =================== Initialize Express and Telegraf ===================
 const app = express();
