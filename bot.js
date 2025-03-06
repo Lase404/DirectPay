@@ -266,7 +266,7 @@ async function withdrawFromBlockradar(chain, assetId, address, amount, reference
 
 async function getUserState(userId) {
   try {
-    const userDoc =  = await db.collection('users').doc(userId).get();
+    const userDoc = await db.collection('users').doc(userId).get();
     if (!userDoc.exists) {
       const defaultState = {
         firstName: '',
