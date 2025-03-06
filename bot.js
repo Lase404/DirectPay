@@ -2796,16 +2796,12 @@ async function handlePaymentOrderSettled(data, res) {
         `*Payout Details:*\n` +
         `• *Amount Paid:* ₦${amountPaid}\n` +
         `• *Percent Settled:* ${percentSettled}%\n` +
-        `• *Sender Fee:* ₦${senderFee}\n` +
-        `• *Network Fee:* ₦${networkFee}\n` +
         `• *Exchange Rate:* ₦${rate} per ${txData.asset}\n` +
         `• *Network:* ${network}\n` +
         `• *Transaction Hash:* \`${txHash}\`\n` +
         `• *Paid To:* ${recipient.institution} (****${recipient.accountIdentifier.slice(-4)})\n` +
         `• *Receiver:* ${recipient.accountName}\n` +
-        `• *Created:* ${new Date(createdAt).toLocaleString()}\n` +
-        `• *Updated:* ${new Date(updatedAt).toLocaleString()}\n\n` +
-        `Money don enter your bank! Want sabi more about Base? Click "📘 Learn About Base" for details!`
+        `Money for don enter your bank! Want sabi more about Base for future transaction? Click "📘 Learn About Base" for details!`
       : `✅ *Funds Credited*\n\n` +
         `*Your Deposit:*\n` +
         `• *Amount Sent:* ${txData.amount} ${txData.asset}\n` +
@@ -2813,15 +2809,11 @@ async function handlePaymentOrderSettled(data, res) {
         `*Payout Details:*\n` +
         `• *Amount Paid:* ₦${amountPaid}\n` +
         `• *Percent Settled:* ${percentSettled}%\n` +
-        `• *Sender Fee:* ₦${senderFee}\n` +
-        `• *Network Fee:* ₦${networkFee}\n` +
         `• *Exchange Rate:* ₦${rate} per ${txData.asset}\n` +
         `• *Network:* ${network}\n` +
         `• *Transaction Hash:* \`${txHash}\`\n` +
         `• *Paid To:* ${recipient.institution} (****${recipient.accountIdentifier.slice(-4)})\n` +
         `• *Receiver:* ${recipient.accountName}\n` +
-        `• *Created:* ${new Date(createdAt).toLocaleString()}\n` +
-        `• *Updated:* ${new Date(updatedAt).toLocaleString()}\n\n` +
         `Funds are now in your bank! Want to learn more about Base? Click "📘 Learn About Base" for details!`;
     await bot.telegram.sendPhoto(userId, { source: PAYOUT_SUCCESS_IMAGE }, {
       caption: successMsg,
@@ -3029,7 +3021,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
           `*Ref ID:* \`${referenceId}\`\n` +
           `*Amount:* ${amount} ${asset}\n` +
           `*Rate:* ₦${rate} per ${asset}\n` +
-          `*NGN Value:* ₦${ngnAmount}\n` +
+          `*NGN Conversion Value:* ₦${ngnAmount}\n` +
           `*Network:* ${chainRaw}\n` +
           `*Wallet Address:* \`${walletAddress}\`\n` +
           `*Tx Hash:* \`${transactionHash}\`\n` +
@@ -3039,7 +3031,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
           `*Reference ID:* \`${referenceId}\`\n` +
           `*Amount:* ${amount} ${asset}\n` +
           `*Rate:* ₦${rate} per ${asset}\n` +
-          `*NGN Value:* ₦${ngnAmount}\n` +
+          `*NGN Conversion Value:* ₦${ngnAmount}\n` +
           `*Network:* ${chainRaw}\n` +
           `*Wallet Address:* \`${walletAddress}\`\n` +
           `*Transaction Hash:* \`${transactionHash}\`\n` +
