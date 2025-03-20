@@ -13,9 +13,9 @@ const path = require('path');
 const sharp = require('sharp');
 const requestIp = require('request-ip');
 const cron = require('cron');
-const DEPOSIT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'deposit_success.png');
-const PAYOUT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'payout_success.png');
-const WALLET_GENERATED_IMAGE = path.join(__dirname, 'assets', 'wallet_generated_base1.png');
+const DEPOSIT_SUCCESS_IMAGE = path.join(__dirname, 'deposit_success.png');
+const PAYOUT_SUCCESS_IMAGE = path.join(__dirname, 'payout_success.png');
+const WALLET_GENERATED_IMAGE = path.join(__dirname, 'wallet_generated_base1.png');
 
 
 // =================== Initialize Logging ===================
