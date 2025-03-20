@@ -15,7 +15,7 @@ const requestIp = require('request-ip');
 const cron = require('cron');
 const DEPOSIT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'deposit_success.png');
 const PAYOUT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'payout_success.png');
-const WALLET_GENERATED_IMAGE = path.join(__dirname, 'assets', 'wallet_generated.png');
+const WALLET_GENERATED_IMAGE = path.join(__dirname, 'assets', 'wallet_generated_base1.png');
 
 
 // =================== Initialize Logging ===================
@@ -1077,8 +1077,8 @@ async function greetUser(ctx) {
       ? `👋 Welcome back, ${userState.firstName}!\n\nThis na **DirectPay**, your crypto-to-cash plug.\n\n💡 *How to Start:*\n1. Link bank with "⚙️ Settings"\n2. Check your wallet address\n3. Send stablecoins, get cash fast.\n\nRates dey fresh, money dey safe!`
       : `👋 Welcome back, ${userState.firstName}!\n\nThis is **DirectPay**, your crypto-to-cash solution.\n\n💡 *Quick Start:*\n1. Link your bank in "⚙️ Settings"\n2. View your wallet address\n3. Send stablecoins, receive cash quickly.\n\nRates are updated, funds are secure!`
     : userState.usePidgin
-      ? `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s start your crypto journey.\n\n*First Step:* Click "💼 Generate Wallet" to create your wallet, then link your bank. You go also need set refund address so your funds no lost if anything scatter!`
-      : `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s begin your crypto journey.\n\n*First Step:* Click "💼 Generate Wallet" to create your wallet and link your bank. You’ll also need to set a refund address to ensure funds aren’t lost if something goes wrong!`;
+      ? `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s start your crypto journey.\n\n*First Step:* Click "💼 Generate Wallet" to create your wallet, then link your bank.`
+      : `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s begin your crypto journey.\n\n*First Step:* Click "💼 Generate Wallet" to create your wallet and link your bank.`;
 
   if (adminUser) {
     try {
