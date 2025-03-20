@@ -2344,60 +2344,73 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
   }
 });
 
-app.post(WEBHOOK_PAYCREST_PATH, async (req, res) => {
-  const signature = req.headers['x-paycrest-signature'];
-  const rawBody = req.rawBody;
-  const clientIp = req.clientIp;
+app.post(
+  WEBHOOK_PAYCREST_PATH,
+  bodyParser.raw({ type: 'application/json' }), // Raw parsing only for this route
+  async (req, res) => {
+    const signature = req.headers['x-paycrest-signature'];
+    const rawBody = req.body;
 
-  if (!signature) {
-    logger.error(`No Paycrest signature found in headers from IP: ${clientIp}`);
-    return res.status(400).send('Signature missing.');
+    // Log incoming request details for debugging (without IP)
+    logger.info(`Paycrest webhook received - Body type: ${typeof rawBody}, Length: ${rawBody.length}`);
+
+    // Check for signature
+    if (!signature) {
+      logger.error('No Paycrest signature found in headers');
+      return res.status(400).send('Signature missing.');
+    }
+
+    // Ensure rawBody is a Buffer
+    if (!Buffer.isBuffer(rawBody)) {
+      logger.error(`Invalid raw body type: ${typeof rawBody}`);
+      return res.status(400).send('Invalid body type.');
+    }
+
+    // Verify signature
+    if (!verifyPaycrestSignature(rawBody, signature, PAYCREST_CLIENT_SECRET)) {
+      logger.error('Invalid Paycrest signature');
+      return res.status(401).send('Invalid signature.');
+    }
+
+    // Parse the raw body
+    let parsedBody;
+    try {
+      parsedBody = JSON.parse(rawBody.toString());
+    } catch (error) {
+      logger.error(`Failed to parse Paycrest webhook body - ${error.message}`);
+      return res.status(400).send('Invalid JSON.');
+    }
+
+    const event = parsedBody.event;
+    const data = parsedBody.data;
+
+    if (!event || !data) {
+      logger.error('Missing event or data in Paycrest webhook');
+      return res.status(400).send('Invalid webhook payload.');
+    }
+
+    logger.info(`Processing Paycrest event: ${event}`);
+
+    // Handle different event types
+    switch (event) {
+      case 'payment_order.pending':
+        await handlePaymentOrderPending(data, res);
+        break;
+      case 'payment_order.expired':
+        await handlePaymentOrderExpired(data, res);
+        break;
+      case 'payment_order.settled':
+        await handlePaymentOrderSettled(data, res);
+        break;
+      case 'payment_order.refunded':
+        await handlePaymentOrderRefunded(data, res);
+        break;
+      default:
+        logger.warn(`Unhandled Paycrest webhook event type: ${event}`);
+        res.status(200).send('OK');
+    }
   }
-
-  if (!Buffer.isBuffer(rawBody)) {
-    logger.error(`Invalid raw body type from IP: ${clientIp}: ${typeof rawBody}`);
-    return res.status(400).send('Invalid body type.');
-  }
-
-  if (!verifyPaycrestSignature(rawBody, signature, PAYCREST_CLIENT_SECRET)) {
-    logger.error(`Invalid Paycrest signature from IP: ${clientIp}`);
-    return res.status(401).send('Invalid signature.');
-  }
-
-  let parsedBody;
-  try {
-    parsedBody = JSON.parse(rawBody.toString());
-  } catch (error) {
-    logger.error(`Failed to parse Paycrest webhook body from IP: ${clientIp} - ${error.message}`);
-    return res.status(400).send('Invalid JSON.');
-  }
-
-  const { event, data } = parsedBody;
-  if (!event || !data) {
-    logger.error(`Missing event or data in Paycrest webhook from IP: ${clientIp}`);
-    return res.status(400).send('Invalid webhook payload.');
-  }
-
-  logger.info(`Received Paycrest event: ${event} from IP: ${clientIp}`);
-
-  switch (event) {
-    case 'payment_order.pending':
-      await handlePaymentOrderPending(data, res);
-      break;
-    case 'payment_order.expired':
-      await handlePaymentOrderExpired(data, res);
-      break;
-    case 'payment_order.settled':
-      await handlePaymentOrderSettled(data, res);
-      break;
-    case 'payment_order.refunded':
-      await handlePaymentOrderRefunded(data, res);
-      break;
-    default:
-      logger.warn(`Unhandled Paycrest webhook event type: ${event} from IP ${clientIp}`);
-      res.status(200).send('OK');
-  }
-});
+);
 
 async function handlePaymentOrderPending(data, res) {
   const { orderId } = data;
