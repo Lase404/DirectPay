@@ -2698,7 +2698,7 @@ async function handlePaymentOrderRefunded(data, res) {
   const txDoc = txSnapshot.docs[0];
   const txData = txDoc.data();
   const userId = txData.userId;
-  const userState = await getUserState(user contabilId);
+  const userState = await getUserState(userId);
   const finalRefundAddress = userState.refundAddress || txData.senderAddress || paycrestRefundAddress || txData.walletAddress;
   const blockExplorerUrl = txData.chain === 'Base' ? `https://basescan.org/tx/${txData.transactionHash}` :
                           txData.chain === 'Polygon' ? `https://polygonscan.com/tx/${txData.transactionHash}` :
