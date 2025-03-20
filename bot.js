@@ -633,22 +633,22 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
       .toFile(tempFilePath);
 
     const confirmationMessage = userState.usePidgin
-      ? `✅ *Bank Account Linked*\n\n` +
-        `*Bank Name:* ${bankData.bankName}\n` +
-        `*Account Number:* \`${bankData.accountNumber}\`\n` +
-        `*Account Holder:* ${bankData.accountName}\n\n` +
-        `📂 *Wallet Details:*\n` +
-        `• *Chain:* ${userState.wallets[walletIndex].chain}\n` +
-        `• *Address:* \`${walletAddress}\`\n\n` +
-        `You fit start send USDC/USDT to this address now!`
-      : `✅ *Bank Account Linked*\n\n` +
-        `*Bank Name:* ${bankData.bankName}\n` +
-        `*Account Number:* \`${bankData.accountNumber}\`\n` +
-        `*Account Holder:* ${bankData.accountName}\n\n` +
-        `📂 *Wallet Details:*\n` +
-        `• *Chain:* ${userState.wallets[walletIndex].chain}\n` +
-        `• *Address:* \`${walletAddress}\`\n\n` +
-        `You can now send USDC/USDT to this address!`;
+  ? `✅ *Bank Account Linked*\n\n` +
+    `*Bank Name:* ${bankData.bankName}\n` +
+    `*Account Number:* \`${bankData.accountNumber}\`\n` +
+    `*Account Holder:* ${bankData.accountName}\n\n` +
+    `📂 *Wallet Details:*\n` +
+    `• *Chains:* Base, BNB, MATIC, ARB (All EVM chains wey dey supported)\n` +
+    `• *Address:* \`${walletAddress}\`\n\n` +
+    `You fit start send USDC/USDT to this address now from any of these chains, no go send Shiba Inu o, abeg!`
+  : `✅ *Bank Account Linked*\n\n` +
+    `*Bank Name:* ${bankData.bankName}\n` +
+    `*Account Number:* \`${bankData.accountNumber}\`\n` +
+    `*Account Holder:* ${bankData.accountName}\n\n` +
+    `📂 *Wallet Details:*\n` +
+    `• *Chains:* Base, BNB, MATIC, ARB (All supported EVM chains)\n` +
+    `• *Address:* \`${walletAddress}\`\n\n` +
+    `You can now send USDC/USDT to this address from any of these chains!`;
 
     await ctx.replyWithPhoto({ source: createReadStream(tempFilePath) }, {
       caption: confirmationMessage,
@@ -898,110 +898,6 @@ async function fetchExchangeRates() {
     logger.error(`Error fetching exchange rates from Paycrest: ${error.message}`);
   }
 }
-
-async function checkStuckTransactions() {
-  const stuckDeposits = await db.collection('transactions')
-    .where('status', '==', 'Received')
-    .where('timestamp', '<', new Date(Date.now() - 15 * 60 * 1000).toISOString())
-    .get();
-
-  stuckDeposits.forEach(async (doc) => {
-    const tx = doc.data();
-    const userState = await getUserState(tx.userId);
-    const blockExplorerUrl = tx.chain === 'Base' ? `https://basescan.org/tx/${tx.transactionHash}` :
-                            tx.chain === 'Polygon' ? `https://polygonscan.com/tx/${tx.transactionHash}` :
-                            tx.chain === 'BNB Smart Chain' ? `https://bscscan.com/tx/${tx.transactionHash}` : '#';
-
-    const userMsg = userState.usePidgin
-      ? `⚠️ *Transaction Delay Notice*\n\n` +
-        `*Ref ID:* \`${tx.referenceId}\`\n` +
-        `*Amount:* ${tx.amount} ${tx.asset}\n` +
-        `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Processing\n` +
-        `*Tx Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
-        `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `No panic, your funds dey safe! E dey take small time, but we dey on am. Contact [@maxcswap](https://t.me/maxcswap) if you wan ask anything.`
-      : `⚠️ *Transaction Delay Notice*\n\n` +
-        `*Reference ID:* \`${tx.referenceId}\`\n` +
-        `*Amount:* ${tx.amount} ${tx.asset}\n` +
-        `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Processing\n` +
-        `*Transaction Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
-        `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `No worries, your funds are safe! It’s taking a bit longer, but we’re handling it. Contact [@maxcswap](https://t.me/maxcswap) if you have questions.`;
-    await bot.telegram.sendMessage(tx.userId, userMsg, { parse_mode: 'Markdown' });
-
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ *Stuck Deposit Alert*\n\n` +
-      `*User ID:* ${tx.userId}\n` +
-      `*First Name:* ${tx.firstName || 'Unknown'}\n` +
-      `*Ref ID:* \`${tx.referenceId}\`\n` +
-      `*Amount:* ${tx.amount} ${tx.asset}\n` +
-      `*NGN Value:* ₦${tx.payout}\n` +
-      `*Bank:* ${tx.bankDetails?.bankName || 'N/A'}\n` +
-      `*Account Number:* ${tx.bankDetails?.accountNumber || 'N/A'}\n` +
-      `*Receiver:* ${tx.bankDetails?.accountName || 'N/A'}\n` +
-      `*Tx Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
-      `*Chain:* ${tx.chain}\n` +
-      `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
-      `Funds still intact, please check process!`, { parse_mode: 'Markdown' });
-  });
-
-  const stuckPending = await db.collection('transactions')
-    .where('status', '==', 'Pending')
-    .where('timestamp', '<', new Date(Date.now() - 30 * 60 * 1000).toISOString())
-    .get();
-
-  stuckPending.forEach(async (doc) => {
-    const tx = doc.data();
-    const userState = await getUserState(tx.userId);
-    const orderData = await fetchPaycrestOrder(tx.paycrestOrderId);
-    const blockExplorerUrl = tx.chain === 'Base' ? `https://basescan.org/tx/${orderData.txHash}` :
-                            tx.chain === 'Polygon' ? `https://polygonscan.com/tx/${orderData.txHash}` :
-                            tx.chain === 'BNB Smart Chain' ? `https://bscscan.com/tx/${orderData.txHash}` : '#';
-
-    const userMsg = userState.usePidgin
-      ? `⚠️ *Transaction Delay Notice*\n\n` +
-        `*Ref ID:* \`${tx.referenceId}\`\n` +
-        `*Amount:* ${tx.amount} ${tx.asset}\n` +
-        `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Processing\n` +
-        `*Tx Hash:* [${orderData.txHash}](${blockExplorerUrl})\n` +
-        `*Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` +
-        `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `Relax, your money dey safe! E dey process, but e never finish. We dey on top am—contact [@maxcswap](https://t.me/maxcswap) if you wan talk.`
-      : `⚠️ *Transaction Delay Notice*\n\n` +
-        `*Reference ID:* \`${tx.referenceId}\`\n` +
-        `*Amount:* ${tx.amount} ${tx.asset}\n` +
-        `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Processing\n` +
-        `*Transaction Hash:* [${orderData.txHash}](${blockExplorerUrl})\n` +
-        `*Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` +
-        `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `Rest assured, your funds are secure! It’s still processing but not yet complete. We’re handling it—contact [@maxcswap](https://t.me/maxcswap) if needed.`;
-    await bot.telegram.sendMessage(tx.userId, userMsg, { parse_mode: 'Markdown' });
-
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ *Stuck Processing Alert*\n\n` +
-      `*User ID:* ${tx.userId}\n` +
-      `*First Name:* ${tx.firstName || 'Unknown'}\n` +
-      `*Ref ID:* \`${tx.referenceId}\`\n` +
-      `*Amount:* ${tx.amount} ${tx.asset}\n` +
-      `*NGN Value:* ₦${tx.payout}\n` +
-      `*Bank:* ${tx.bankDetails?.bankName || 'N/A'}\n` +
-      `*Account Number:* ${tx.bankDetails?.accountNumber || 'N/A'}\n` +
-      `*Receiver:* ${tx.bankDetails?.accountName || 'N/A'}\n` +
-      `*Tx Hash:* [${orderData.txHash}](${blockExplorerUrl})\n` +
-      `*Chain:* ${tx.chain}\n` +
-      `*Paycrest Order ID:* ${tx.paycrestOrderId}\n` +
-      `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
-      `Funds in process—check Paycrest status!`, { parse_mode: 'Markdown' });
-  });
-}
-
-fetchExchangeRates();
-setInterval(async () => {
-  await fetchExchangeRates();
-  await checkStuckTransactions();
-}, 300000);
 
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
@@ -1410,7 +1306,7 @@ async function displayTransactions(ctx, query, page, filterDescription) {
             `• *Amount:* ${tx.amount} ${tx.asset}\n` +
             `• *NGN Value:* ₦${tx.payout}\n` +
             `• *Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Processing' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
-            `• *Tx Hash:* [${tx.transactionHash.slice(0, 6)}...](${blockExplorerUrl})\n` +
+            `• *Tx Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
             `• *Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
             (tx.paycrestOrderId ? `• *Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` : '') +
             `\n`
@@ -1418,7 +1314,7 @@ async function displayTransactions(ctx, query, page, filterDescription) {
             `• *Amount:* ${tx.amount} ${tx.asset}\n` +
             `• *NGN Value:* ₦${tx.payout}\n` +
             `• *Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Processing' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
-            `• *Transaction Hash:* [${tx.transactionHash.slice(0, 6)}...](${blockExplorerUrl})\n` +
+            `• *Transaction Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
             `• *Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
             (tx.paycrestOrderId ? `• *Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` : '') +
             `\n`;
