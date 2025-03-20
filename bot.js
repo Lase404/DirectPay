@@ -13,6 +13,10 @@ const path = require('path');
 const sharp = require('sharp');
 const requestIp = require('request-ip');
 const cron = require('cron');
+const DEPOSIT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'deposit_success.png');
+const PAYOUT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'payout_success.png');
+const WALLET_GENERATED_IMAGE = path.join(__dirname, 'assets', 'wallet_generated.png');
+
 
 // =================== Initialize Logging ===================
 const logger = winston.createLogger({
@@ -203,6 +207,19 @@ async function createPaycrestOrder(userId, amount, token, network, recipientDeta
   }
 }
 
+async function fetchPaycrestOrder(orderId) {
+  try {
+    const resp = await axios.get(`https://api.paycrest.io/v1/sender/orders/${orderId}`, {
+      headers: { 'API-Key': PAYCREST_API_KEY }
+    });
+    if (resp.data.status !== 'success') throw new Error(`Failed to fetch Paycrest order: ${resp.data.message}`);
+    return resp.data.data;
+  } catch (error) {
+    logger.error(`Error fetching Paycrest order ${orderId}: ${error.message}`);
+    throw error;
+  }
+}
+
 async function getWalletBalance(walletId, assetId, chainKey) {
   try {
     const chainData = chains[chainKey];
@@ -229,21 +246,6 @@ async function rescanBlocks(walletId, transactionHash, chainKey) {
     return resp.data;
   } catch (error) {
     logger.error(`Error rescanning blocks for wallet ${walletId}, tx ${transactionHash}: ${error.message}`);
-    throw error;
-  }
-}
-
-async function triggerSweepAssets(walletId, transactionId, chainKey) {
-  try {
-    const chainData = chains[chainKey];
-    const resp = await axios.post(`https://api.blockradar.co/v1/wallets/${walletId}/sweep/assets`, 
-      { transactionId },
-      { headers: { 'x-api-key': chainData.key, 'Content-Type': 'application/json' } }
-    );
-    if (resp.data.statusCode !== 200) throw new Error(`Failed to trigger sweep: ${resp.data.message}`);
-    return resp.data;
-  } catch (error) {
-    logger.error(`Error triggering sweep for wallet ${walletId}, tx ${transactionId}: ${error.message}`);
     throw error;
   }
 }
@@ -658,12 +660,18 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🔗 User ${userId} linked a bank account:\n\n*Account Name:* ${bankData.accountName}\n*Bank Name:* ${bankData.bankName}\n*Account Number:* ${bankData.accountNumber}\n*Wallet Address:* ${walletAddress}`, { parse_mode: 'Markdown' });
     logger.info(`User ${userId} linked a bank account: ${JSON.stringify(userState.wallets[walletIndex].bank)}`);
 
-    // Smart Feedback Prompt
-    const feedbackPrompt = userState.usePidgin
-      ? '📝 How you see this bank linking process? Reply with "Good" or "Bad" or anything you wan tell us!'
-      : '📝 How was your bank linking experience? Reply with "Good" or "Bad" or any feedback!';
-    await ctx.replyWithMarkdown(feedbackPrompt);
-    ctx.session.awaitingFeedback = 'bank_linking';
+    // Prompt for refund address
+    const refundPrompt = userState.usePidgin
+      ? `🔙 *Set Refund Address?*\n\n` +
+        `You wan set refund address now? This na the wallet where we go send your funds back if anything scatter. If you no set am, we go use the address wey send the money, and if e no be your own, you fit lose am!\n\n` +
+        `You wan set am now?`
+      : `🔙 *Set Refund Address?*\n\n` +
+        `Would you like to set a refund address now? This is the wallet where we’ll send your funds if a transaction fails. Without it, we’ll use the sender’s address, which could lead to loss if it’s not yours!\n\n` +
+        `Set it now?`;
+    await ctx.replyWithMarkdown(refundPrompt, Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Yes', 'set_refund_now')],
+      [Markup.button.callback('❌ Later', 'skip_refund_now')]
+    ]));
 
     await ctx.answerCbQuery();
     ctx.scene.leave();
@@ -686,6 +694,29 @@ bankLinkingScene.action('confirm_bank_yes', async (ctx) => {
     await ctx.answerCbQuery();
     ctx.scene.leave();
   }
+});
+
+bankLinkingScene.action('set_refund_now', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const prompt = userState.usePidgin
+    ? `🔙 *Set Refund Address*\n\n` +
+      `Enter your refund address (e.g., 0x123...) where we go send funds if e need refund. Make sure e be valid crypto wallet or funds fit lost!`
+    : `🔙 *Set Refund Address*\n\n` +
+      `Enter your refund address (e.g., 0x123...) where refunded assets will be sent. Ensure it’s a valid crypto wallet to avoid loss!`;
+  await ctx.replyWithMarkdown(prompt);
+  ctx.session.awaitingRefundAddress = true;
+  ctx.answerCbQuery();
+});
+
+bankLinkingScene.action('skip_refund_now', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const msg = userState.usePidgin
+    ? '✅ Okay, you fit set refund address later for "⚙️ Settings" > "🔙 Set Refund Address".'
+    : '✅ Alright, you can set a refund address later in "⚙️ Settings" > "🔙 Set Refund Address".';
+  await ctx.replyWithMarkdown(msg);
+  ctx.answerCbQuery();
 });
 
 bankLinkingScene.action('confirm_bank_no', async (ctx) => {
@@ -810,110 +841,9 @@ const sendMessageScene = new Scenes.WizardScene(
   }
 );
 
-const receiptGenerationScene = new Scenes.WizardScene(
-  'receipt_generation_scene',
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-
-    if (userState.wallets.length === 0) {
-      const errorMsg = userState.usePidgin
-        ? '❌ No wallet dey. Click "💼 Generate Wallet" to start.'
-        : '❌ You have no wallets. Generate one first with "💼 Generate Wallet".';
-      await ctx.replyWithMarkdown(errorMsg);
-      return ctx.scene.leave();
-    }
-
-    if (userState.wallets.length === 1) {
-      ctx.session.walletIndex = 0;
-      return ctx.wizard.next();
-    }
-
-    let keyboard = userState.wallets.map((wallet, index) => [
-      Markup.button.callback(`Wallet ${index + 1} - ${wallet.chain}`, `select_receipt_wallet_${index}`)
-    ]);
-    const prompt = userState.usePidgin
-      ? 'Pick wallet for receipt:'
-      : 'Select wallet for receipt:';
-    await ctx.reply(prompt, Markup.inlineKeyboard(keyboard));
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    let walletIndex;
-
-    if (ctx.session.walletIndex === undefined || ctx.session.walletIndex === null) {
-      const match = ctx.match ? ctx.match[1] : null;
-      walletIndex = match ? parseInt(match, 10) : null;
-
-      if (!walletIndex && walletIndex !== 0) {
-        const userState = await getUserState(userId);
-        const errorMsg = userState.usePidgin
-          ? '⚠️ Wallet no correct. Try again.'
-          : '⚠️ Invalid wallet selection. Please try again.';
-        await ctx.replyWithMarkdown(errorMsg);
-        return ctx.wizard.back();
-      }
-      ctx.session.walletIndex = walletIndex;
-    } else {
-      walletIndex = ctx.session.walletIndex;
-    }
-
-    try {
-      const userState = await getUserState(userId);
-      const wallet = userState.wallets[walletIndex];
-
-      if (!wallet) throw new Error('Wallet not found.');
-
-      const transactionsSnapshot = await db.collection('transactions')
-        .where('walletAddress', '==', wallet.address)
-        .orderBy('timestamp', 'desc')
-        .limit(10)
-        .get();
-
-      if (transactionsSnapshot.empty) {
-        const noTxMsg = userState.usePidgin
-          ? 'No transactions for this wallet yet.'
-          : 'No transactions found for this wallet yet.';
-        return ctx.replyWithMarkdown(noTxMsg);
-      }
-
-      let receiptMessage = userState.usePidgin
-        ? `🧾 *Receipt for Wallet ${walletIndex + 1} - ${wallet.chain}*\n\n`
-        : `🧾 *Transaction Receipt for Wallet ${walletIndex + 1} - ${wallet.chain}*\n\n`;
-      transactionsSnapshot.forEach((doc) => {
-        const tx = doc.data();
-        receiptMessage += `*Transaction ${tx.referenceId || 'N/A'}:*\n`;
-        receiptMessage += `• *Ref ID:* \`${tx.referenceId || 'N/A'}\`\n`;
-        receiptMessage += `• *Amount:* ${tx.amount || 'N/A'} ${tx.asset || 'N/A'}\n`;
-        receiptMessage += `• *Status:* ${tx.status || 'Pending'}\n`;
-        receiptMessage += `• *Rate:* ₦${exchangeRates[tx.asset] || 'N/A'} per ${tx.asset || 'N/A'}\n`;
-        receiptMessage += `• *Date:* ${tx.timestamp ? new Date(tx.timestamp).toLocaleString() : 'N/A'}\n`;
-        receiptMessage += `• *Chain:* ${tx.chain || 'N/A'}\n\n`;
-      });
-
-      const exportMsg = userState.usePidgin
-        ? '📥 Click to export receipt as text:'
-        : '📥 Click to export this receipt as text:';
-      await ctx.replyWithMarkdown(receiptMessage + exportMsg, Markup.inlineKeyboard([
-        [Markup.button.callback('📤 Export', `export_receipt_${walletIndex}`)]
-      ]));
-      ctx.scene.leave();
-    } catch (error) {
-      logger.error(`Error generating receipt for user ${userId}: ${error.message}`);
-      const userState = await getUserState(userId);
-      const errorMsg = userState.usePidgin
-        ? '❌ Error making receipt. Try again later.'
-        : '❌ An error occurred while generating the receipt. Try again later.';
-      await ctx.replyWithMarkdown(errorMsg);
-      ctx.scene.leave();
-    }
-  }
-);
-
 // =================== Register Scenes with Stage ===================
 const stage = new Scenes.Stage();
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
+stage.register(bankLinkingScene, sendMessageScene);
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -930,8 +860,8 @@ if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
 }
 
 // =================== Apply Other Middlewares ===================
-app.use(bodyParser.json({ verify: (req, res, buf) => { req.rawBody = buf; } })); // Ensure raw body is preserved
-app.use(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' })); // Dedicated raw parser for Paycrest
+app.use(bodyParser.json({ verify: (req, res, buf) => { req.rawBody = buf; } }));
+app.use(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }));
 app.use(requestIp.mw());
 
 // =================== Exchange Rate Fetching ===================
@@ -987,18 +917,18 @@ async function checkStuckTransactions() {
         `*Ref ID:* \`${tx.referenceId}\`\n` +
         `*Amount:* ${tx.amount} ${tx.asset}\n` +
         `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Received but not swept yet\n` +
+        `*Status:* Processing\n` +
         `*Tx Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
         `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `No panic, your funds dey safe with us! We dey work on am, but e dey take small time. Contact [@maxcswap](https://t.me/maxcswap) if you wan ask anything.`
+        `No panic, your funds dey safe! E dey take small time, but we dey on am. Contact [@maxcswap](https://t.me/maxcswap) if you wan ask anything.`
       : `⚠️ *Transaction Delay Notice*\n\n` +
         `*Reference ID:* \`${tx.referenceId}\`\n` +
         `*Amount:* ${tx.amount} ${tx.asset}\n` +
         `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Received but not swept yet\n` +
+        `*Status:* Processing\n` +
         `*Transaction Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
         `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `No worries, your funds are safe with us! We’re working on it, though it’s taking a bit longer than usual. Contact [@maxcswap](https://t.me/maxcswap) with any questions.`;
+        `No worries, your funds are safe! It’s taking a bit longer, but we’re handling it. Contact [@maxcswap](https://t.me/maxcswap) if you have questions.`;
     await bot.telegram.sendMessage(tx.userId, userMsg, { parse_mode: 'Markdown' });
 
     await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ *Stuck Deposit Alert*\n\n` +
@@ -1013,51 +943,44 @@ async function checkStuckTransactions() {
       `*Tx Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
       `*Chain:* ${tx.chain}\n` +
       `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
-      `Funds still intact, please check sweep process!`, { parse_mode: 'Markdown' });
-
-    // Trigger sweep if not swept after 4 minutes
-    if (new Date() - new Date(tx.timestamp) > 4 * 60 * 1000) {
-      const chainKey = chainMapping[tx.chain.toLowerCase()];
-      await triggerSweepAssets(chains[chainKey].id, tx.referenceId, chainKey);
-      logger.info(`Triggered sweep for stuck deposit ${tx.referenceId}`);
-    }
+      `Funds still intact, please check process!`, { parse_mode: 'Markdown' });
   });
 
-  const stuckSwept = await db.collection('transactions')
+  const stuckPending = await db.collection('transactions')
     .where('status', '==', 'Pending')
     .where('timestamp', '<', new Date(Date.now() - 30 * 60 * 1000).toISOString())
     .get();
 
-  stuckSwept.forEach(async (doc) => {
+  stuckPending.forEach(async (doc) => {
     const tx = doc.data();
     const userState = await getUserState(tx.userId);
-    const sweptAddress = (await axios.get(`https://api.paycrest.io/v1/sender/orders/${tx.paycrestOrderId}`, {
-      headers: { 'API-Key': PAYCREST_API_KEY }
-    })).data.data.receiveAddress;
-    const blockExplorerUrl = tx.chain === 'Base' ? `https://basescan.org/address/${sweptAddress}` :
-                            tx.chain === 'Polygon' ? `https://polygonscan.com/address/${sweptAddress}` :
-                            tx.chain === 'BNB Smart Chain' ? `https://bscscan.com/address/${sweptAddress}` : '#';
+    const orderData = await fetchPaycrestOrder(tx.paycrestOrderId);
+    const blockExplorerUrl = tx.chain === 'Base' ? `https://basescan.org/tx/${orderData.txHash}` :
+                            tx.chain === 'Polygon' ? `https://polygonscan.com/tx/${orderData.txHash}` :
+                            tx.chain === 'BNB Smart Chain' ? `https://bscscan.com/tx/${orderData.txHash}` : '#';
 
     const userMsg = userState.usePidgin
       ? `⚠️ *Transaction Delay Notice*\n\n` +
         `*Ref ID:* \`${tx.referenceId}\`\n` +
         `*Amount:* ${tx.amount} ${tx.asset}\n` +
         `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Swept but not settled yet\n` +
-        `*Swept To:* [${sweptAddress}](${blockExplorerUrl})\n` +
+        `*Status:* Processing\n` +
+        `*Tx Hash:* [${orderData.txHash}](${blockExplorerUrl})\n` +
+        `*Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` +
         `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `Relax, your money dey safe! E don move to our processing wallet, but e never settle. We dey on top am—contact [@maxcswap](https://t.me/maxcswap) if you wan talk.`
+        `Relax, your money dey safe! E dey process, but e never finish. We dey on top am—contact [@maxcswap](https://t.me/maxcswap) if you wan talk.`
       : `⚠️ *Transaction Delay Notice*\n\n` +
         `*Reference ID:* \`${tx.referenceId}\`\n` +
         `*Amount:* ${tx.amount} ${tx.asset}\n` +
         `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* Swept but not settled yet\n` +
-        `*Swept To:* [${sweptAddress}](${blockExplorerUrl})\n` +
+        `*Status:* Processing\n` +
+        `*Transaction Hash:* [${orderData.txHash}](${blockExplorerUrl})\n` +
+        `*Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` +
         `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
-        `Rest assured, your funds are secure! They’ve been moved to our processing wallet but haven’t settled yet. We’re handling it—contact [@maxcswap](https://t.me/maxcswap) if needed.`;
+        `Rest assured, your funds are secure! It’s still processing but not yet complete. We’re handling it—contact [@maxcswap](https://t.me/maxcswap) if needed.`;
     await bot.telegram.sendMessage(tx.userId, userMsg, { parse_mode: 'Markdown' });
 
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ *Stuck Swept Transaction Alert*\n\n` +
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ *Stuck Processing Alert*\n\n` +
       `*User ID:* ${tx.userId}\n` +
       `*First Name:* ${tx.firstName || 'Unknown'}\n` +
       `*Ref ID:* \`${tx.referenceId}\`\n` +
@@ -1066,11 +989,11 @@ async function checkStuckTransactions() {
       `*Bank:* ${tx.bankDetails?.bankName || 'N/A'}\n` +
       `*Account Number:* ${tx.bankDetails?.accountNumber || 'N/A'}\n` +
       `*Receiver:* ${tx.bankDetails?.accountName || 'N/A'}\n` +
-      `*Swept To:* [${sweptAddress}](${blockExplorerUrl})\n` +
+      `*Tx Hash:* [${orderData.txHash}](${blockExplorerUrl})\n` +
       `*Chain:* ${tx.chain}\n` +
       `*Paycrest Order ID:* ${tx.paycrestOrderId}\n` +
       `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
-      `Funds swept but not settled—check Paycrest status!`, { parse_mode: 'Markdown' });
+      `Funds in process—check Paycrest status!`, { parse_mode: 'Markdown' });
   });
 }
 
@@ -1108,9 +1031,8 @@ const getAdminMenu = () =>
     [Markup.button.callback('📨 Send User Message', 'admin_send_message')],
     [Markup.button.callback('💰 Manual Payout', 'admin_manual_payout')],
     [Markup.button.callback('🔄 Refund Transaction', 'admin_refund_tx')],
-    [Markup.button.callback('⚖️ Check Wallet Balance', 'admin_check_balance')], // New
-    [Markup.button.callback('🔍 Rescan Deposits', 'admin_rescan_deposits')], // New
-    [Markup.button.callback('🧹 Trigger Sweep', 'admin_trigger_sweep')], // New
+    [Markup.button.callback('⚖️ Check Wallet Balance', 'admin_check_balance')],
+    [Markup.button.callback('🔍 Rescan Deposits', 'admin_rescan_deposits')],
     [Markup.button.callback('⚠️ API/Bot Status', 'admin_api_status')],
     [Markup.button.callback('🔙 Back to Main Menu', 'admin_back_to_main')],
   ]);
@@ -1155,8 +1077,8 @@ async function greetUser(ctx) {
       ? `👋 Welcome back, ${userState.firstName}!\n\nThis na **DirectPay**, your crypto-to-cash plug.\n\n💡 *How to Start:*\n1. Link bank with "⚙️ Settings"\n2. Check your wallet address\n3. Send stablecoins, get cash fast.\n\nRates dey fresh, money dey safe!`
       : `👋 Welcome back, ${userState.firstName}!\n\nThis is **DirectPay**, your crypto-to-cash solution.\n\n💡 *Quick Start:*\n1. Link your bank in "⚙️ Settings"\n2. View your wallet address\n3. Send stablecoins, receive cash quickly.\n\nRates are updated, funds are secure!`
     : userState.usePidgin
-      ? `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s start your crypto journey. Use the menu below.`
-      : `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s begin your crypto journey. Use the menu below.`;
+      ? `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s start your crypto journey.\n\n*First Step:* Click "💼 Generate Wallet" to create your wallet, then link your bank. You go also need set refund address so your funds no lost if anything scatter!`
+      : `👋 Hello, ${userState.firstName}!\n\nWelcome to **DirectPay**. Let’s begin your crypto journey.\n\n*First Step:* Click "💼 Generate Wallet" to create your wallet and link your bank. You’ll also need to set a refund address to ensure funds aren’t lost if something goes wrong!`;
 
   if (adminUser) {
     try {
@@ -1440,10 +1362,12 @@ bot.hears(/💰\s*Transactions/i, async (ctx) => {
       [Markup.button.callback('⏳ Pending', 'tx_status_Pending')],
       [Markup.button.callback('🔄 Refunded', 'tx_status_Refunded')],
       [Markup.button.callback('🪙 Filter by Asset', 'tx_filter_asset')],
-      [Markup.button.callback('📅 Filter by Date', 'tx_filter_date')]
+      [Markup.button.callback('📅 Filter by Date', 'tx_filter_date')],
+      [Markup.button.callback('❌ Exit', 'tx_exit')]
     ]);
 
-    await ctx.replyWithMarkdown(initialPrompt, inlineKeyboard);
+    const sentMessage = await ctx.replyWithMarkdown(initialPrompt, inlineKeyboard);
+    ctx.session.txMenuMessageId = sentMessage.message_id;
   } catch (error) {
     logger.error(`Error initiating transactions for user ${userId}: ${error.message}`);
     const userState = await getUserState(userId);
@@ -1485,15 +1409,19 @@ async function displayTransactions(ctx, query, page, filterDescription) {
           ? `*Ref ID:* \`${tx.referenceId}\`\n` +
             `• *Amount:* ${tx.amount} ${tx.asset}\n` +
             `• *NGN Value:* ₦${tx.payout}\n` +
-            `• *Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Pending' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
+            `• *Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Processing' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
             `• *Tx Hash:* [${tx.transactionHash.slice(0, 6)}...](${blockExplorerUrl})\n` +
-            `• *Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n`
+            `• *Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
+            (tx.paycrestOrderId ? `• *Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` : '') +
+            `\n`
           : `*Reference ID:* \`${tx.referenceId}\`\n` +
             `• *Amount:* ${tx.amount} ${tx.asset}\n` +
             `• *NGN Value:* ₦${tx.payout}\n` +
-            `• *Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Pending' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
+            `• *Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Processing' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
             `• *Transaction Hash:* [${tx.transactionHash.slice(0, 6)}...](${blockExplorerUrl})\n` +
-            `• *Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n`;
+            `• *Time:* ${new Date(tx.timestamp).toLocaleString()}\n` +
+            (tx.paycrestOrderId ? `• *Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` : '') +
+            `\n`;
       });
     }
 
@@ -1501,6 +1429,7 @@ async function displayTransactions(ctx, query, page, filterDescription) {
     if (page > 1) navigationButtons.push(Markup.button.callback('⬅️ Previous', `tx_page_${page - 1}_${filterDescription.replace(/\s/g, '_')}`));
     navigationButtons.push(Markup.button.callback('🔄 Refresh', `tx_page_${page}_${filterDescription.replace(/\s/g, '_')}`));
     if (page < totalPages) navigationButtons.push(Markup.button.callback('Next ➡️', `tx_page_${page + 1}_${filterDescription.replace(/\s/g, '_')}`));
+    navigationButtons.push(Markup.button.callback('❌ Exit', 'tx_exit'));
 
     const inlineKeyboard = Markup.inlineKeyboard([navigationButtons]);
     if (ctx.updateType === 'callback_query' && ctx.session.txMessageId) {
@@ -1583,6 +1512,26 @@ bot.action(/tx_page_(\d+)_(.+)/, async (ctx) => {
 
   query = query.orderBy('timestamp', 'desc');
   await displayTransactions(ctx, query, page, filterDescription);
+  ctx.answerCbQuery();
+});
+
+bot.action('tx_exit', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  try {
+    if (ctx.session.txMessageId) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, ctx.session.txMessageId);
+      delete ctx.session.txMessageId;
+    }
+    if (ctx.session.txMenuMessageId) {
+      await ctx.telegram.deleteMessage(ctx.chat.id, ctx.session.txMenuMessageId);
+      delete ctx.session.txMenuMessageId;
+    }
+    await ctx.replyWithMarkdown(userState.usePidgin ? '✅ Transaction menu closed!' : '✅ Transaction menu closed!');
+  } catch (error) {
+    logger.error(`Error exiting transactions for user ${userId}: ${error.message}`);
+    await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Couldn’t close menu. Try again.' : '❌ Failed to close menu. Try again.');
+  }
   ctx.answerCbQuery();
 });
 
@@ -1799,9 +1748,42 @@ bot.hears('ℹ️ Support', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
   const supportMsg = userState.usePidgin
-    ? 'ℹ️ *Support*\n\nNeed help? Contact us:\n• Telegram: [@maxcswap](https://t.me/maxcswap)\n\nWe dey here for you!'
-    : 'ℹ️ *Support*\n\nNeed assistance? Reach us at:\n• Telegram: [@maxcswap](https://t.me/maxcswap)\n\nWe’re here to help!';
-  await ctx.replyWithMarkdown(supportMsg);
+    ? `ℹ️ *Support Menu*\n\n` +
+      `Pick your wahala or chat us live:\n\n` +
+      `1. *Bank Link Wahala* - If bank no link, check say your account number na 10 digits and bank dey our list.\n` +
+      `2. *Transaction Delay* - If e too slow, wait 15 mins, check Ref ID for "⚙️ Settings" > "🔍 Track Transaction".\n` +
+      `3. *Refund Address* - Set am for "⚙️ Settings" > "🔙 Set Refund Address" so funds no lost!`
+    : `ℹ️ *Support Menu*\n\n` +
+      `Select your issue or contact live support:\n\n` +
+      `1. *Bank Linking Issues* - If linking fails, ensure your account number is 10 digits and the bank is supported.\n` +
+      `2. *Transaction Delays* - If it’s taking too long, wait 15 mins, then track it in "⚙️ Settings" > "🔍 Track Transaction".\n` +
+      `3. *Refund Address* - Set it in "⚙️ Settings" > "🔙 Set Refund Address" to avoid losing funds!`;
+  await ctx.replyWithMarkdown(supportMsg, Markup.inlineKeyboard([
+    [Markup.button.callback(userState.usePidgin ? '📞 Chat Live Support' : '📞 Contact Live Support', 'support_live')],
+    [Markup.button.callback('🔙 Back to Menu', 'support_back')]
+  ]));
+});
+
+bot.action('support_live', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const liveMsg = userState.usePidgin
+    ? '📞 Reach us on Telegram: [@maxcswap](https://t.me/maxcswap)\n\nTell us your wahala, we go fix am sharp-sharp!'
+    : '📞 Contact us on Telegram: [@maxcswap](https://t.me/maxcswap)\n\nDescribe your issue, and we’ll resolve it quickly!';
+  await ctx.editMessageText(liveMsg, { parse_mode: 'Markdown' });
+  ctx.answerCbQuery();
+});
+
+bot.action('support_back', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const walletExists = userState.wallets.length > 0;
+  const hasBankLinked = userState.wallets.some(w => w.bank);
+  await ctx.editMessageText(userState.usePidgin ? '🏠 Back to main menu!' : '🏠 Returning to main menu!', {
+    parse_mode: 'Markdown',
+    reply_markup: getMainMenu(walletExists, hasBankLinked).reply_markup
+  });
+  ctx.answerCbQuery();
 });
 
 // =================== Learn About Base Handler ===================
@@ -1810,14 +1792,36 @@ bot.hears('📘 Learn About Base', async (ctx) => {
   const userState = await getUserState(userId);
   const pages = userState.usePidgin
     ? [
-        `📘 *Wetin Be Base? (1/3)*\n\nBase na fast, cheap Ethereum Layer 2 chain wey Coinbase build. E dey use USDC/USDT, so you fit send money quick with small gas fees.`,
-        `📘 *Why Base Dey Special? (2/3)*\n\nE dey save you money on gas, e fast pass main Ethereum, and e solid because Coinbase dey behind am. Perfect for quick cashout!`,
-        `📘 *How E Help You? (3/3)*\n\nWith Base, your USDC/USDT go turn Naira sharp-sharp. No long story, just send, we process, you collect for bank!`
+        `📘 *Wetin Be Base? (1/5)*\n\n` +
+        `Base na Ethereum Layer 2 (L2) chain wey Coinbase build. E dey fast, cheap, and secure. Imagine say Ethereum na busy Lagos road—Base na like expressway wey dey bypass traffic. E dey use Optimistic Rollups, wey mean say e pack plenty transactions together off-chain, then post am to Ethereum mainnet one time. This make am cost like ₦50 instead of ₦5000 for gas fees! E support USDC and USDT, so you fit send money quick-quick.`,
+
+        `📘 *How Base Dey Work? (2/5)*\n\n` +
+        `Base dey roll up transactions—e pack like 100 deals into one small package, then send am to Ethereum. This na why e fast: no need to wait for every single move to settle on mainnet. E get bridge wey connect am to Ethereum, so your funds fit move between Base and main Ethereum smooth. Plus, Coinbase dey run am, so e solid—no shaking! Gas fees dey low because e no dey fight for space with big Ethereum wahala.`,
+
+        `📘 *Why Base Dey Special? (3/5)*\n\n` +
+        `Base no be like other chains. E cheap—gas fit be like 1 kobo compared to Ethereum’s ₦100. E fast—transactions settle in seconds, no hours. And e safe—Coinbase, one big crypto oga, dey behind am with plenty security. E dey work with USDC/USDT, wey be stablecoins, so your money no dey dance up and down like BTC. For DirectPay, this mean say your cashout go dey sharp-sharp with small cost!`,
+
+        `📘 *Base and DirectPay (4/5)*\n\n` +
+        `For DirectPay, Base na the magic. You send USDC or USDT to your Base wallet wey we give you, then we turn am to Naira fast-fast. No long story—e no dey take days like some bank wahala. We dey use Base because e cheap and quick, so you no go spend plenty on fees, and your money land your bank account before you blink. E dey perfect for Naija wey need speed and value!`,
+
+        `📘 *Why You Go Like Base? (5/5)*\n\n` +
+        `Base na game-changer for crypto here. You fit send small money like $1 (₦1500) without losing half to fees. E dey open—anybody with wallet fit use am. E dey grow—more apps dey join Base everyday, so e no go die soon. For you, e mean say DirectPay go give you better rate and faster payout. Finish this lesson, you don sabi how Base dey help you cash out easy!`
       ]
     : [
-        `📘 *What is Base? (1/3)*\n\nBase is a fast, low-cost Ethereum Layer 2 chain built by Coinbase. It supports USDC/USDT, letting you send money quickly with minimal gas fees.`,
-        `📘 *Why Base Stands Out? (2/3)*\n\nIt saves on gas fees, is faster than main Ethereum, and reliable thanks to Coinbase’s backing. Ideal for quick payouts!`,
-        `📘 *How It Benefits You? (3/3)*\n\nWith Base, your USDC/USDT converts to Naira swiftly. No delays—just send, we process, and you receive in your bank!`
+        `📘 *What is Base? (1/5)*\n\n` +
+        `Base is an Ethereum Layer 2 (L2) blockchain developed by Coinbase. It’s designed to be fast, cost-effective, and secure. Think of Ethereum as a crowded highway—Base is like a high-speed bypass. It uses Optimistic Rollups, a technology that bundles hundreds of transactions off-chain and submits them to Ethereum in a single batch. This slashes gas fees from, say, ₦5000 to ₦50! Base supports USDC and USDT, making it ideal for quick, affordable transfers.`,
+
+        `📘 *How Does Base Work? (2/5)*\n\n` +
+        `Base operates by "rolling up" transactions—it compresses multiple actions into one compact update, then submits it to Ethereum. This is why it’s so fast: instead of waiting for each transaction to process on the mainnet, it handles them off-chain first. A bridge connects Base to Ethereum, allowing seamless movement of assets between the two. Backed by Coinbase, it’s reliable and robust. The low gas fees come from avoiding the congestion and high costs of Ethereum’s main network.`,
+
+        `📘 *What Makes Base Unique? (3/5)*\n\n` +
+        `Base stands out for several reasons. It’s incredibly cost-efficient—gas fees can be as low as a fraction of a naira compared to Ethereum’s ₦100+. It’s fast—transactions confirm in seconds, not hours. It’s secure—built by Coinbase, a leading crypto firm with top-tier security standards. It supports stablecoins like USDC and USDT, ensuring your funds hold steady value. For DirectPay, this translates to rapid, low-cost cashouts tailored to your needs!`,
+
+        `📘 *Base and DirectPay (4/5)*\n\n` +
+        `At DirectPay, Base is our secret sauce. You send USDC or USDT to your Base wallet we provide, and we convert it to Naira swiftly. No delays like traditional banking—transactions don’t drag on for days. We chose Base for its low fees and speed, meaning you keep more of your money, and it hits your bank account almost instantly. It’s a perfect fit for Nigeria, where efficiency and affordability matter most!`,
+
+        `📘 *Why You’ll Love Base (5/5)*\n\n` +
+        `Base is a revolution for crypto users. You can send small amounts like $1 (₦1500) without fees eating half of it. It’s accessible—anyone with a wallet can use it. It’s future-proof—new apps are joining Base daily, ensuring it grows stronger. For you, it means DirectPay offers better rates and faster payouts. Complete this guide, and you’ll understand how Base empowers you to cash out effortlessly!`
       ];
 
   ctx.session.learnBasePage = 1;
@@ -1831,14 +1835,36 @@ bot.action('learn_base_next', async (ctx) => {
   const userState = await getUserState(userId);
   const pages = userState.usePidgin
     ? [
-        `📘 *Wetin Be Base? (1/3)*\n\nBase na fast, cheap Ethereum Layer 2 chain wey Coinbase build. E dey use USDC/USDT, so you fit send money quick with small gas fees.`,
-        `📘 *Why Base Dey Special? (2/3)*\n\nE dey save you money on gas, e fast pass main Ethereum, and e solid because Coinbase dey behind am. Perfect for quick cashout!`,
-        `📘 *How E Help You? (3/3)*\n\nWith Base, your USDC/USDT go turn Naira sharp-sharp. No long story, just send, we process, you collect for bank!`
+        `📘 *Wetin Be Base? (1/5)*\n\n` +
+        `Base na Ethereum Layer 2 (L2) chain wey Coinbase build. E dey fast, cheap, and secure. Imagine say Ethereum na busy Lagos road—Base na like expressway wey dey bypass traffic. E dey use Optimistic Rollups, wey mean say e pack plenty transactions together off-chain, then post am to Ethereum mainnet one time. This make am cost like ₦50 instead of ₦5000 for gas fees! E support USDC and USDT, so you fit send money quick-quick.`,
+
+        `📘 *How Base Dey Work? (2/5)*\n\n` +
+        `Base dey roll up transactions—e pack like 100 deals into one small package, then send am to Ethereum. This na why e fast: no need to wait for every single move to settle on mainnet. E get bridge wey connect am to Ethereum, so your funds fit move between Base and main Ethereum smooth. Plus, Coinbase dey run am, so e solid—no shaking! Gas fees dey low because e no dey fight for space with big Ethereum wahala.`,
+
+        `📘 *Why Base Dey Special? (3/5)*\n\n` +
+        `Base no be like other chains. E cheap—gas fit be like 1 kobo compared to Ethereum’s ₦100. E fast—transactions settle in seconds, no hours. And e safe—Coinbase, one big crypto oga, dey behind am with plenty security. E dey work with USDC/USDT, wey be stablecoins, so your money no dey dance up and down like BTC. For DirectPay, this mean say your cashout go dey sharp-sharp with small cost!`,
+
+        `📘 *Base and DirectPay (4/5)*\n\n` +
+        `For DirectPay, Base na the magic. You send USDC or USDT to your Base wallet wey we give you, then we turn am to Naira fast-fast. No long story—e no dey take days like some bank wahala. We dey use Base because e cheap and quick, so you no go spend plenty on fees, and your money land your bank account before you blink. E dey perfect for Naija wey need speed and value!`,
+
+        `📘 *Why You Go Like Base? (5/5)*\n\n` +
+        `Base na game-changer for crypto here. You fit send small money like $1 (₦1500) without losing half to fees. E dey open—anybody with wallet fit use am. E dey grow—more apps dey join Base everyday, so e no go die soon. For you, e mean say DirectPay go give you better rate and faster payout. Finish this lesson, you don sabi how Base dey help you cash out easy!`
       ]
     : [
-        `📘 *What is Base? (1/3)*\n\nBase is a fast, low-cost Ethereum Layer 2 chain built by Coinbase. It supports USDC/USDT, letting you send money quickly with minimal gas fees.`,
-        `📘 *Why Base Stands Out? (2/3)*\n\nIt saves on gas fees, is faster than main Ethereum, and reliable thanks to Coinbase’s backing. Ideal for quick payouts!`,
-        `📘 *How It Benefits You? (3/3)*\n\nWith Base, your USDC/USDT converts to Naira swiftly. No delays—just send, we process, and you receive in your bank!`
+        `📘 *What is Base? (1/5)*\n\n` +
+        `Base is an Ethereum Layer 2 (L2) blockchain developed by Coinbase. It’s designed to be fast, cost-effective, and secure. Think of Ethereum as a crowded highway—Base is like a high-speed bypass. It uses Optimistic Rollups, a technology that bundles hundreds of transactions off-chain and submits them to Ethereum in a single batch. This slashes gas fees from, say, ₦5000 to ₦50! Base supports USDC and USDT, making it ideal for quick, affordable transfers.`,
+
+        `📘 *How Does Base Work? (2/5)*\n\n` +
+        `Base operates by "rolling up" transactions—it compresses multiple actions into one compact update, then submits it to Ethereum. This is why it’s so fast: instead of waiting for each transaction to process on the mainnet, it handles them off-chain first. A bridge connects Base to Ethereum, allowing seamless movement of assets between the two. Backed by Coinbase, it’s reliable and robust. The low gas fees come from avoiding the congestion and high costs of Ethereum’s main network.`,
+
+        `📘 *What Makes Base Unique? (3/5)*\n\n` +
+        `Base stands out for several reasons. It’s incredibly cost-efficient—gas fees can be as low as a fraction of a naira compared to Ethereum’s ₦100+. It’s fast—transactions confirm in seconds, not hours. It’s secure—built by Coinbase, a leading crypto firm with top-tier security standards. It supports stablecoins like USDC and USDT, ensuring your funds hold steady value. For DirectPay, this translates to rapid, low-cost cashouts tailored to your needs!`,
+
+        `📘 *Base and DirectPay (4/5)*\n\n` +
+        `At DirectPay, Base is our secret sauce. You send USDC or USDT to your Base wallet we provide, and we convert it to Naira swiftly. No delays like traditional banking—transactions don’t drag on for days. We chose Base for its low fees and speed, meaning you keep more of your money, and it hits your bank account almost instantly. It’s a perfect fit for Nigeria, where efficiency and affordability matter most!`,
+
+        `📘 *Why You’ll Love Base (5/5)*\n\n` +
+        `Base is a revolution for crypto users. You can send small amounts like $1 (₦1500) without fees eating half of it. It’s accessible—anyone with a wallet can use it. It’s future-proof—new apps are joining Base daily, ensuring it grows stronger. For you, it means DirectPay offers better rates and faster payouts. Complete this guide, and you’ll understand how Base empowers you to cash out effortlessly!`
       ];
   
   ctx.session.learnBasePage = (ctx.session.learnBasePage || 1) + 1;
@@ -1847,6 +1873,7 @@ bot.action('learn_base_next', async (ctx) => {
   const buttons = [];
   if (ctx.session.learnBasePage > 1) buttons.push(Markup.button.callback('⬅️ Previous', 'learn_base_prev'));
   if (ctx.session.learnBasePage < pages.length) buttons.push(Markup.button.callback('Next ➡️', 'learn_base_next'));
+  if (ctx.session.learnBasePage === pages.length) buttons.push(Markup.button.callback('❌ Exit', 'learn_base_exit'));
   
   await ctx.editMessageText(pages[ctx.session.learnBasePage - 1], {
     parse_mode: 'Markdown',
@@ -1860,14 +1887,36 @@ bot.action('learn_base_prev', async (ctx) => {
   const userState = await getUserState(userId);
   const pages = userState.usePidgin
     ? [
-        `📘 *Wetin Be Base? (1/3)*\n\nBase na fast, cheap Ethereum Layer 2 chain wey Coinbase build. E dey use USDC/USDT, so you fit send money quick with small gas fees.`,
-        `📘 *Why Base Dey Special? (2/3)*\n\nE dey save you money on gas, e fast pass main Ethereum, and e solid because Coinbase dey behind am. Perfect for quick cashout!`,
-        `📘 *How E Help You? (3/3)*\n\nWith Base, your USDC/USDT go turn Naira sharp-sharp. No long story, just send, we process, you collect for bank!`
+        `📘 *Wetin Be Base? (1/5)*\n\n` +
+        `Base na Ethereum Layer 2 (L2) chain wey Coinbase build. E dey fast, cheap, and secure. Imagine say Ethereum na busy Lagos road—Base na like expressway wey dey bypass traffic. E dey use Optimistic Rollups, wey mean say e pack plenty transactions together off-chain, then post am to Ethereum mainnet one time. This make am cost like ₦50 instead of ₦5000 for gas fees! E support USDC and USDT, so you fit send money quick-quick.`,
+
+        `📘 *How Base Dey Work? (2/5)*\n\n` +
+        `Base dey roll up transactions—e pack like 100 deals into one small package, then send am to Ethereum. This na why e fast: no need to wait for every single move to settle on mainnet. E get bridge wey connect am to Ethereum, so your funds fit move between Base and main Ethereum smooth. Plus, Coinbase dey run am, so e solid—no shaking! Gas fees dey low because e no dey fight for space with big Ethereum wahala.`,
+
+        `📘 *Why Base Dey Special? (3/5)*\n\n` +
+        `Base no be like other chains. E cheap—gas fit be like 1 kobo compared to Ethereum’s ₦100. E fast—transactions settle in seconds, no hours. And e safe—Coinbase, one big crypto oga, dey behind am with plenty security. E dey work with USDC/USDT, wey be stablecoins, so your money no dey dance up and down like BTC. For DirectPay, this mean say your cashout go dey sharp-sharp with small cost!`,
+
+        `📘 *Base and DirectPay (4/5)*\n\n` +
+        `For DirectPay, Base na the magic. You send USDC or USDT to your Base wallet wey we give you, then we turn am to Naira fast-fast. No long story—e no dey take days like some bank wahala. We dey use Base because e cheap and quick, so you no go spend plenty on fees, and your money land your bank account before you blink. E dey perfect for Naija wey need speed and value!`,
+
+        `📘 *Why You Go Like Base? (5/5)*\n\n` +
+        `Base na game-changer for crypto here. You fit send small money like $1 (₦1500) without losing half to fees. E dey open—anybody with wallet fit use am. E dey grow—more apps dey join Base everyday, so e no go die soon. For you, e mean say DirectPay go give you better rate and faster payout. Finish this lesson, you don sabi how Base dey help you cash out easy!`
       ]
     : [
-        `📘 *What is Base? (1/3)*\n\nBase is a fast, low-cost Ethereum Layer 2 chain built by Coinbase. It supports USDC/USDT, letting you send money quickly with minimal gas fees.`,
-        `📘 *Why Base Stands Out? (2/3)*\n\nIt saves on gas fees, is faster than main Ethereum, and reliable thanks to Coinbase’s backing. Ideal for quick payouts!`,
-        `📘 *How It Benefits You? (3/3)*\n\nWith Base, your USDC/USDT converts to Naira swiftly. No delays—just send, we process, and you receive in your bank!`
+        `📘 *What is Base? (1/5)*\n\n` +
+        `Base is an Ethereum Layer 2 (L2) blockchain developed by Coinbase. It’s designed to be fast, cost-effective, and secure. Think of Ethereum as a crowded highway—Base is like a high-speed bypass. It uses Optimistic Rollups, a technology that bundles hundreds of transactions off-chain and submits them to Ethereum in a single batch. This slashes gas fees from, say, ₦5000 to ₦50! Base supports USDC and USDT, making it ideal for quick, affordable transfers.`,
+
+        `📘 *How Does Base Work? (2/5)*\n\n` +
+        `Base operates by "rolling up" transactions—it compresses multiple actions into one compact update, then submits it to Ethereum. This is why it’s so fast: instead of waiting for each transaction to process on the mainnet, it handles them off-chain first. A bridge connects Base to Ethereum, allowing seamless movement of assets between the two. Backed by Coinbase, it’s reliable and robust. The low gas fees come from avoiding the congestion and high costs of Ethereum’s main network.`,
+
+        `📘 *What Makes Base Unique? (3/5)*\n\n` +
+        `Base stands out for several reasons. It’s incredibly cost-efficient—gas fees can be as low as a fraction of a naira compared to Ethereum’s ₦100+. It’s fast—transactions confirm in seconds, not hours. It’s secure—built by Coinbase, a leading crypto firm with top-tier security standards. It supports stablecoins like USDC and USDT, ensuring your funds hold steady value. For DirectPay, this translates to rapid, low-cost cashouts tailored to your needs!`,
+
+        `📘 *Base and DirectPay (4/5)*\n\n` +
+        `At DirectPay, Base is our secret sauce. You send USDC or USDT to your Base wallet we provide, and we convert it to Naira swiftly. No delays like traditional banking—transactions don’t drag on for days. We chose Base for its low fees and speed, meaning you keep more of your money, and it hits your bank account almost instantly. It’s a perfect fit for Nigeria, where efficiency and affordability matter most!`,
+
+        `📘 *Why You’ll Love Base (5/5)*\n\n` +
+        `Base is a revolution for crypto users. You can send small amounts like $1 (₦1500) without fees eating half of it. It’s accessible—anyone with a wallet can use it. It’s future-proof—new apps are joining Base daily, ensuring it grows stronger. For you, it means DirectPay offers better rates and faster payouts. Complete this guide, and you’ll understand how Base empowers you to cash out effortlessly!`
       ];
   
   ctx.session.learnBasePage = (ctx.session.learnBasePage || 1) - 1;
@@ -1876,11 +1925,26 @@ bot.action('learn_base_prev', async (ctx) => {
   const buttons = [];
   if (ctx.session.learnBasePage > 1) buttons.push(Markup.button.callback('⬅️ Previous', 'learn_base_prev'));
   if (ctx.session.learnBasePage < pages.length) buttons.push(Markup.button.callback('Next ➡️', 'learn_base_next'));
+  if (ctx.session.learnBasePage === pages.length) buttons.push(Markup.button.callback('❌ Exit', 'learn_base_exit'));
   
   await ctx.editMessageText(pages[ctx.session.learnBasePage - 1], {
     parse_mode: 'Markdown',
     reply_markup: Markup.inlineKeyboard([buttons]).reply_markup
   });
+  ctx.answerCbQuery();
+});
+
+bot.action('learn_base_exit', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const exitMsg = userState.usePidgin
+    ? `🙌 *Thanks for Learning About Base!*\n\nYou don sabi how Base dey make your crypto life easy. Wetin you wan do next?`
+    : `🙌 *Thanks for Learning About Base!*\n\nYou’ve mastered how Base simplifies your crypto experience. What’s next?`;
+  await ctx.editMessageText(exitMsg, {
+    parse_mode: 'Markdown',
+    reply_markup: getMainMenu(userState.wallets.length > 0, userState.wallets.some(w => w.bank)).reply_markup
+  });
+  delete ctx.session.learnBasePage;
   ctx.answerCbQuery();
 });
 
@@ -2010,8 +2074,9 @@ bot.on('text', async (ctx) => {
         `*Ref ID:* \`${refId}\`\n` +
         `*Amount:* ${tx.amount} ${tx.asset}\n` +
         `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Pending' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
+        `*Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Processing' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
         `*Tx Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
+        (tx.paycrestOrderId ? `*Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` : '') +
         `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
         (tx.status === 'Received' ? 'We don get am, dey process—chill small!' :
          tx.status === 'Pending' ? 'E dey move, no wahala, e go soon land!' :
@@ -2021,8 +2086,9 @@ bot.on('text', async (ctx) => {
         `*Reference ID:* \`${refId}\`\n` +
         `*Amount:* ${tx.amount} ${tx.asset}\n` +
         `*NGN Value:* ₦${tx.payout}\n` +
-        `*Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Pending' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
+        `*Status:* ${tx.status === 'Received' ? '✅ Received' : tx.status === 'Pending' ? '⏳ Processing' : tx.status === 'Completed' ? '✅ Completed' : tx.status === 'Refunded' ? '🔄 Refunded' : '❌ ' + tx.status}\n` +
         `*Transaction Hash:* [${tx.transactionHash}](${blockExplorerUrl})\n` +
+        (tx.paycrestOrderId ? `*Paycrest Order ID:* \`${tx.paycrestOrderId}\`\n` : '') +
         `*Time:* ${new Date(tx.timestamp).toLocaleString()}\n\n` +
         (tx.status === 'Received' ? 'We’ve received it and are processing—no worries!' :
          tx.status === 'Pending' ? 'It’s in progress, no stress, it’ll land soon!' :
@@ -2036,7 +2102,6 @@ bot.on('text', async (ctx) => {
     const refundAddress = ctx.message.text.trim();
     ctx.session.awaitingRefundAddress = false;
 
-    // Enhanced crypto address validation
     if (!/^0x[a-fA-F0-9]{40}$/.test(refundAddress)) {
       const errorMsg = userState.usePidgin
         ? '❌ Address no correct. Use valid crypto address (e.g., 0x123... with 42 characters).'
@@ -2129,18 +2194,6 @@ bot.action('admin_rescan_deposits', async (ctx) => {
   ctx.answerCbQuery();
 });
 
-bot.action('admin_trigger_sweep', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  if (!isAdmin(userId)) return ctx.answerCbQuery('❌ You no be admin.');
-  const userState = await getUserState(userId);
-  const prompt = userState.usePidgin
-    ? '🧹 Enter Ref ID to trigger sweep:'
-    : '🧹 Enter Reference ID to trigger sweep:';
-  await ctx.replyWithMarkdown(prompt);
-  ctx.session.awaitingAdminRefId = 'trigger_sweep';
-  ctx.answerCbQuery();
-});
-
 bot.action('admin_refund_tx', async (ctx) => {
   const userId = ctx.from.id.toString();
   if (!isAdmin(userId)) return ctx.answerCbQuery('❌ You no be admin.');
@@ -2215,27 +2268,6 @@ bot.on('text', async (ctx) => {
     await ctx.replyWithMarkdown(userState.usePidgin
       ? `✅ Block rescan started for Ref ID \`${refId}\`.`
       : `✅ Block rescan initiated for Reference ID \`${refId}\`.`);
-    return;
-  }
-
-  if (ctx.session.awaitingAdminRefId === 'trigger_sweep') {
-    const refId = ctx.message.text.trim();
-    ctx.session.awaitingAdminRefId = false;
-
-    const txSnapshot = await db.collection('transactions').where('referenceId', '==', refId).get();
-    if (txSnapshot.empty) {
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? `❌ No transaction dey with Ref ID \`${refId}\`.`
-        : `❌ No transaction found with Reference ID \`${refId}\`.`);
-      return;
-    }
-
-    const tx = txSnapshot.docs[0].data();
-    const chainKey = chainMapping[tx.chain.toLowerCase()];
-    await triggerSweepAssets(chains[chainKey].id, refId, chainKey);
-    await ctx.replyWithMarkdown(userState.usePidgin
-      ? `✅ Sweep triggered for Ref ID \`${refId}\`.`
-      : `✅ Sweep triggered for Reference ID \`${refId}\`.`);
     return;
   }
 
@@ -2387,7 +2419,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
           `*Ref ID:* \`${referenceId}\`\n` +
           `*Amount:* ${amount} ${asset.symbol}\n` +
           `*NGN Value:* ₦${ngnAmount}\n` +
-          `*Tx Hash:* \`${transactionHash}\`\n` +
+          `*Tx Hash:* [${transactionHash}](${blockExplorerUrl})\n` +
           `*Bank:* ${wallet.bank.bankName}\n` +
           `*Account Number:* ${wallet.bank.accountNumber}\n` +
           `*Receiver:* ${wallet.bank.accountName}\n` +
@@ -2399,7 +2431,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
           `*Ref ID:* \`${referenceId}\`\n` +
           `*Amount:* ${amount} ${asset.symbol}\n` +
           `*NGN Value:* ₦${ngnAmount}\n` +
-          `*Tx Hash:* \`${transactionHash}\`\n` +
+          `*Tx Hash:* [${transactionHash}](${blockExplorerUrl})\n` +
           `*Wallet:* ${walletAddress}\n` +
           `*Time:* ${new Date().toLocaleString()}\n\n` +
           `User needs to link a bank account to proceed!`, { parse_mode: 'Markdown' });
@@ -2418,7 +2450,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
 
 app.post(WEBHOOK_PAYCREST_PATH, async (req, res) => {
   const signature = req.headers['x-paycrest-signature'];
-  const rawBody = req.rawBody; // Use rawBody preserved by bodyParser
+  const rawBody = req.rawBody;
   const clientIp = req.clientIp;
 
   if (!signature) {
@@ -2487,12 +2519,31 @@ async function handlePaymentOrderPending(data, res) {
   const txData = txDoc.data();
   const userId = txData.userId;
   const userState = await getUserState(userId);
+  const blockExplorerUrl = txData.chain === 'Base' ? `https://basescan.org/tx/${txData.transactionHash}` :
+                          txData.chain === 'Polygon' ? `https://polygonscan.com/tx/${txData.transactionHash}` :
+                          txData.chain === 'BNB Smart Chain' ? `https://bscscan.com/tx/${txData.transactionHash}` : '#';
 
   await db.collection('transactions').doc(txData.referenceId).update({ status: 'Pending' });
 
   const msg = userState.usePidgin
-    ? `⏳ *Transaction Update*\n\nYour ${txData.amount} ${txData.asset} (Ref ID: \`${txData.referenceId}\`) dey process. E go soon land!`
-    : `⏳ *Transaction Update*\n\nYour ${txData.amount} ${txData.asset} (Reference ID: \`${txData.referenceId}\`) is being processed. It’ll arrive soon!`;
+    ? `⏳ *Transaction Update*\n\n` +
+      `*Ref ID:* \`${txData.referenceId}\`\n` +
+      `*Amount:* ${txData.amount} ${txData.asset}\n` +
+      `*NGN Value:* ₦${txData.payout}\n` +
+      `*Status:* Processing\n` +
+      `*Tx Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
+      `*Time:* ${new Date().toLocaleString()}\n\n` +
+      `E dey move, no wahala, e go soon land!`
+    : `⏳ *Transaction Update*\n\n` +
+      `*Reference ID:* \`${txData.referenceId}\`\n` +
+      `*Amount:* ${txData.amount} ${txData.asset}\n` +
+      `*NGN Value:* ₦${txData.payout}\n` +
+      `*Status:* Processing\n` +
+      `*Transaction Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
+      `*Time:* ${new Date().toLocaleString()}\n\n` +
+      `It’s in progress—no stress, it’ll land soon!`;
   await bot.telegram.sendMessage(userId, msg, { parse_mode: 'Markdown' });
 
   res.status(200).send('OK');
@@ -2514,18 +2565,37 @@ async function handlePaymentOrderExpired(data, res) {
   const txData = txDoc.data();
   const userId = txData.userId;
   const userState = await getUserState(userId);
+  const blockExplorerUrl = txData.chain === 'Base' ? `https://basescan.org/tx/${txData.transactionHash}` :
+                          txData.chain === 'Polygon' ? `https://polygonscan.com/tx/${txData.transactionHash}` :
+                          txData.chain === 'BNB Smart Chain' ? `https://bscscan.com/tx/${txData.transactionHash}` : '#';
 
   await db.collection('transactions').doc(txData.referenceId).update({ status: 'Failed' });
 
   const msg = userState.usePidgin
-    ? `❌ *Transaction Expire*\n\nYour ${txData.amount} ${txData.asset} (Ref ID: \`${txData.referenceId}\`) no work. Contact [@maxcswap](https://t.me/maxcswap) for help!`
-    : `❌ *Transaction Expired*\n\nYour ${txData.amount} ${txData.asset} (Reference ID: \`${txData.referenceId}\`) failed to process. Contact [@maxcswap](https://t.me/maxcswap) for assistance!`;
+    ? `❌ *Transaction Expire*\n\n` +
+      `*Ref ID:* \`${txData.referenceId}\`\n` +
+      `*Amount:* ${txData.amount} ${txData.asset}\n` +
+      `*NGN Value:* ₦${txData.payout}\n` +
+      `*Tx Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
+      `*Time:* ${new Date().toLocaleString()}\n\n` +
+      `E no work o. Contact [@maxcswap](https://t.me/maxcswap) for help!`
+    : `❌ *Transaction Expired*\n\n` +
+      `*Reference ID:* \`${txData.referenceId}\`\n` +
+      `*Amount:* ${txData.amount} ${txData.asset}\n` +
+      `*NGN Value:* ₦${txData.payout}\n` +
+      `*Transaction Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
+      `*Time:* ${new Date().toLocaleString()}\n\n` +
+      `It failed to process. Contact [@maxcswap](https://t.me/maxcswap) for assistance!`;
   await bot.telegram.sendMessage(userId, msg, { parse_mode: 'Markdown' });
 
   await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `⚠️ *Payment Order Expired*\n\n` +
     `*User ID:* ${userId}\n` +
     `*Ref ID:* \`${txData.referenceId}\`\n` +
     `*Amount:* ${txData.amount} ${txData.asset}\n` +
+    `*NGN Value:* ₦${txData.payout}\n` +
+    `*Tx Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
     `*Paycrest Order ID:* ${orderId}\n` +
     `*Time:* ${new Date().toLocaleString()}\n\n` +
     `Check this transaction!`, { parse_mode: 'Markdown' });
@@ -2549,6 +2619,9 @@ async function handlePaymentOrderSettled(data, res) {
   const txData = txDoc.data();
   const userId = txData.userId;
   const userState = await getUserState(userId);
+  const blockExplorerUrl = txData.chain === 'Base' ? `https://basescan.org/tx/${txHash}` :
+                          txData.chain === 'Polygon' ? `https://polygonscan.com/tx/${txHash}` :
+                          txData.chain === 'BNB Smart Chain' ? `https://bscscan.com/tx/${txHash}` : '#';
 
   await db.collection('transactions').doc(txData.referenceId).update({
     status: 'Completed',
@@ -2570,6 +2643,8 @@ async function handlePaymentOrderSettled(data, res) {
       `*Paid:* ₦${amountPaid}\n` +
       `*Bank:* ${recipient.institution} (****${recipient.accountIdentifier.slice(-4)})\n` +
       `*Receiver:* ${recipient.accountName}\n` +
+      `*Tx Hash:* [${txHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
       `*Time:* ${new Date(updatedAt).toLocaleString()}\n\n` +
       `Money don land your account!`
     : `✅ *Payout Completed!*\n\n` +
@@ -2578,6 +2653,8 @@ async function handlePaymentOrderSettled(data, res) {
       `*Paid:* ₦${amountPaid}\n` +
       `*Bank:* ${recipient.institution} (****${recipient.accountIdentifier.slice(-4)})\n` +
       `*Receiver:* ${recipient.accountName}\n` +
+      `*Transaction Hash:* [${txHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
       `*Time:* ${new Date(updatedAt).toLocaleString()}\n\n` +
       `Funds have been credited to your account!`;
   await bot.telegram.sendPhoto(userId, { source: PAYOUT_SUCCESS_IMAGE }, {
@@ -2594,10 +2671,11 @@ async function handlePaymentOrderSettled(data, res) {
       `*Percent Settled:* ${percentSettled}%\n` +
       `*Sender Fee:* ₦${senderFee}\n` +
       `*Network Fee:* ₦${networkFee}\n` +
-      `*Tx Hash:* \`${txHash}\`\n` +
+      `*Tx Hash:* [${txHash}](${blockExplorerUrl})\n` +
       `*Bank:* ${recipient.institution}\n` +
       `*Account Number:* ${recipient.accountIdentifier}\n` +
       `*Receiver:* ${recipient.accountName}\n` +
+      `*Paycrest Order ID:* ${orderId}\n` +
       `*Time:* ${new Date(updatedAt).toLocaleString()}`,
     parse_mode: 'Markdown'
   });
@@ -2620,9 +2698,11 @@ async function handlePaymentOrderRefunded(data, res) {
   const txDoc = txSnapshot.docs[0];
   const txData = txDoc.data();
   const userId = txData.userId;
-  const userState = await getUserState(userId);
-
+  const userState = await getUserState(user contabilId);
   const finalRefundAddress = userState.refundAddress || txData.senderAddress || paycrestRefundAddress || txData.walletAddress;
+  const blockExplorerUrl = txData.chain === 'Base' ? `https://basescan.org/tx/${txData.transactionHash}` :
+                          txData.chain === 'Polygon' ? `https://polygonscan.com/tx/${txData.transactionHash}` :
+                          txData.chain === 'BNB Smart Chain' ? `https://bscscan.com/tx/${txData.transactionHash}` : '#';
 
   await db.collection('transactions').doc(txData.referenceId).update({
     status: 'Refunded',
@@ -2641,12 +2721,16 @@ async function handlePaymentOrderRefunded(data, res) {
       `*Ref ID:* \`${txData.referenceId}\`\n` +
       `*Amount:* ${txData.amount} ${txData.asset}\n` +
       `*Refunded To:* \`${finalRefundAddress}\`\n` +
+      `*Tx Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
       `*Time:* ${new Date().toLocaleString()}\n\n` +
       `We don send your funds back. Check your wallet!${warningMsg}`
     : `🔄 *Transaction Refunded*\n\n` +
       `*Reference ID:* \`${txData.referenceId}\`\n` +
       `*Amount:* ${txData.amount} ${txData.asset}\n` +
       `*Refunded To:* \`${finalRefundAddress}\`\n` +
+      `*Transaction Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
+      `*Paycrest Order ID:* \`${orderId}\`\n` +
       `*Time:* ${new Date().toLocaleString()}\n\n` +
       `Your funds have been refunded. Check your wallet!${warningMsg}`;
   await bot.telegram.sendMessage(userId, msg, { parse_mode: 'Markdown' });
@@ -2656,6 +2740,7 @@ async function handlePaymentOrderRefunded(data, res) {
     `*Ref ID:* \`${txData.referenceId}\`\n` +
     `*Amount:* ${txData.amount} ${txData.asset}\n` +
     `*Refunded To:* \`${finalRefundAddress}\`\n` +
+    `*Tx Hash:* [${txData.transactionHash}](${blockExplorerUrl})\n` +
     `*Paycrest Order ID:* ${orderId}\n` +
     `*Time:* ${new Date().toLocaleString()}\n` +
     (!userState.refundAddress ? `*Note:* No refund address set, used sender address.` : ''), { parse_mode: 'Markdown' });
@@ -2688,9 +2773,5 @@ bot.catch((err, ctx) => {
   ctx.replyWithMarkdown('❌ An error occurred. We’re looking into it!');
 });
 
-// Define constants used in the code
-const DEPOSIT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'deposit_success.png');
-const PAYOUT_SUCCESS_IMAGE = path.join(__dirname, 'assets', 'payout_success.png');
-const WALLET_GENERATED_IMAGE = path.join(__dirname, 'assets', 'wallet_generated.png');
 
-module.exports = app; // For testing or serverless deployment if needed
+module.exports = app;
