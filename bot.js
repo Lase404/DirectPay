@@ -2909,7 +2909,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
 });
 
 // =================== Periodic Tasks ===================
-setInterval(fetchExchangeRates, 15 * 60 * 1000); // Fetch rates every 15 minutes
+setInterval(fetchExchangeRates, 1 * 60 * 1000); // Fetch rates every 15 minutes
 fetchExchangeRates(); // Initial fetch
 
 // =================== Server Startup ===================
