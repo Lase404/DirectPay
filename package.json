@@ -29,7 +29,8 @@
     "sharp": "^0.33.5",
     "telegraf": "^4.12.2",
     "winston": "^3.8.2",
-    "cron": "^4.1.0"
+    "cron": "^4.1.0",
+    "ethers": "^6.13.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
