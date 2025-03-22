@@ -2912,8 +2912,6 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
 setInterval(fetchExchangeRates, 15 * 60 * 1000); // Fetch rates every 15 minutes
 fetchExchangeRates(); // Initial fetch
 
-setInterval(monitorStuckTransactions, 30 * 60 * 1000); // Check stuck transactions every 30 minutes
-
 // =================== Server Startup ===================
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
