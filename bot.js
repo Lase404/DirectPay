@@ -2805,34 +2805,32 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         );
         await updateUserState(userId, { wallets: userState.wallets });
 
-     const depositMsg = userState.usePidgin
-  ? `✅ *Deposit Received*\n\n` +
-    `*Ref ID:* \`${referenceId}\`\n` +
-    `*Amount:* ${amount} ${asset}\n` +
-    `*Payout:* ₦${payout.toLocaleString()}\n` +
-    `*Network:* ${chainRaw}\n` +
-    `*Wallet Address:* \`${walletAddress}\`\n` +
-    `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-    `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-    `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-    `We dey process your payout now!`
-  : `✅ *Deposit Received*\n\n` +
-    `*Reference ID:* \`${referenceId}\`\n` +
-    `*Amount:* ${amount} ${asset}\n` +
-    `*Payout:* ₦${payout.toLocaleString()}\n` +
-    `*Network:* ${chainRaw}\n` +
-    `*Wallet Address:* \`${walletAddress}\`\n` +
-    `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
-    `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-    `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-    `Your payout is being processed!`;
-const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
-  caption: depositMsg,
-  parse_mode: 'Markdown'
-});
-        await db.collection('transactions').doc(referenceId).update({ messageId: msg.message_id });
+        const depositMsg = userState.usePidgin
+          ? `✅ *Deposit Received*\n\n` +
+            `*Ref ID:* \`${referenceId}\`\n` +
+            `*Amount:* ${amount} ${asset}\n` +
+            `*Payout:* ₦${payout.toLocaleString()}\n` +
+            `*Network:* ${chainRaw}\n` +
+            `*Wallet Address:* \`${walletAddress}\`\n` +
+            `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
+            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
+            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+            `We dey process your payout now!`
+          : `✅ *Deposit Received*\n\n` +
+            `*Reference ID:* \`${referenceId}\`\n` +
+            `*Amount:* ${amount} ${asset}\n` +
+            `*Payout:* ₦${payout.toLocaleString()}\n` +
+            `*Network:* ${chainRaw}\n` +
+            `*Wallet Address:* \`${walletAddress}\`\n` +
+            `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
+            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
+            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+            `Your payout is being processed!`;
+        const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+          caption: depositMsg,
+          parse_mode: 'Markdown'
         });
-        await db.collection('transactions').doc(referenceId).update({ feedbackRequested: true });
+        await db.collection('transactions').doc(referenceId).update({ messageId: msg.message_id });
 
         await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
           caption: `💰 *Deposit Received*\n\n` +
@@ -2907,53 +2905,6 @@ const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE
       caption: `❗️ Error processing Blockradar webhook from IP: ${clientIp}: ${error.message}`,
       parse_mode: 'Markdown'
     });
-  }
-});
-
-// Reuse the same feedback handler from Paycrest
-bot.action(/feedback_(.+)_(.+)/, async (ctx) => {
-  const [_, referenceId, rating] = ctx.match;
-  const userId = ctx.from.id.toString();
-
-  try {
-    const txDoc = await db.collection('transactions').doc(referenceId).get();
-    if (!txDoc.exists || txDoc.data().userId !== userId) {
-      await ctx.replyWithMarkdown('❌ Invalid transaction or not yours.');
-      ctx.answerCbQuery();
-      return;
-    }
-
-    const tx = txDoc.data();
-    if (tx.feedbackProvided) {
-      await ctx.replyWithMarkdown('✅ You don already give feedback for this one.');
-      ctx.answerCbQuery();
-      return;
-    }
-
-    await db.collection('transactions').doc(referenceId).update({
-      feedbackProvided: true,
-      feedbackRating: rating === 'good' ? 'Positive' : 'Negative',
-      feedbackTimestamp: new Date().toISOString()
-    });
-
-    const userState = await getUserState(userId);
-    const thanksMsg = userState.usePidgin
-      ? `✅ Thanks for your feedback! You rate am "${rating === 'good' ? 'Good' : 'Bad'}".`
-      : `✅ Thank you for your feedback! You rated it "${rating === 'good' ? 'Good' : 'Bad'}".`;
-    await ctx.replyWithMarkdown(thanksMsg);
-
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
-      `📢 Feedback received for Ref: ${referenceId}\n` +
-      `User: ${userId}\n` +
-      `Rating: ${rating === 'good' ? 'Positive' : 'Negative'}`, 
-      { parse_mode: 'Markdown' }
-    );
-    logger.info(`Feedback recorded for ${referenceId}: ${rating} by user ${userId}`);
-    ctx.answerCbQuery();
-  } catch (error) {
-    logger.error(`Error processing feedback for ${referenceId}: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ Error saving feedback. Try again later.');
-    ctx.answerCbQuery();
   }
 });
 
