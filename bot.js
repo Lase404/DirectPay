@@ -2805,31 +2805,31 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         );
         await updateUserState(userId, { wallets: userState.wallets });
 
-        const depositMsg = userState.usePidgin
-          ? `✅ *Deposit Received*\n\n` +
-            `*Ref ID:* \`${referenceId}\`\n` +
-            `*Amount:* ${amount} ${asset}\n` +
-            `*Payout:* ₦${payout.toLocaleString()}\n` +
-            `*Network:* ${chainRaw}\n` +
-            `*Wallet Address:* \`${walletAddress}\`\n` +
-            `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-            `We dey process your payout now!`
-          : `✅ *Deposit Received*\n\n` +
-            `*Reference ID:* \`${referenceId}\`\n` +
-            `*Amount:* ${amount} ${asset}\n` +
-            `*Payout:* ₦${payout.toLocaleString()}\n` +
-            `*Network:* ${chainRaw}\n` +
-            `*Wallet Address:* \`${walletAddress}\`\n` +
-            `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
-            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-            `Your payout is being processed!`;
-        const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
-          caption: depositMsg,
-          parse_mode: 'Markdown'
-        });
+     const depositMsg = userState.usePidgin
+  ? `✅ *Deposit Received*\n\n` +
+    `*Ref ID:* \`${referenceId}\`\n` +
+    `*Amount:* ${amount} ${asset}\n` +
+    `*Payout:* ₦${payout.toLocaleString()}\n` +
+    `*Network:* ${chainRaw}\n` +
+    `*Wallet Address:* \`${walletAddress}\`\n` +
+    `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
+    `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
+    `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+    `We dey process your payout now!`
+  : `✅ *Deposit Received*\n\n` +
+    `*Reference ID:* \`${referenceId}\`\n` +
+    `*Amount:* ${amount} ${asset}\n` +
+    `*Payout:* ₦${payout.toLocaleString()}\n` +
+    `*Network:* ${chainRaw}\n` +
+    `*Wallet Address:* \`${walletAddress}\`\n` +
+    `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
+    `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
+    `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+    `Your payout is being processed!`;
+const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+  caption: depositMsg,
+  parse_mode: 'Markdown'
+});
         await db.collection('transactions').doc(referenceId).update({ messageId: msg.message_id });
         });
         await db.collection('transactions').doc(referenceId).update({ feedbackRequested: true });
