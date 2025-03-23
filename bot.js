@@ -2311,7 +2311,6 @@ bot.on('text', async (ctx) => {
     return;
   }
 });
-
 // =================== Paycrest Webhook Handler ===================
 async function handlePaycrestWebhook(req, res) {
   // Log incoming request details for debugging
@@ -2346,17 +2345,19 @@ async function handlePaycrestWebhook(req, res) {
 
   const { event, data } = payload;
   logger.info(`Received Paycrest webhook event: ${event}`);
+
   try {
     switch (event) {
       case 'order.created':
       case 'payment_order.pending':
-        const existingTx = await db.collection('transactions').where('paycrestOrderId', '==', data.orderId || data.id).get();
+        const existingTx = await db.collection('transactions')
+          .where('paycrestOrderId', '==', data.orderId || data.id)
+          .get();
         if (!existingTx.empty) {
           logger.warn(`Order ${data.orderId || data.id} already exists in transactions`);
           return res.status(200).send('Order already processed');
         }
         logger.info(`Order ${data.orderId || data.id} created/pending, awaiting further action`);
-        res.status(200).send('Webhook processed');
         break;
 
       case 'order.completed':
@@ -2368,7 +2369,10 @@ async function handlePaycrestWebhook(req, res) {
 
         if (completedTxSnapshot.empty) {
           logger.error(`No transaction found for Paycrest order ${data.orderId || data.id}`);
-          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Paycrest order ${data.orderId || data.id} completed but no matching transaction found.`, { parse_mode: 'Markdown' });
+          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
+            `❗️ Paycrest order ${data.orderId || data.id} completed but no matching transaction found.`,
+            { parse_mode: 'Markdown' }
+          );
           return res.status(404).send('Transaction not found');
         }
 
@@ -2386,7 +2390,7 @@ async function handlePaycrestWebhook(req, res) {
           status: 'Completed',
           transactionHash: txHash,
           completedTimestamp: new Date().toISOString(),
-          payout: amountPaid // Update payout if provided by Paycrest
+          payout: amountPaid,
         });
 
         const userState = await getUserState(tx.userId);
@@ -2407,7 +2411,10 @@ async function handlePaycrestWebhook(req, res) {
             `*Date:* ${new Date().toLocaleString()}\n` +
             `*Transaction Hash:* \`${txHash}\`\n\n` +
             `Funds have been credited to your account!`;
-        await bot.telegram.sendPhoto(tx.userId, { source: PAYOUT_SUCCESS_IMAGE }, { caption: payoutMsg, parse_mode: 'Markdown' });
+        await bot.telegram.sendPhoto(tx.userId, { source: PAYOUT_SUCCESS_IMAGE }, { 
+          caption: payoutMsg, 
+          parse_mode: 'Markdown' 
+        });
 
         // Feedback mechanism
         const feedbackMsg = userState.usePidgin
@@ -2418,7 +2425,7 @@ async function handlePaycrestWebhook(req, res) {
           reply_markup: Markup.inlineKeyboard([
             [Markup.button.callback('👍 Good', `feedback_${tx.referenceId}_good`),
              Markup.button.callback('👎 Bad', `feedback_${tx.referenceId}_bad`)]
-          ]).reply_markup
+          ]).reply_markup,
         });
         await txDoc.ref.update({ feedbackRequested: true });
 
@@ -2442,7 +2449,10 @@ async function handlePaycrestWebhook(req, res) {
 
         if (failedTxSnapshot.empty) {
           logger.error(`No transaction found for failed Paycrest order ${data.orderId || data.id}`);
-          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Paycrest order ${data.orderId || data.id} failed/expired but no matching transaction found.`, { parse_mode: 'Markdown' });
+          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
+            `❗️ Paycrest order ${data.orderId || data.id} failed/expired but no matching transaction found.`,
+            { parse_mode: 'Markdown' }
+          );
           return res.status(404).send('Transaction not found');
         }
 
@@ -2460,13 +2470,20 @@ async function handlePaycrestWebhook(req, res) {
         const assetId = chainData.assets[failedTx.asset];
 
         try {
-          const refundResponse = await withdrawFromBlockradar(failedTx.chain, assetId, refundAddress, failedTx.amount, failedTx.referenceId, { reason: 'Payout failed/expired' });
+          const refundResponse = await withdrawFromBlockradar(
+            failedTx.chain,
+            assetId,
+            refundAddress,
+            failedTx.amount,
+            failedTx.referenceId,
+            { reason: 'Payout failed/expired' }
+          );
           await db.collection('transactions').doc(failedTx.referenceId).update({
             status: 'Refunded',
             refundAddress,
             refundTimestamp: new Date().toISOString(),
             refundTxHash: refundResponse.transactionHash,
-            failureReason: data.reason || 'Order expired'
+            failureReason: data.reason || 'Order expired',
           });
 
           const refundMsg = userStateFailed.usePidgin
@@ -2484,7 +2501,10 @@ async function handlePaycrestWebhook(req, res) {
               `*Refund Transaction Hash:* \`${refundResponse.transactionHash}\`\n` +
               `*Reason:* ${data.reason || 'Order expired'}\n\n` +
               `Check your wallet!`;
-          await bot.telegram.sendPhoto(failedTx.userId, { source: ERROR_IMAGE }, { caption: refundMsg, parse_mode: 'Markdown' });
+          await bot.telegram.sendPhoto(failedTx.userId, { source: ERROR_IMAGE }, { 
+            caption: refundMsg, 
+            parse_mode: 'Markdown' 
+          });
 
           // Feedback mechanism for refund
           const refundFeedbackMsg = userStateFailed.usePidgin
@@ -2495,7 +2515,7 @@ async function handlePaycrestWebhook(req, res) {
             reply_markup: Markup.inlineKeyboard([
               [Markup.button.callback('👍 Good', `feedback_${failedTx.referenceId}_good`),
                Markup.button.callback('👎 Bad', `feedback_${failedTx.referenceId}_bad`)]
-            ]).reply_markup
+            ]).reply_markup,
           });
           await failedTxDoc.ref.update({ feedbackRequested: true });
 
@@ -2511,7 +2531,7 @@ async function handlePaycrestWebhook(req, res) {
           await db.collection('transactions').doc(failedTx.referenceId).update({
             status: event === 'order.failed' ? 'Failed' : 'Expired',
             failureReason: data.reason || 'Order expired',
-            refundFailed: true
+            refundFailed: true,
           });
           await bot.telegram.sendMessage(failedTx.userId, 
             `❌ *Payout Failed*\n\n` +
@@ -2538,7 +2558,10 @@ async function handlePaycrestWebhook(req, res) {
 
         if (refundedTxSnapshot.empty) {
           logger.error(`No transaction found for refunded Paycrest order ${data.id}`);
-          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Paycrest order ${data.id} refunded but no matching transaction found.`, { parse_mode: 'Markdown' });
+          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
+            `❗️ Paycrest order ${data.id} refunded but no matching transaction found.`,
+            { parse_mode: 'Markdown' }
+          );
           return res.status(404).send('Transaction not found');
         }
 
@@ -2555,7 +2578,7 @@ async function handlePaycrestWebhook(req, res) {
           status: 'Refunded',
           refundAddress: refundedTx.walletAddress,
           refundTimestamp: new Date().toISOString(),
-          refundTxHash: data.txHash || 'N/A'
+          refundTxHash: data.txHash || 'N/A',
         });
 
         const refundedUserState = await getUserState(refundedTx.userId);
@@ -2572,7 +2595,10 @@ async function handlePaycrestWebhook(req, res) {
             `*Refunded To:* \`${refundedTx.walletAddress}\`\n` +
             `*Transaction Hash:* \`${data.txHash || 'N/A'}\`\n\n` +
             `Funds have been returned to your wallet!`;
-        await bot.telegram.sendPhoto(refundedTx.userId, { source: PAYOUT_SUCCESS_IMAGE }, { caption: refundSuccessMsg, parse_mode: 'Markdown' });
+        await bot.telegram.sendPhoto(refundedTx.userId, { source: PAYOUT_SUCCESS_IMAGE }, { 
+          caption: refundSuccessMsg, 
+          parse_mode: 'Markdown' 
+        });
 
         // Feedback mechanism for refund
         const refundFeedbackMsgSuccess = refundedUserState.usePidgin
@@ -2583,7 +2609,7 @@ async function handlePaycrestWebhook(req, res) {
           reply_markup: Markup.inlineKeyboard([
             [Markup.button.callback('👍 Good', `feedback_${refundedTx.referenceId}_good`),
              Markup.button.callback('👎 Bad', `feedback_${refundedTx.referenceId}_bad`)]
-          ]).reply_markup
+          ]).reply_markup,
         });
         await refundedTxDoc.ref.update({ feedbackRequested: true });
 
@@ -2605,57 +2631,27 @@ async function handlePaycrestWebhook(req, res) {
     res.status(200).send('Webhook processed');
   } catch (error) {
     logger.error(`Error processing Paycrest webhook event ${event}: ${error.message}`);
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Error processing Paycrest webhook (${event}): ${error.message}`, { parse_mode: 'Markdown' });
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
+      `❗️ Error processing Paycrest webhook (${event}): ${error.message}`, 
+      { parse_mode: 'Markdown' }
+    );
     res.status(500).send('Internal server error');
   }
 }
 
-// Feedback handler for inline buttons
-bot.action(/feedback_(.+)_(.+)/, async (ctx) => {
-  const [_, referenceId, rating] = ctx.match;
-  const userId = ctx.from.id.toString();
-
+// Ensure verifyPaycrestSignature handles Buffers correctly
+function verifyPaycrestSignature(requestBody, signatureHeader, secretKey) {
+  const bodyString = Buffer.isBuffer(requestBody) ? requestBody.toString('utf8') : requestBody;
+  const hmac = crypto.createHmac('sha256', secretKey);
+  hmac.update(bodyString);
+  const calculatedSignature = hmac.digest('hex');
   try {
-    const txDoc = await db.collection('transactions').doc(referenceId).get();
-    if (!txDoc.exists || txDoc.data().userId !== userId) {
-      await ctx.replyWithMarkdown('❌ Invalid transaction or not yours.');
-      ctx.answerCbQuery();
-      return;
-    }
-
-    const tx = txDoc.data();
-    if (tx.feedbackProvided) {
-      await ctx.replyWithMarkdown('✅ You don already give feedback for this one.');
-      ctx.answerCbQuery();
-      return;
-    }
-
-    await db.collection('transactions').doc(referenceId).update({
-      feedbackProvided: true,
-      feedbackRating: rating === 'good' ? 'Positive' : 'Negative',
-      feedbackTimestamp: new Date().toISOString()
-    });
-
-    const userState = await getUserState(userId);
-    const thanksMsg = userState.usePidgin
-      ? `✅ Thanks for your feedback! You rate am "${rating === 'good' ? 'Good' : 'Bad'}".`
-      : `✅ Thank you for your feedback! You rated it "${rating === 'good' ? 'Good' : 'Bad'}".`;
-    await ctx.replyWithMarkdown(thanksMsg);
-
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
-      `📢 Feedback received for Ref: ${referenceId}\n` +
-      `User: ${userId}\n` +
-      `Rating: ${rating === 'good' ? 'Positive' : 'Negative'}`, 
-      { parse_mode: 'Markdown' }
-    );
-    logger.info(`Feedback recorded for ${referenceId}: ${rating} by user ${userId}`);
-    ctx.answerCbQuery();
+    return crypto.timingSafeEqual(Buffer.from(calculatedSignature), Buffer.from(signatureHeader));
   } catch (error) {
-    logger.error(`Error processing feedback for ${referenceId}: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ Error saving feedback. Try again later.');
-    ctx.answerCbQuery();
+    logger.error(`Signature comparison error: ${error.message}`);
+    return false;
   }
-});
+}
 // =================== Blockradar Webhook Handler ===================
 app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
   const clientIp = req.clientIp;
