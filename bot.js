@@ -2411,51 +2411,74 @@ async function handlePaycrestWebhook(req, res) {
 
         const userState = await getUserState(tx.userId);
         const payoutMsg = userState.usePidgin
-          ? `✅ *Payout Done*\n\n` +
-            `*Ref ID:* \`${tx.referenceId}\`\n` +
-            `*Amount:* ${tx.amount} ${tx.asset}\n` +
-            `*Payout:* ₦${amountPaid.toLocaleString()}\n` +
-            `*Bank:* ${tx.bankDetails.bankName} (****${tx.bankDetails.accountNumber.slice(-4)})\n` +
-            `*Date:* ${new Date().toLocaleString()}\n` +
-            `*Tx Hash:* \`${txHash}\`\n\n` +
-            `Money don land your account!`
-          : `✅ *Payout Successful*\n\n` +
-            `*Reference ID:* \`${tx.referenceId}\`\n` +
-            `*Amount:* ${tx.amount} ${tx.asset}\n` +
-            `*Payout:* ₦${amountPaid.toLocaleString()}\n` +
-            `*Bank:* ${tx.bankDetails.bankName} (****${tx.bankDetails.accountNumber.slice(-4)})\n` +
-            `*Date:* ${new Date().toLocaleString()}\n` +
-            `*Transaction Hash:* \`${txHash}\`\n\n` +
-            `Funds have been credited to your account!`;
-        await bot.telegram.sendPhoto(tx.userId, { source: PAYOUT_SUCCESS_IMAGE }, { 
-          caption: payoutMsg, 
-          parse_mode: 'Markdown' 
-        });
+           const successMsg = userState.usePidgin
+      ? `✅ *Funds Credited*\n\n` +
+        `*Your Deposit:*\n` +
+        `• *Amount Sent:* ${txData.amount} ${txData.asset}\n` +
+        `• *From Address:* \`${txData.walletAddress}\`\n` +
+        `*Payout Details:*\n` +
+        `• *Amount Paid:* ₦${amountPaid}\n` +
+        `• *Percent Settled:* ${percentSettled}%\n` +
+        `• *Exchange Rate:* ₦${rate} per ${txData.asset}\n` +
+        `• *Network:* ${network}\n` +
+        `• *Transaction Hash:* \`${txHash}\`\n` +
+        `• *Paid To:* ${recipient.institution} (****${recipient.accountIdentifier.slice(-4)})\n` +
+        `• *Receiver:* ${recipient.accountName}\n` +
+        `Money for don enter your bank! Want sabi more about Base for future transaction? Click "📘 Learn About Base" for details!`
+      : `✅ *Funds Credited*\n\n` +
+        `*Your Deposit:*\n` +
+        `• *Amount Sent:* ${txData.amount} ${txData.asset}\n` +
+        `• *From Address:* \`${txData.walletAddress}\`\n` +
+        `*Payout Details:*\n` +
+        `• *Amount Paid:* ₦${amountPaid}\n` +
+        `• *Percent Settled:* ${percentSettled}%\n` +
+        `• *Exchange Rate:* ₦${rate} per ${txData.asset}\n` +
+        `• *Network:* ${network}\n` +
+        `• *Transaction Hash:* \`${txHash}\`\n` +
+        `• *Paid To:* ${recipient.institution} (****${recipient.accountIdentifier.slice(-4)})\n` +
+        `• *Receiver:* ${recipient.accountName}\n` +
+        `Funds are now in your bank! Want to learn more about Base? Click "📘 Learn About Base" for details!`;
+    await bot.telegram.sendPhoto(userId, { source: PAYOUT_SUCCESS_IMAGE }, {
+      caption: successMsg,
+      parse_mode: 'Markdown',
+      reply_markup: Markup.inlineKeyboard([[Markup.button.callback('📘 Learn About Base', 'learn_base')]]).reply_markup
+    });
 
-        // Feedback mechanism
-        const feedbackMsg = userState.usePidgin
-          ? `₦${amountPaid.toLocaleString()} don land your bank. How you see am?`
-          : `₦${amountPaid.toLocaleString()} has reached your bank. How was your experience?`;
-        await bot.telegram.sendMessage(tx.userId, feedbackMsg, {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.inlineKeyboard([
-            [Markup.button.callback('👍 Good', `feedback_${tx.referenceId}_good`),
-             Markup.button.callback('👎 Bad', `feedback_${tx.referenceId}_bad`)]
-          ]).reply_markup,
-        });
-        await txDoc.ref.update({ feedbackRequested: true });
+    if (txData.messageId) {
+      await bot.telegram.editMessageText(userId, txData.messageId, null, successMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([[Markup.button.callback('📘 Learn About Base', 'learn_base')]]).reply_markup
+      });
+      await db.collection('transactions').doc(txDoc.id).update({ status: 'Completed' });
 
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
-          `✅ Payout completed for user ${tx.userId}:\n` +
-          `Ref: ${tx.referenceId}\n` +
-          `Amount: ${tx.amount} ${tx.asset}\n` +
-          `Payout: ₦${amountPaid.toLocaleString()}\n` +
-          `Tx Hash: ${txHash}`, 
-          { parse_mode: 'Markdown' }
-        );
-        logger.info(`Payout completed for ${tx.referenceId}: ${tx.amount} ${tx.asset} -> ₦${amountPaid}`);
-        break;
+      const feedbackMsg = userState.usePidgin
+        ? `₦${amountPaid} don land your bank. How you see am?`
+        : `₦${amountPaid} has reached your bank. How was it?`;
+      await bot.telegram.sendMessage(userId, feedbackMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.callback('👍 Good', `feedback_${txData.referenceId}_good`),
+           Markup.button.callback('👎 Bad', `feedback_${txData.referenceId}_bad`)]
+        ]).reply_markup
+      });
+      await txDoc.ref.update({ feedbackRequested: true });
+    }
 
+    await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: PAYOUT_SUCCESS_IMAGE }, {
+      caption: `✅ *Payout Completed*\n\n*User ID:* ${userId}\n*First Name:* ${userState.firstName || 'Unknown'}\n*Amount:* ${txData.amount} ${txData.asset}\n*Paid:* ₦${amountPaid}\n*Percent Settled:* ${percentSettled}%\n*Sender Fee:* ₦${senderFee}\n*Network Fee:* ₦${networkFee}\n*Tx Hash:* \`${txHash}\`\n*Bank:* ${recipient.institution}\n*Account:* ****${recipient.accountIdentifier.slice(-4)}\n*Receiver:* ${recipient.accountName}`,
+      parse_mode: 'Markdown'
+    });
+
+    res.status(200).send('OK');
+  } catch (error) {
+    logger.error(`Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`);
+    res.status(500).send('Error');
+    await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: ERROR_IMAGE }, {
+      caption: `❗️ Error processing Paycrest webhook for orderId ${orderId}: ${error.message}`,
+      parse_mode: 'Markdown'
+    });
+  }
+}
       case 'order.failed':
       case 'payment_order.expired':
         const failedTxSnapshot = await db.collection('transactions')
@@ -2827,44 +2850,36 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
         await updateUserState(userId, { wallets: userState.wallets });
 
         const depositMsg = userState.usePidgin
-          ? `✅ *Deposit Received*\n\n` +
-            `*Ref ID:* \`${referenceId}\`\n` +
-            `*Amount:* ${amount} ${asset}\n` +
-            `*Payout:* ₦${payout.toLocaleString()}\n` +
-            `*Network:* ${chainRaw}\n` +
-            `*Wallet Address:* \`${walletAddress}\`\n` +
-            `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-            `We dey process your payout now!`
-          : `✅ *Deposit Received*\n\n` +
-            `*Reference ID:* \`${referenceId}\`\n` +
-            `*Amount:* ${amount} ${asset}\n` +
-            `*Payout:* ₦${payout.toLocaleString()}\n` +
-            `*Network:* ${chainRaw}\n` +
-            `*Wallet Address:* \`${walletAddress}\`\n` +
-            `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
-            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-            `Your payout is being processed!`;
-        const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
-          caption: depositMsg,
-          parse_mode: 'Markdown'
-        });
-        await db.collection('transactions').doc(referenceId).update({ messageId: msg.message_id });
+          ? `💰 *Deposit Don Land!*\n\n` +
+          `*Ref ID:* \`${referenceId}\`\n` +
+          `*Amount:* ${amount} ${asset}\n` +
+          `*Rate:* ₦${rate} per ${asset}\n` +
+          `*NGN Conversion Value:* ₦${ngnAmount}\n` +
+          `*Network:* ${chainRaw}\n` +
+          `*Wallet Address:* \`${walletAddress}\`\n` +
+          `*Tx Hash:* \`${transactionHash}\`\n` +
+          `*Date:* ${new Date().toLocaleString()}\n\n` +
+          `We dey process am—cash go reach your bank (${wallet.bank.bankName}, ****${wallet.bank.accountNumber.slice(-4)}) soon!`
+          : `💰 *Deposit Received!*\n\n` +
+          `*Reference ID:* \`${referenceId}\`\n` +
+          `*Amount:* ${amount} ${asset}\n` +
+          `*Rate:* ₦${rate} per ${asset}\n` +
+          `*NGN Conversion Value:* ₦${ngnAmount}\n` +
+          `*Network:* ${chainRaw}\n` +
+          `*Wallet Address:* \`${walletAddress}\`\n` +
+          `*Transaction Hash:* \`${transactionHash}\`\n` +
+          `*Date:* ${new Date().toLocaleString()}\n\n` +
+          `We’re processing it—funds will reach your bank (${wallet.bank.bankName}, ****${wallet.bank.accountNumber.slice(-4)}) soon!`;
+      const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+        caption: depositMsg,
+        parse_mode: 'Markdown'
+      });
+      await transactionRef.update({ messageId: msg.message_id });
 
-        await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
-          caption: `💰 *Deposit Received*\n\n` +
-                   `*User ID:* ${userId}\n` +
-                   `*First Name:* ${userState.firstName || 'Unknown'}\n` +
-                   `*Amount:* ${amount} ${asset}\n` +
-                   `*NGN Amount:* ₦${payout.toLocaleString()}\n` +
-                   `*Chain:* ${chainRaw}\n` +
-                   `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-                   `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-                   `*Ref ID:* ${referenceId}`,
-          parse_mode: 'Markdown'
-        });
+      await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
+        caption: `⚡️ *New Deposit Alert*\n\n*User ID:* ${userId}\n*First Name:* ${userState.firstName || 'Unknown'}\n*Amount:* ${amount} ${asset}\n*Rate:* ₦${rate}\n*NGN Amount:* ₦${ngnAmount}\n*Time:* ${new Date().toLocaleString()}\n*Bank:* ${wallet.bank.bankName}\n*Account:* ****${wallet.bank.accountNumber.slice(-4)}\n*Receiver:* ${wallet.bank.accountName}\n*Chain:* ${chainRaw}\n*Tx Hash:* \`${transactionHash}\`\n*Ref ID:* ${referenceId}`,
+        parse_mode: 'Markdown'
+      });
 
         logger.info(`Deposit processed for ${userId}: ${amount} ${asset} -> ₦${payout}, Ref: ${referenceId}, Tx: ${transactionHash}`);
         res.status(200).send('OK');
