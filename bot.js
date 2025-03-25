@@ -914,26 +914,42 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
 });
 app.use(bodyParser.json());
 
-// =================== Exchange Rate Fetching ===================
 const SUPPORTED_ASSETS = ['USDC', 'USDT'];
 let exchangeRates = { USDC: 0, USDT: 0 };
 
+async function fetchExchangeRate(asset) {
+  try {
+    const response = await axios.get(`${PAYCREST_RATE_API_URL}`, {
+      headers: { 'Authorization': `Bearer ${PAYCREST_API_KEY}`, 'Content-Type': 'application/json' },
+    });
+    if (response.data.status === 'success' && response.data.data) {
+      const rate = parseFloat(response.data.data);
+      if (isNaN(rate)) throw new Error(`Invalid rate data for ${asset}: ${response.data.data}`);
+      return rate;
+    } else {
+      throw new Error(`Failed to fetch rate for ${asset}: ${response.data.message || 'Unknown error'}`);
+    }
+  } catch (error) {
+    logger.error(`Error fetching exchange rate for ${asset} from Paycrest: ${error.message}`);
+    throw error;
+  }
+}
+
 async function fetchExchangeRates() {
   try {
-    const response = await axios.get(PAYCREST_RATE_API_URL, {
-      headers: { Authorization: `Bearer ${PAYCREST_API_KEY}` }
-    });
-    const rates = response.data;
-    await db.collection('rates').doc('current').set({
-      rates,
-      timestamp: new Date().toISOString()
-    });
-    exchangeRates = rates; // Update in-memory rates
-    logger.info('Exchange rates updated successfully from Paycrest');
+    const rates = {};
+    for (const asset of SUPPORTED_ASSETS) {
+      rates[asset] = await fetchExchangeRate(asset);
+    }
+    exchangeRates = rates;
+    logger.info('Exchange rates updated successfully from Paycrest.');
   } catch (error) {
     logger.error(`Error fetching exchange rates from Paycrest: ${error.message}`);
   }
 }
+
+fetchExchangeRates();
+setInterval(fetchExchangeRates, 300000); // 5 minutes
 
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
