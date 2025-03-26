@@ -1730,7 +1730,7 @@ bot.hears('📈 View Current Rates', async (ctx) => {
     : '\nThese rates apply to your deposits and payouts.';
   await ctx.replyWithMarkdown(ratesMessage);
 });
-// BRIDGE AND CASHOUT ()
+
 bot.hears("🌉 Bridge & Cash Out", async (ctx) => {
   await ctx.scene.enter("bridge_and_cashout_scene");
 });
@@ -1746,13 +1746,14 @@ const relaySupportedChains = {
 
 const bridgeAndCashoutScene = new Scenes.WizardScene(
   "bridge_and_cashout_scene",
+  // Step 0: Welcome & Chain Selection
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
     if (userState.wallets.length === 0 || !userState.wallets.some(w => w.bank)) {
       await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ You need wallet and bank linked. Use '💼 Generate Wallet' and '⚙️ Settings'."
-        : "❌ You need a wallet and linked bank. Use '💼 Generate Wallet' and '⚙️ Settings'.");
+        ? "❌ Oga, you need wallet and bank linked o! Use *💼 Generate Wallet* and *⚙️ Settings* first."
+        : "❌ You need a wallet and linked bank first! Try *💼 Generate Wallet* and *⚙️ Settings*.");
       return ctx.scene.leave();
     }
 
@@ -1760,35 +1761,66 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       Markup.button.callback(name, `bridge_chain_${id}`),
     ]);
     await ctx.replyWithMarkdown(userState.usePidgin
-      ? "🌐 Pick the chain wey your token dey:"
-      : "🌐 Select the chain your token is on:",
-      Markup.inlineKeyboard(chainButtons));
+      ? "🌉 *Bridge & Cash Out*\n\nPick the chain wey your token dey:",
+      : "🌉 *Bridge & Cash Out*\n\nSelect the chain your token is on:",
+      Markup.inlineKeyboard([...chainButtons, [Markup.button.callback("❌ Cancel", "cancel")]])
+    );
     return ctx.wizard.next();
   },
+  // Step 1: Token Name or Address
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
-    const chainMatch = ctx.callbackQuery?.data?.match(/bridge_chain_(\d+)/);
-    if (!chainMatch) return;
 
-    ctx.session.bridgeData = { originChainId: Number(chainMatch[1]) }; // Number, not parseInt
-    await ctx.replyWithMarkdown(userState.usePidgin
-      ? "💰 Wetin be the token name (e.g., ETH, DAI)? Or type 'address' to use contract:"
-      : "💰 What’s the token name (e.g., ETH, DAI)? Or type 'address' for contract:");
-    await ctx.answerCbQuery();
-    return ctx.wizard.next();
+    if (ctx.callbackQuery) {
+      const chainMatch = ctx.callbackQuery.data.match(/bridge_chain_(\d+)/);
+      if (chainMatch) {
+        ctx.session.bridgeData = { originChainId: Number(chainMatch[1]) };
+        logger.info(`User ${userId} selected chain: ${ctx.session.bridgeData.originChainId}`);
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "💰 Wetin be the token name (e.g., ETH, DAI)? Or type *address* for contract:"
+          : "💰 What’s the token name (e.g., ETH, DAI)? Or type *address* for contract:",
+          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_chains")]])
+        );
+        await ctx.answerCbQuery();
+        return ctx.wizard.next();
+      }
+      if (ctx.callbackQuery.data === "cancel") {
+        await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
+        delete ctx.session.bridgeData;
+        await ctx.answerCbQuery();
+        return ctx.scene.leave();
+      }
+    }
+    return; // Wait for callback
   },
+  // Step 2: Process Token or Address Input
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery?.data === "back_to_chains") {
+      delete ctx.session.bridgeData;
+      await ctx.answerCbQuery();
+      return ctx.wizard.selectStep(0); // Back to chain selection
+    }
+
     const input = ctx.message?.text?.trim().toLowerCase();
-    if (!input) return; // Wait for text input
+    if (!input) return; // Wait for text
+
+    if (input === "cancel") {
+      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
+      delete ctx.session.bridgeData;
+      return ctx.scene.leave();
+    }
 
     if (input === "address") {
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "📜 Enter the token contract address (e.g., 0x...):"
-        : "📜 Enter the token contract address (e.g., 0x...):");
       ctx.session.bridgeData.awaitingAddress = true;
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "📜 Enter token contract address (e.g., 0x...):"
+        : "📜 Enter token contract address (e.g., 0x...):",
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+      );
       return ctx.wizard.next();
     }
 
@@ -1800,44 +1832,66 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
         verified: true,
         useExternalSearch: true,
         depositAddressOnly: true,
-      }, {
-        headers: { "Content-Type": "application/json" },
-      });
+      }, { headers: { "Content-Type": "application/json" } });
       const tokens = response.data;
       if (!tokens.length) {
         await ctx.replyWithMarkdown(userState.usePidgin
-          ? "❌ Token no found. Try again or type 'address' for contract:"
-          : "❌ Token not found. Try again or type 'address' for contract:");
+          ? "❌ Token no dey! Try again or type *address* for contract:"
+          : "❌ Token not found! Try again or type *address* for contract:",
+          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+        );
         return;
       }
 
       ctx.session.bridgeData.token = tokens[0];
+      logger.info(`Token set for ${userId}: ${JSON.stringify(tokens[0])}`);
       await ctx.replyWithMarkdown(userState.usePidgin
-        ? `💰 How much ${tokens[0].symbol} you wan bridge (e.g., 0.1)?`
-        : `💰 How much ${tokens[0].symbol} do you want to bridge (e.g., 0.1)?`);
+        ? `💰 How much *${tokens[0].symbol}* you wan bridge? (e.g., 0.1):`
+        : `💰 How much *${tokens[0].symbol}* do you want to bridge? (e.g., 0.1):`,
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+      );
       return ctx.wizard.next();
     } catch (error) {
       logger.error(`Token search failed for ${input} on chain ${ctx.session.bridgeData.originChainId}: ${error.message}`);
       await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Trouble finding token. Try again or use 'address'. Ping [@maxcswap] if stuck."
-        : "❌ Error finding token. Try again or use 'address'. Contact [@maxcswap] if issue persists.");
-      return; // Stay in step to retry
+        ? "⚠️ Wahala dey o! Token no load. Try again or use *address*. Tell [@maxcswap] if e no work."
+        : "⚠️ Oops! Token search failed. Try again or use *address*. Contact [@maxcswap] if stuck.",
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+      );
+      return;
     }
   },
+  // Step 3: Amount or Address Processing
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery?.data === "back_to_token") {
+      delete ctx.session.bridgeData.token;
+      delete ctx.session.bridgeData.awaitingAddress;
+      await ctx.answerCbQuery();
+      return ctx.wizard.selectStep(1); // Back to token input
+    }
+
     const input = ctx.message?.text?.trim();
-    if (!input) return; // Wait for text input
+    if (!input) return;
+
+    if (input.toLowerCase() === "cancel") {
+      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
+      delete ctx.session.bridgeData;
+      return ctx.scene.leave();
+    }
 
     if (ctx.session.bridgeData.awaitingAddress) {
+      if (!ethers.utils.isAddress(input)) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "❌ Address no correct! Try again:"
+          : "❌ Invalid address! Try again:",
+          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+        );
+        return;
+      }
       try {
-        if (!ethers.utils.isAddress(input)) {
-          await ctx.replyWithMarkdown(userState.usePidgin
-            ? "❌ Address no valid. Try again:"
-            : "❌ Invalid address. Try again:");
-          return;
-        }
         const response = await axios.post("https://api.relay.link/currencies/v1", {
           defaultList: true,
           chainIds: [ctx.session.bridgeData.originChainId],
@@ -1847,56 +1901,86 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
           includeAllChains: true,
           useExternalSearch: true,
           depositAddressOnly: true,
-        }, {
-          headers: { "Content-Type": "application/json" },
-        });
+        }, { headers: { "Content-Type": "application/json" } });
         const tokens = response.data;
         if (!tokens.length) {
           await ctx.replyWithMarkdown(userState.usePidgin
-            ? "❌ Token no supported. Try another:"
-            : "❌ Token not supported. Try another:");
+            ? "❌ This token no fit work! Try another:"
+            : "❌ This token isn’t supported! Try another:",
+            Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+          );
           return;
         }
         ctx.session.bridgeData.token = tokens[0];
         delete ctx.session.bridgeData.awaitingAddress;
+        logger.info(`Token set for address ${input} for ${userId}: ${JSON.stringify(tokens[0])}`);
         await ctx.replyWithMarkdown(userState.usePidgin
-          ? `💰 How much ${tokens[0].symbol} you wan bridge (e.g., 0.1)?`
-          : `💰 How much ${tokens[0].symbol} do you want to bridge (e.g., 0.1)?`);
+          ? `💰 How much *${tokens[0].symbol}* you wan bridge? (e.g., 0.1):`
+          : `💰 How much *${tokens[0].symbol}* do you want to bridge? (e.g., 0.1):`,
+          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+        );
         return ctx.wizard.next();
       } catch (error) {
-        logger.error(`Address search failed for ${input} on chain ${ctx.session.bridgeData.originChainId}: ${error.message}`);
+        logger.error(`Address search failed for ${input}: ${error.message}`);
         await ctx.replyWithMarkdown(userState.usePidgin
-          ? "❌ Trouble checking address. Try again or ping [@maxcswap]."
-          : "❌ Error checking address. Try again or contact [@maxcswap].");
-        return; // Stay in step to retry
+          ? "⚠️ Address check fail! Try again or ping [@maxcswap]."
+          : "⚠️ Address check failed! Try again or contact [@maxcswap].",
+          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+        );
+        return;
       }
     }
 
     const amount = parseFloat(input);
     if (isNaN(amount) || amount <= 0) {
       await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Amount no correct. Enter valid number:"
-        : "❌ Invalid amount. Enter a valid number:");
+        ? "❌ Amount no make sense! Enter proper number (e.g., 0.1):"
+        : "❌ Invalid amount! Enter a valid number (e.g., 0.1):",
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_amount")]])
+      );
       return;
     }
 
     ctx.session.bridgeData.amount = amount;
     await ctx.replyWithMarkdown(userState.usePidgin
-      ? "🔙 Refund go back to your deposit wallet or you wan set another address? Type 'default' or new address (0x...):"
-      : "🔙 Should refunds go to your deposit wallet, or set a custom address? Type 'default' or an address (0x...):");
+      ? "🔙 Refund go back to your wallet or you wan set another address?\n- Type *default* for wallet\n- Or enter address (0x...):"
+      : "🔙 Should refunds go to your wallet or a custom address?\n- Type *default* for wallet\n- Or enter address (0x...):",
+      Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_amount")]])
+    );
     return ctx.wizard.next();
   },
+  // Step 4: Refund Address & Finalize
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery?.data === "back_to_amount") {
+      delete ctx.session.bridgeData.amount;
+      await ctx.answerCbQuery();
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? `💰 How much *${ctx.session.bridgeData.token.symbol}* you wan bridge? (e.g., 0.1):`
+        : `💰 How much *${ctx.session.bridgeData.token.symbol}* do you want to bridge? (e.g., 0.1):`,
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+      );
+      return ctx.wizard.selectStep(3);
+    }
+
     const refundInput = ctx.message?.text?.trim().toLowerCase();
-    if (!refundInput) return; // Wait for text input
+    if (!refundInput) return;
+
+    if (refundInput === "cancel") {
+      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
+      delete ctx.session.bridgeData;
+      return ctx.scene.leave();
+    }
 
     const refundTo = refundInput === "default" ? userState.wallets[0].address : refundInput;
     if (refundInput !== "default" && !ethers.utils.isAddress(refundTo)) {
       await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Refund address no valid. Try 'default' or correct 0x...:"
-        : "❌ Invalid refund address. Use 'default' or a valid 0x...:");
+        ? "❌ Refund address no correct! Use *default* or valid 0x...:"
+        : "❌ Invalid refund address! Use *default* or a valid 0x...:",
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_refund")]])
+      );
       return;
     }
 
@@ -1921,27 +2005,28 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       });
       const { depositAddress, requestId } = response.data.steps[0];
       const usdcOut = ethers.utils.formatUnits(response.data.details.currencyOut.amount, 6);
-      const ngnOut = (parseFloat(usdcOut) * exchangeRates.USDC).toLocaleString();
+      const ngnOut = (parseFloat(usdcOut) * exchangeRates.USDC).toLocaleString("en-NG", { style: "currency", currency: "NGN" });
 
       const msg = userState.usePidgin
-        ? `🌉 *Bridge & Cash Out Initiated*\n\n` +
+        ? `🌉 *Bridge & Cash Out Ready!*\n\n` +
           `*Token:* ${token.symbol}\n` +
           `*Amount:* ${amount}\n` +
           `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === originChainId)}\n` +
-          `*Expected NGN:* ₦${ngnOut}\n` +
-          `*Deposit To:* \`${depositAddress}\`\n` +
-          `*Refund To:* \`${refundTo}\`\n\n` +
-          `Send your ${token.symbol} here. We go cash you out once it lands!`
-        : `🌉 *Bridge & Cash Out Initiated*\n\n` +
+          `*You Go Get:* ${usdcOut} USDC → ${ngnOut}\n` +
+          `*Send To:* \`${depositAddress}\`\n` +
+          `*Refund Go:* \`${refundTo}\`\n\n` +
+          `Send your *${token.symbol}* to this address sharp sharp! We go cash you out once e land.`
+        : `🌉 *Bridge & Cash Out Ready!*\n\n` +
           `*Token:* ${token.symbol}\n` +
           `*Amount:* ${amount}\n` +
           `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === originChainId)}\n` +
-          `*Expected NGN:* ₦${ngnOut}\n` +
-          `*Deposit Address:* \`${depositAddress}\`\n` +
+          `*You’ll Get:* ${usdcOut} USDC → ${ngnOut}\n` +
+          `*Send To:* \`${depositAddress}\`\n` +
           `*Refund To:* \`${refundTo}\`\n\n` +
-          `Send your ${token.symbol} to this address. We’ll process your payout once it arrives!`;
-
-      await ctx.replyWithMarkdown(msg);
+          `Send your *${token.symbol}* to this address now! We’ll process your payout once it arrives.`;
+      await ctx.replyWithMarkdown(msg, Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Done", "done"), Markup.button.callback("❌ Cancel", "cancel")]
+      ]));
       await db.collection("bridgingIntents").doc(requestId).set({
         userId,
         originChainId,
@@ -1953,21 +2038,53 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
         timestamp: new Date().toISOString(),
       });
 
-      pollRelayStatus(userId, requestId, ctx.chat.id, userState);
+      ctx.session.bridgeData.requestId = requestId; // Store for cancel/done
+      return ctx.wizard.next();
     } catch (error) {
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Bridge no work. Try again or ping [@maxcswap]."
-        : "❌ Bridge failed. Try again or contact [@maxcswap].");
       logger.error(`Relay quote failed for ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Wahala! Bridge no work o. Try again or tell [@maxcswap]."
+        : "❌ Error! Bridge failed. Try again or contact [@maxcswap].",
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Retry", "retry")]])
+      );
+      return;
     }
-    delete ctx.session.bridgeData;
-    return ctx.scene.leave();
+  },
+  // Step 5: Confirmation
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery) {
+      if (ctx.callbackQuery.data === "done") {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "✅ Good! We dey watch for your deposit. Relax, we go ping you soon."
+          : "✅ Great! We’re watching for your deposit. Sit tight, we’ll notify you soon.");
+        pollRelayStatus(userId, ctx.session.bridgeData.requestId, ctx.chat.id, userState);
+        await ctx.answerCbQuery();
+        delete ctx.session.bridgeData;
+        return ctx.scene.leave();
+      }
+      if (ctx.callbackQuery.data === "cancel") {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "👋 Bridge don cancel! No wahala."
+          : "👋 Bridge canceled! No worries.");
+        await db.collection("bridgingIntents").doc(ctx.session.bridgeData.requestId).update({ status: "Canceled" });
+        await ctx.answerCbQuery();
+        delete ctx.session.bridgeData;
+        return ctx.scene.leave();
+      }
+      if (ctx.callbackQuery.data === "retry") {
+        delete ctx.session.bridgeData;
+        await ctx.answerCbQuery();
+        return ctx.wizard.selectStep(0); // Restart
+      }
+    }
+    return; // Wait for callback
   }
 );
 
-
 stage.register(bridgeAndCashoutScene);
-
 
 // =================== Settings Handler ===================
 bot.action('settings_set_refund_address', async (ctx) => {
