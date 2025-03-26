@@ -1761,7 +1761,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       Markup.button.callback(name, `bridge_chain_${id}`),
     ]);
     await ctx.replyWithMarkdown(userState.usePidgin
-      ? "🌉 *Bridge & Cash Out*\n\nPick the chain wey your token dey:",
+      ? "🌉 *Bridge & Cash Out*\n\nPick the chain wey your token dey:"
       : "🌉 *Bridge & Cash Out*\n\nSelect the chain your token is on:",
       Markup.inlineKeyboard([...chainButtons, [Markup.button.callback("❌ Cancel", "cancel")]])
     );
