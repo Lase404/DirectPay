@@ -1732,12 +1732,12 @@ bot.hears('📈 View Current Rates', async (ctx) => {
 });
 // BRIDGE AND CASHOUT ()
 const relaySupportedChains = {
-  Ethereum: 1,
-  Base: 8453,
-  Optimism: 10,
-  Arbitrum: 42161,
-  Polygon: 137,
-  BNB Smart Chain: 56,
+  "Ethereum": "1",
+  "Base": "8453",
+  "Optimism": "10",
+  "Arbitrum": "42161",
+  "Polygon": "137",
+  "BNB Smart Chain": "56"
 };
 bot.hears("🌉 Bridge & Cash Out", async (ctx) => {
   await ctx.scene.enter("bridge_and_cashout_scene");
