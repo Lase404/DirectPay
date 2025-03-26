@@ -1731,10 +1731,6 @@ bot.hears('📈 View Current Rates', async (ctx) => {
   await ctx.replyWithMarkdown(ratesMessage);
 });
 
-const { Scenes, Markup } = require("telegraf");
-
-// ... other imports and setup ...
-
 bot.hears("🌉 Bridge & Cash Out", async (ctx) => {
   await ctx.scene.enter("bridge_and_cashout_scene");
 });
