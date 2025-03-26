@@ -955,9 +955,9 @@ setInterval(fetchExchangeRates, 300000); // 5 minutes
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
-    [walletExists ? '💼 View Wallet' : '💼 Generate Wallet', '⚙️ Settings'],
-    ['💰 Transactions', 'ℹ️ Support', '📘 Learn About Base'],
-    ['📈 View Current Rates'],
+    [walletExists ? "💼 View Wallet" : "💼 Generate Wallet", "⚙️ Settings"],
+    ["💰 Transactions", "🌉 Bridge & Cash Out", "ℹ️ Support"],
+    ["📈 View Current Rates"],
   ]).resize();
 
 const getSettingsMenu = () =>
@@ -1730,6 +1730,279 @@ bot.hears('📈 View Current Rates', async (ctx) => {
     : '\nThese rates apply to your deposits and payouts.';
   await ctx.replyWithMarkdown(ratesMessage);
 });
+// BRIDGE AND CASHOUT ()
+bot.hears("🌉 Bridge & Cash Out", async (ctx) => {
+  await ctx.scene.enter("bridge_and_cashout_scene");
+});
+const bridgeAndCashoutScene = new Scenes.WizardScene(
+  "bridge_and_cashout_scene",
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    if (userState.wallets.length === 0 || !userState.wallets.some(w => w.bank)) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ You need wallet and bank linked. Use '💼 Generate Wallet' and '⚙️ Settings'."
+        : "❌ You need a wallet and linked bank. Use '💼 Generate Wallet' and '⚙️ Settings'.");
+      return ctx.scene.leave();
+    }
+
+    const chainButtons = Object.entries(relaySupportedChains).map(([name, id]) => [
+      Markup.button.callback(name, `bridge_chain_${id}`),
+    ]);
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? "🌐 Pick the chain wey your token dey:"
+      : "🌐 Select the chain your token is on:",
+      Markup.inlineKeyboard(chainButtons));
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const chainMatch = ctx.callbackQuery?.data?.match(/bridge_chain_(\d+)/);
+    if (!chainMatch) return;
+
+    ctx.session.bridgeData = { originChainId: parseInt(chainMatch[1]) };
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? "💰 Wetin be the token name (e.g., ETH, DAI)? Or type 'address' to use contract:"
+      : "💰 What’s the token name (e.g., ETH, DAI)? Or type 'address' for contract:");
+    ctx.answerCbQuery();
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const input = ctx.message.text.trim().toLowerCase();
+
+    if (input === "address") {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "📜 Enter the token contract address (e.g., 0x...):"
+        : "📜 Enter the token contract address (e.g., 0x...):");
+      ctx.session.bridgeData.awaitingAddress = true;
+      return ctx.wizard.next();
+    }
+
+    const response = await axios.post("https://api.relay.link/tokens", {
+      defaultList: true,
+      chainIds: [ctx.session.bridgeData.originChainId],
+      term: input,
+      verified: true,
+      useExternalSearch: true,
+      depositAddressOnly: true,
+    });
+    const tokens = response.data;
+    if (!tokens.length) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Token no found. Try again or type 'address' for contract:"
+        : "❌ Token not found. Try again or type 'address' for contract:");
+      return;
+    }
+
+    ctx.session.bridgeData.token = tokens[0];
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? `💰 How much ${tokens[0].symbol} you wan bridge (e.g., 0.1)?`
+      : `💰 How much ${tokens[0].symbol} do you want to bridge (e.g., 0.1)?`);
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const input = ctx.message.text.trim();
+
+    if (ctx.session.bridgeData.awaitingAddress) {
+      if (!ethers.utils.isAddress(input)) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "❌ Address no valid. Try again:"
+          : "❌ Invalid address. Try again:");
+        return;
+      }
+      const response = await axios.post("https://api.relay.link/tokens", {
+        defaultList: true,
+        chainIds: [ctx.session.bridgeData.originChainId],
+        address: input,
+        verified: true,
+        limit: 123,
+        includeAllChains: true,
+        useExternalSearch: true,
+        depositAddressOnly: true,
+      });
+      const tokens = response.data;
+      if (!tokens.length) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "❌ Token no supported. Try another:"
+          : "❌ Token not supported. Try another:");
+        return;
+      }
+      ctx.session.bridgeData.token = tokens[0];
+      delete ctx.session.bridgeData.awaitingAddress;
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? `💰 How much ${tokens[0].symbol} you wan bridge (e.g., 0.1)?`
+        : `💰 How much ${tokens[0].symbol} do you want to bridge (e.g., 0.1)?`);
+      return ctx.wizard.next();
+    }
+
+    const amount = parseFloat(input);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Amount no correct. Enter valid number:"
+        : "❌ Invalid amount. Enter a valid number:");
+      return;
+    }
+
+    ctx.session.bridgeData.amount = amount;
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? "🔙 Refund go back to your deposit wallet or you wan set another address? Type 'default' or new address (0x...):"
+      : "🔙 Should refunds go to your deposit wallet, or set a custom address? Type 'default' or an address (0x...):");
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const refundInput = ctx.message.text.trim().toLowerCase();
+    const refundTo = refundInput === "default" ? userState.wallets[0].address : refundInput;
+
+    if (refundInput !== "default" && !ethers.utils.isAddress(refundTo)) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Refund address no valid. Try 'default' or correct 0x...:"
+        : "❌ Invalid refund address. Use 'default' or a valid 0x...:");
+      return;
+    }
+
+    const { originChainId, token, amount } = ctx.session.bridgeData;
+    const amountInWei = ethers.utils.parseUnits(amount.toString(), token.decimals).toString();
+    const payload = {
+      user: userState.wallets[0].address,
+      originChainId,
+      originCurrency: token.address,
+      destinationChainId: 8453,
+      destinationCurrency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
+      tradeType: "EXACT_INPUT",
+      recipient: userState.wallets[0].address,
+      amount: amountInWei,
+      useDepositAddress: true,
+      refundTo,
+    };
+
+    try {
+      const response = await axios.post("https://api.relay.link/quote", payload, {
+        headers: { "Content-Type": "application/json" },
+      });
+      const { depositAddress, requestId } = response.data.steps[0];
+      const usdcOut = ethers.utils.formatUnits(response.data.details.currencyOut.amount, 6);
+      const ngnOut = (parseFloat(usdcOut) * exchangeRates.USDC).toLocaleString();
+
+      const msg = userState.usePidgin
+        ? `🌉 *Bridge2Naira Initiated*\n\n` +
+          `*Token:* ${token.symbol}\n` +
+          `*Amount:* ${amount}\n` +
+          `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === originChainId)}\n` +
+          `*Expected NGN:* ₦${ngnOut}\n` +
+          `*Deposit To:* \`${depositAddress}\`\n` +
+          `*Refund To:* \`${refundTo}\`\n\n` +
+          `Send your ${token.symbol} here. We go cash you out once it lands!`
+        : `🌉 *Bridge & Cash Out Initiated*\n\n` +
+          `*Token:* ${token.symbol}\n` +
+          `*Amount:* ${amount}\n` +
+          `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === originChainId)}\n` +
+          `*Expected NGN:* ₦${ngnOut}\n` +
+          `*Deposit Address:* \`${depositAddress}\`\n` +
+          `*Refund To:* \`${refundTo}\`\n\n` +
+          `Send your ${token.symbol} to this address. We’ll process your payout it arrives!`;
+
+      await ctx.replyWithMarkdown(msg);
+      await db.collection("bridgingIntents").doc(requestId).set({
+        userId,
+        originChainId,
+        originToken: token.symbol,
+        amount,
+        destinationAddress: userState.wallets[0].address,
+        depositAddress,
+        status: "Pending",
+        timestamp: new Date().toISOString(),
+      });
+
+      pollRelayStatus(userId, requestId, ctx.chat.id, userState);
+    } catch (error) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Bridge no work. Try again or ping [@maxcswap]."
+        : "❌ Bridge failed. Try again or contact [@maxcswap].");
+      logger.error(`Relay quote failed for ${userId}: ${error.message}`);
+    }
+    delete ctx.session.bridgeData;
+    return ctx.scene.leave();
+  }
+);
+
+async function pollRelayStatus(userId, requestId, chatId, userState) {
+  let attempts = 0;
+  const maxAttempts = 60; // 10 minutes at 10s intervals
+  const interval = setInterval(async () => {
+    attempts++;
+    try {
+      const response = await axios.get(`https://api.relay.link/intents/status/v2?requestId=${requestId}`);
+      const { status, inTxHashes, txHashes } = response.data;
+
+      switch (status) {
+        case "success":
+          clearInterval(interval);
+          await bot.telegram.sendMessage(chatId, userState.usePidgin
+            ? `✅ *Bridge Done!*\n\We dey process your Naira now. Tx: \`${txHashes[0] || "N/A"}\``
+            : `✅ *Bridge Completed!*\n\nProcessing your Naira payout. Tx: \`${txHashes[0] || "N/A"}\``,
+            { parse_mode: "Markdown" });
+          await db.collection("bridgingIntents").doc(requestId).update({ status: "Completed", bridgedTxHash: txHashes[0] });
+          break;
+        case "refund":
+          clearInterval(interval);
+          await bot.telegram.sendMessage(chatId, userState.usePidgin
+            ? `⚠️ *Bridge Refunded*\n\nSomething no work, we send your funds back. Tx: \`${txHashes[0] || "N/A"}\`. Try again or ping [@maxcswap].`
+            : `⚠️ *Bridge Refunded*\n\nSomething went wrong, funds returned. Tx: \`${txHashes[0] || "N/A"}\`. Retry or contact [@maxcswap].`,
+            { parse_mode: "Markdown" });
+          await db.collection("bridgingIntents").doc(requestId).update({ status: "Refunded", refundTxHash: txHashes[0] });
+          break;
+        case "failure":
+          clearInterval(interval);
+          await bot.telegram.sendMessage(chatId, userState.usePidgin
+            ? `❌ *Bridge Fail*\n\nE no work o. Contact [@maxcswap] with Tx: \`${inTxHashes[0] || "N/A"}\`.`
+            : `❌ *Bridge Failed*\n\nIt didn’t work. Contact [@maxcswap] with Tx: \`${inTxHashes[0] || "N/A"}\`.`,
+            { parse_mode: "Markdown" });
+          await db.collection("bridgingIntents").doc(requestId).update({ status: "Failed" });
+          break;
+        case "delayed":
+        case "waiting":
+          if (attempts % 3 === 0) { // Notify every minute
+            await bot.telegram.sendMessage(chatId, userState.usePidgin
+              ? `⏳ *Bridge Still Dey Cook*\n\nE dey take time o. Relax, we go ping you when e ready.`
+              : `⏳ *Bridge In Progress*\n\nIt’s taking a bit. Hang tight, we’ll update you when done.`,
+              { parse_mode: "Markdown" });
+          }
+          break;
+        case "pending":
+          break;
+      }
+
+      if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        await bot.telegram.sendMessage(chatId, userState.usePidgin
+          ? `⏰ *Bridge Timeout*\n\nE don too long. Check status with [@maxcswap] and quote \`${requestId}\`.`
+          : `⏰ *Bridge Timed Out*\n\nIt’s been too long. Check with [@maxcswap] using \`${requestId}\`.`,
+          { parse_mode: "Markdown" });
+        await db.collection("bridgingIntents").doc(requestId).update({ status: "Timeout" });
+      }
+    } catch (error) {
+      logger.error(`Status poll failed for ${requestId}: ${error.message}`);
+      if (attempts >= maxAttempts) {
+        clearInterval(interval);
+        await bot.telegram.sendMessage(chatId, userState.usePidgin
+          ? `❌ *Status Check Fail*\n\nWe no fit check bridge. Tell [@maxcswap] with \`${requestId}\`.`
+          : `❌ *Status Check Failed*\n\nCouldn’t check bridge status. Contact [@maxcswap] with \`${requestId}\`.`,
+          { parse_mode: "Markdown" });
+      }
+    }
+  }, 10000); // 10s interval
+}
+
+// Register scene
+stage.register(bridgeAndCashoutScene);
+
 
 // =================== Settings Handler ===================
 bot.action('settings_set_refund_address', async (ctx) => {
