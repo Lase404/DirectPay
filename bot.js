@@ -1731,6 +1731,10 @@ bot.hears('📈 View Current Rates', async (ctx) => {
   await ctx.replyWithMarkdown(ratesMessage);
 });
 
+const { Scenes, Markup } = require("telegraf");
+
+// ... other imports and setup ...
+
 bot.hears("🌉 Bridge & Cash Out", async (ctx) => {
   await ctx.scene.enter("bridge_and_cashout_scene");
 });
@@ -1743,6 +1747,19 @@ const relaySupportedChains = {
   "Polygon": 137,
   "BNB Smart Chain": 56,
 };
+
+// Simple address validation
+function isValidAddress(address) {
+  const regex = /^0x[a-fA-F0-9]{40}$/;
+  return regex.test(address);
+}
+
+// Convert amount to wei (or token decimals)
+function toWei(amount, decimals = 18) {
+  const [integer, fraction = ""] = amount.toString().split(".");
+  const paddedFraction = fraction.padEnd(decimals, "0").slice(0, decimals);
+  return BigInt(integer + paddedFraction) * BigInt(10 ** (decimals - paddedFraction.length));
+}
 
 const bridgeAndCashoutScene = new Scenes.WizardScene(
   "bridge_and_cashout_scene",
@@ -1761,13 +1778,13 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       Markup.button.callback(name, `bridge_chain_${id}`),
     ]);
     await ctx.replyWithMarkdown(userState.usePidgin
-      ? "🌉 *Bridge & Cash Out*\n\nPick the chain wey your token dey:"
+      ? "🌉 *Bridge & Cash Out*\n\nPick the chain wey your token dey:",
       : "🌉 *Bridge & Cash Out*\n\nSelect the chain your token is on:",
       Markup.inlineKeyboard([...chainButtons, [Markup.button.callback("❌ Cancel", "cancel")]])
     );
     return ctx.wizard.next();
   },
-  // Step 1: Token Name or Address
+  // Step 1: Token Name or Address Prompt
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
@@ -1794,7 +1811,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
     }
     return; // Wait for callback
   },
-  // Step 2: Process Token or Address Input
+  // Step 2: Process Token Name
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
@@ -1802,11 +1819,11 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
     if (ctx.callbackQuery?.data === "back_to_chains") {
       delete ctx.session.bridgeData;
       await ctx.answerCbQuery();
-      return ctx.wizard.selectStep(0); // Back to chain selection
+      return ctx.wizard.selectStep(0);
     }
 
     const input = ctx.message?.text?.trim().toLowerCase();
-    if (!input) return; // Wait for text
+    if (!input) return;
 
     if (input === "cancel") {
       await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
@@ -1834,7 +1851,8 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
         depositAddressOnly: true,
       }, { headers: { "Content-Type": "application/json" } });
       const tokens = response.data;
-      if (!tokens.length) {
+      logger.info(`Token search response for ${input}: ${JSON.stringify(tokens)}`);
+      if (!tokens || !tokens.length) {
         await ctx.replyWithMarkdown(userState.usePidgin
           ? "❌ Token no dey! Try again or type *address* for contract:"
           : "❌ Token not found! Try again or type *address* for contract:",
@@ -1870,7 +1888,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       delete ctx.session.bridgeData.token;
       delete ctx.session.bridgeData.awaitingAddress;
       await ctx.answerCbQuery();
-      return ctx.wizard.selectStep(1); // Back to token input
+      return ctx.wizard.selectStep(1);
     }
 
     const input = ctx.message?.text?.trim();
@@ -1883,7 +1901,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
     }
 
     if (ctx.session.bridgeData.awaitingAddress) {
-      if (!ethers.utils.isAddress(input)) {
+      if (!isValidAddress(input)) {
         await ctx.replyWithMarkdown(userState.usePidgin
           ? "❌ Address no correct! Try again:"
           : "❌ Invalid address! Try again:",
@@ -1903,7 +1921,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
           depositAddressOnly: true,
         }, { headers: { "Content-Type": "application/json" } });
         const tokens = response.data;
-        if (!tokens.length) {
+        if (!tokens || !tokens.length) {
           await ctx.replyWithMarkdown(userState.usePidgin
             ? "❌ This token no fit work! Try another:"
             : "❌ This token isn’t supported! Try another:",
@@ -1975,7 +1993,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
     }
 
     const refundTo = refundInput === "default" ? userState.wallets[0].address : refundInput;
-    if (refundInput !== "default" && !ethers.utils.isAddress(refundTo)) {
+    if (refundInput !== "default" && !isValidAddress(refundTo)) {
       await ctx.replyWithMarkdown(userState.usePidgin
         ? "❌ Refund address no correct! Use *default* or valid 0x...:"
         : "❌ Invalid refund address! Use *default* or a valid 0x...:",
@@ -1985,7 +2003,18 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
     }
 
     const { originChainId, token, amount } = ctx.session.bridgeData;
-    const amountInWei = ethers.utils.parseUnits(amount.toString(), token.decimals).toString();
+    if (!token || !token.decimals) {
+      logger.error(`Token data missing for user ${userId}: ${JSON.stringify(ctx.session.bridgeData)}`);
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Wahala! Token info lost o. Start again from *🌉 Bridge & Cash Out*."
+        : "❌ Error! Token info missing. Restart from *🌉 Bridge & Cash Out*.",
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Retry", "retry")]])
+      );
+      delete ctx.session.bridgeData;
+      return ctx.wizard.selectStep(0);
+    }
+
+    const amountInWei = toWei(amount, token.decimals).toString();
     const payload = {
       user: userState.wallets[0].address,
       originChainId,
@@ -2004,8 +2033,8 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
         headers: { "Content-Type": "application/json" },
       });
       const { depositAddress, requestId } = response.data.steps[0];
-      const usdcOut = ethers.utils.formatUnits(response.data.details.currencyOut.amount, 6);
-      const ngnOut = (parseFloat(usdcOut) * exchangeRates.USDC).toLocaleString("en-NG", { style: "currency", currency: "NGN" });
+      const usdcOut = Number(response.data.details.currencyOut.amount) / 1e6; // Assuming 6 decimals for USDC
+      const ngnOut = (usdcOut * exchangeRates.USDC).toLocaleString("en-NG", { style: "currency", currency: "NGN" });
 
       const msg = userState.usePidgin
         ? `🌉 *Bridge & Cash Out Ready!*\n\n` +
@@ -2038,7 +2067,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
         timestamp: new Date().toISOString(),
       });
 
-      ctx.session.bridgeData.requestId = requestId; // Store for cancel/done
+      ctx.session.bridgeData.requestId = requestId;
       return ctx.wizard.next();
     } catch (error) {
       logger.error(`Relay quote failed for ${userId}: ${error.message}`);
@@ -2077,7 +2106,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       if (ctx.callbackQuery.data === "retry") {
         delete ctx.session.bridgeData;
         await ctx.answerCbQuery();
-        return ctx.wizard.selectStep(0); // Restart
+        return ctx.wizard.selectStep(0);
       }
     }
     return; // Wait for callback
