@@ -1731,18 +1731,19 @@ bot.hears('📈 View Current Rates', async (ctx) => {
   await ctx.replyWithMarkdown(ratesMessage);
 });
 // BRIDGE AND CASHOUT ()
-
 bot.hears("🌉 Bridge & Cash Out", async (ctx) => {
   await ctx.scene.enter("bridge_and_cashout_scene");
 });
+
 const relaySupportedChains = {
-  "Ethereum": "1",
-  "Base": "8453",
-  "Optimism": "10",
-  "Arbitrum": "42161",
-  "Polygon": "137",
-  "BNB Smart Chain": "56"
+  "Ethereum": 1,
+  "Base": 8453,
+  "Optimism": 10,
+  "Arbitrum": 42161,
+  "Polygon": 137,
+  "BNB Smart Chain": 56,
 };
+
 const bridgeAndCashoutScene = new Scenes.WizardScene(
   "bridge_and_cashout_scene",
   async (ctx) => {
@@ -1770,17 +1771,18 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
     const chainMatch = ctx.callbackQuery?.data?.match(/bridge_chain_(\d+)/);
     if (!chainMatch) return;
 
-    ctx.session.bridgeData = { originChainId: parseInt(chainMatch[1]) };
+    ctx.session.bridgeData = { originChainId: Number(chainMatch[1]) }; // Number, not parseInt
     await ctx.replyWithMarkdown(userState.usePidgin
       ? "💰 Wetin be the token name (e.g., ETH, DAI)? Or type 'address' to use contract:"
       : "💰 What’s the token name (e.g., ETH, DAI)? Or type 'address' for contract:");
-    ctx.answerCbQuery();
+    await ctx.answerCbQuery();
     return ctx.wizard.next();
   },
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
-    const input = ctx.message.text.trim().toLowerCase();
+    const input = ctx.message?.text?.trim().toLowerCase();
+    if (!input) return; // Wait for text input
 
     if (input === "address") {
       await ctx.replyWithMarkdown(userState.usePidgin
@@ -1790,63 +1792,84 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       return ctx.wizard.next();
     }
 
-    const response = await axios.post("https://api.relay.link/tokens", {
-      defaultList: true,
-      chainIds: [ctx.session.bridgeData.originChainId],
-      term: input,
-      verified: true,
-      useExternalSearch: true,
-      depositAddressOnly: true,
-    });
-    const tokens = response.data;
-    if (!tokens.length) {
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Token no found. Try again or type 'address' for contract:"
-        : "❌ Token not found. Try again or type 'address' for contract:");
-      return;
-    }
-
-    ctx.session.bridgeData.token = tokens[0];
-    await ctx.replyWithMarkdown(userState.usePidgin
-      ? `💰 How much ${tokens[0].symbol} you wan bridge (e.g., 0.1)?`
-      : `💰 How much ${tokens[0].symbol} do you want to bridge (e.g., 0.1)?`);
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-    const input = ctx.message.text.trim();
-
-    if (ctx.session.bridgeData.awaitingAddress) {
-      if (!ethers.utils.isAddress(input)) {
-        await ctx.replyWithMarkdown(userState.usePidgin
-          ? "❌ Address no valid. Try again:"
-          : "❌ Invalid address. Try again:");
-        return;
-      }
-      const response = await axios.post("https://api.relay.link/tokens", {
+    try {
+      const response = await axios.post("https://api.relay.link/currencies/v1", {
         defaultList: true,
         chainIds: [ctx.session.bridgeData.originChainId],
-        address: input,
+        term: input,
         verified: true,
-        limit: 123,
-        includeAllChains: true,
         useExternalSearch: true,
         depositAddressOnly: true,
+      }, {
+        headers: { "Content-Type": "application/json" },
       });
       const tokens = response.data;
       if (!tokens.length) {
         await ctx.replyWithMarkdown(userState.usePidgin
-          ? "❌ Token no supported. Try another:"
-          : "❌ Token not supported. Try another:");
+          ? "❌ Token no found. Try again or type 'address' for contract:"
+          : "❌ Token not found. Try again or type 'address' for contract:");
         return;
       }
+
       ctx.session.bridgeData.token = tokens[0];
-      delete ctx.session.bridgeData.awaitingAddress;
       await ctx.replyWithMarkdown(userState.usePidgin
         ? `💰 How much ${tokens[0].symbol} you wan bridge (e.g., 0.1)?`
         : `💰 How much ${tokens[0].symbol} do you want to bridge (e.g., 0.1)?`);
       return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Token search failed for ${input} on chain ${ctx.session.bridgeData.originChainId}: ${error.message}`);
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Trouble finding token. Try again or use 'address'. Ping [@maxcswap] if stuck."
+        : "❌ Error finding token. Try again or use 'address'. Contact [@maxcswap] if issue persists.");
+      return; // Stay in step to retry
+    }
+  },
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const input = ctx.message?.text?.trim();
+    if (!input) return; // Wait for text input
+
+    if (ctx.session.bridgeData.awaitingAddress) {
+      try {
+        if (!ethers.utils.isAddress(input)) {
+          await ctx.replyWithMarkdown(userState.usePidgin
+            ? "❌ Address no valid. Try again:"
+            : "❌ Invalid address. Try again:");
+          return;
+        }
+        const response = await axios.post("https://api.relay.link/currencies/v1", {
+          defaultList: true,
+          chainIds: [ctx.session.bridgeData.originChainId],
+          address: input,
+          verified: true,
+          limit: 123,
+          includeAllChains: true,
+          useExternalSearch: true,
+          depositAddressOnly: true,
+        }, {
+          headers: { "Content-Type": "application/json" },
+        });
+        const tokens = response.data;
+        if (!tokens.length) {
+          await ctx.replyWithMarkdown(userState.usePidgin
+            ? "❌ Token no supported. Try another:"
+            : "❌ Token not supported. Try another:");
+          return;
+        }
+        ctx.session.bridgeData.token = tokens[0];
+        delete ctx.session.bridgeData.awaitingAddress;
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? `💰 How much ${tokens[0].symbol} you wan bridge (e.g., 0.1)?`
+          : `💰 How much ${tokens[0].symbol} do you want to bridge (e.g., 0.1)?`);
+        return ctx.wizard.next();
+      } catch (error) {
+        logger.error(`Address search failed for ${input} on chain ${ctx.session.bridgeData.originChainId}: ${error.message}`);
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "❌ Trouble checking address. Try again or ping [@maxcswap]."
+          : "❌ Error checking address. Try again or contact [@maxcswap].");
+        return; // Stay in step to retry
+      }
     }
 
     const amount = parseFloat(input);
@@ -1866,9 +1889,10 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
-    const refundInput = ctx.message.text.trim().toLowerCase();
-    const refundTo = refundInput === "default" ? userState.wallets[0].address : refundInput;
+    const refundInput = ctx.message?.text?.trim().toLowerCase();
+    if (!refundInput) return; // Wait for text input
 
+    const refundTo = refundInput === "default" ? userState.wallets[0].address : refundInput;
     if (refundInput !== "default" && !ethers.utils.isAddress(refundTo)) {
       await ctx.replyWithMarkdown(userState.usePidgin
         ? "❌ Refund address no valid. Try 'default' or correct 0x...:"
@@ -1900,7 +1924,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       const ngnOut = (parseFloat(usdcOut) * exchangeRates.USDC).toLocaleString();
 
       const msg = userState.usePidgin
-        ? `🌉 *Bridge2Naira Initiated*\n\n` +
+        ? `🌉 *Bridge & Cash Out Initiated*\n\n` +
           `*Token:* ${token.symbol}\n` +
           `*Amount:* ${amount}\n` +
           `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === originChainId)}\n` +
@@ -1915,7 +1939,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
           `*Expected NGN:* ₦${ngnOut}\n` +
           `*Deposit Address:* \`${depositAddress}\`\n` +
           `*Refund To:* \`${refundTo}\`\n\n` +
-          `Send your ${token.symbol} to this address. We’ll process your payout it arrives!`;
+          `Send your ${token.symbol} to this address. We’ll process your payout once it arrives!`;
 
       await ctx.replyWithMarkdown(msg);
       await db.collection("bridgingIntents").doc(requestId).set({
@@ -1941,75 +1965,7 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
   }
 );
 
-async function pollRelayStatus(userId, requestId, chatId, userState) {
-  let attempts = 0;
-  const maxAttempts = 60; // 10 minutes at 10s intervals
-  const interval = setInterval(async () => {
-    attempts++;
-    try {
-      const response = await axios.get(`https://api.relay.link/intents/status/v2?requestId=${requestId}`);
-      const { status, inTxHashes, txHashes } = response.data;
 
-      switch (status) {
-        case "success":
-          clearInterval(interval);
-          await bot.telegram.sendMessage(chatId, userState.usePidgin
-            ? `✅ *Bridge Done!*\n\We dey process your Naira now. Tx: \`${txHashes[0] || "N/A"}\``
-            : `✅ *Bridge Completed!*\n\nProcessing your Naira payout. Tx: \`${txHashes[0] || "N/A"}\``,
-            { parse_mode: "Markdown" });
-          await db.collection("bridgingIntents").doc(requestId).update({ status: "Completed", bridgedTxHash: txHashes[0] });
-          break;
-        case "refund":
-          clearInterval(interval);
-          await bot.telegram.sendMessage(chatId, userState.usePidgin
-            ? `⚠️ *Bridge Refunded*\n\nSomething no work, we send your funds back. Tx: \`${txHashes[0] || "N/A"}\`. Try again or ping [@maxcswap].`
-            : `⚠️ *Bridge Refunded*\n\nSomething went wrong, funds returned. Tx: \`${txHashes[0] || "N/A"}\`. Retry or contact [@maxcswap].`,
-            { parse_mode: "Markdown" });
-          await db.collection("bridgingIntents").doc(requestId).update({ status: "Refunded", refundTxHash: txHashes[0] });
-          break;
-        case "failure":
-          clearInterval(interval);
-          await bot.telegram.sendMessage(chatId, userState.usePidgin
-            ? `❌ *Bridge Fail*\n\nE no work o. Contact [@maxcswap] with Tx: \`${inTxHashes[0] || "N/A"}\`.`
-            : `❌ *Bridge Failed*\n\nIt didn’t work. Contact [@maxcswap] with Tx: \`${inTxHashes[0] || "N/A"}\`.`,
-            { parse_mode: "Markdown" });
-          await db.collection("bridgingIntents").doc(requestId).update({ status: "Failed" });
-          break;
-        case "delayed":
-        case "waiting":
-          if (attempts % 3 === 0) { // Notify every minute
-            await bot.telegram.sendMessage(chatId, userState.usePidgin
-              ? `⏳ *Bridge Still Dey Cook*\n\nE dey take time o. Relax, we go ping you when e ready.`
-              : `⏳ *Bridge In Progress*\n\nIt’s taking a bit. Hang tight, we’ll update you when done.`,
-              { parse_mode: "Markdown" });
-          }
-          break;
-        case "pending":
-          break;
-      }
-
-      if (attempts >= maxAttempts) {
-        clearInterval(interval);
-        await bot.telegram.sendMessage(chatId, userState.usePidgin
-          ? `⏰ *Bridge Timeout*\n\nE don too long. Check status with [@maxcswap] and quote \`${requestId}\`.`
-          : `⏰ *Bridge Timed Out*\n\nIt’s been too long. Check with [@maxcswap] using \`${requestId}\`.`,
-          { parse_mode: "Markdown" });
-        await db.collection("bridgingIntents").doc(requestId).update({ status: "Timeout" });
-      }
-    } catch (error) {
-      logger.error(`Status poll failed for ${requestId}: ${error.message}`);
-      if (attempts >= maxAttempts) {
-        clearInterval(interval);
-        await bot.telegram.sendMessage(chatId, userState.usePidgin
-          ? `❌ *Status Check Fail*\n\nWe no fit check bridge. Tell [@maxcswap] with \`${requestId}\`.`
-          : `❌ *Status Check Failed*\n\nCouldn’t check bridge status. Contact [@maxcswap] with \`${requestId}\`.`,
-          { parse_mode: "Markdown" });
-      }
-    }
-  }, 10000); // 10s interval
-}
-
-// Register scene
 stage.register(bridgeAndCashoutScene);
 
 
