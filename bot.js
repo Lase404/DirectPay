@@ -1731,10 +1731,7 @@ bot.hears('📈 View Current Rates', async (ctx) => {
   await ctx.replyWithMarkdown(ratesMessage);
 });
 
-bot.hears("🌉 Bridge & Cash Out", async (ctx) => {
-  await ctx.scene.enter("bridge_and_cashout_scene");
-});
-
+// Supported chains
 const relaySupportedChains = {
   "Ethereum": 1,
   "Base": 8453,
@@ -1744,7 +1741,7 @@ const relaySupportedChains = {
   "BNB Smart Chain": 56,
 };
 
-// Simple address validation
+// Address validation
 function isValidAddress(address) {
   const regex = /^0x[a-fA-F0-9]{40}$/;
   return regex.test(address);
@@ -1757,263 +1754,515 @@ function toWei(amount, decimals = 18) {
   return BigInt(integer + paddedFraction) * BigInt(10 ** (decimals - paddedFraction.length));
 }
 
-const bridgeAndCashoutScene = new Scenes.WizardScene(
-  "bridge_and_cashout_scene",
-  // Step 0: Welcome & Chain Selection
+// Format amount from wei-like units
+function fromWei(amount, decimals = 18) {
+  const amountStr = BigInt(amount).toString();
+  const padded = amountStr.padStart(decimals + 1, "0");
+  const integer = padded.slice(0, -decimals) || "0";
+  const fraction = padded.slice(-decimals).replace(/0+$/, "");
+  return fraction ? `${integer}.${fraction}` : integer;
+}
+
+// Poll execution status every 1 minute
+async function pollExecutionStatus(userId, requestId, chatId, userState, messageId, bot) {
+  const maxAttempts = 30; // 30 minutes (30 * 1 minute)
+  let attempts = 0;
+
+  while (attempts < maxAttempts) {
+    try {
+      const response = await axios.get(`https://api.relay.link/intents/status/v2?requestId=${requestId}`);
+      const { status, inTxHashes, txHashes, time, originChainId, destinationChainId } = response.data;
+      logger.info(`Execution status for ${requestId}: ${status}`);
+
+      if (status === "success") {
+        const successMsg = userState.usePidgin
+          ? `✅ *Sell to Naira Done!*\n\n` +
+            `Your funds don land! Naira don dey your account. Check am!\n` +
+            `*In Tx:* \`${inTxHashes[0] || "N/A"}\`\n` +
+            `*Out Tx:* \`${txHashes[0] || "N/A"}\`\n` +
+            `*Time:* ${new Date(time).toLocaleString()}`
+          : `✅ *Sell to Naira Complete!*\n\n` +
+            `Your funds have been processed! Naira has been sent to your account.\n` +
+            `*In Tx:* \`${inTxHashes[0] || "N/A"}\`\n` +
+            `*Out Tx:* \`${txHashes[0] || "N/A"}\`\n` +
+            `*Time:* ${new Date(time).toLocaleString()}`;
+        await bot.telegram.editMessageText(chatId, messageId, null, successMsg, { parse_mode: "Markdown" });
+        return;
+      }
+
+      if (status === "failure" || status === "refund") {
+        const failureMsg = userState.usePidgin
+          ? `❌ *Sell No Work!*\n\n` +
+            `Wahala dey o! Your transaction no go through. ${status === "refund" ? "We don refund your funds." : "E fail."}\n` +
+            `*In Tx:* \`${inTxHashes[0] || "N/A"}\`\n` +
+            `*Out Tx:* \`${txHashes[0] || "N/A"}\`\n` +
+            `Try again with /sell. If e no work, ping [@maxcswap].`
+          : `❌ *Sell Failed!*\n\n` +
+            `Something went wrong! Your transaction ${status === "refund" ? "has been refunded." : "failed."}\n` +
+            `*In Tx:* \`${inTxHashes[0] || "N/A"}\`\n` +
+            `*Out Tx:* \`${txHashes[0] || "N/A"}\`\n` +
+            `Please try again with /sell. Contact [@maxcswap] if issues persist.`;
+        await bot.telegram.editMessageText(chatId, messageId, null, failureMsg, { parse_mode: "Markdown" });
+        return;
+      }
+
+      if (status === "delayed") {
+        await bot.telegram.sendMessage(chatId, userState.usePidgin
+          ? "⏳ Transaction dey delay o! We still dey watch am. We go check again in 1 minute."
+          : "⏳ Transaction is delayed! We’re still monitoring it. We’ll check again in 1 minute.");
+      }
+    } catch (error) {
+      logger.error(`Status check failed for ${requestId}: ${error.message}`);
+    }
+
+    await new Promise(resolve => setTimeout(resolve, 60000)); // Wait 1 minute (60 seconds)
+    attempts++;
+  }
+
+  const timeoutMsg = userState.usePidgin
+    ? `⏰ *Time Don Pass!*\n\n` +
+      `Your deposit address don expire o! No send funds again to avoid wahala.\n` +
+      `Start new sell with /sell to get fresh quote. If you don send funds already, ping [@maxcswap] sharp sharp!`
+    : `⏰ *Timed Out!*\n\n` +
+      `Your deposit address has expired! Do not send funds to it anymore to avoid loss.\n` +
+      `Please start a new sell with /sell to get a fresh quote. If you’ve already sent funds, contact [@maxcswap] immediately!`;
+  await bot.telegram.editMessageText(chatId, messageId, null, timeoutMsg, { parse_mode: "Markdown" });
+}
+
+// Command handler for /sell
+bot.command("sell", async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  const args = ctx.message.text.split(" ").slice(1); // Remove "/sell"
+
+  if (args.length !== 3) {
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? "📝 *How to Sell to Naira*\n\nUse: `/sell <amount> <token> <chain>`\nE.g., `/sell 0.1 ETH Ethereum`\nOr: `/sell <amount> <address> <chain>`\nE.g., `/sell 0.1 0x123... Ethereum`"
+      : "📝 *How to Sell to Naira*\n\nUse: `/sell <amount> <token> <chain>`\nE.g., `/sell 0.1 ETH Ethereum`\nOr: `/sell <amount> <address> <chain>`\nE.g., `/sell 0.1 0x123... Ethereum`");
+    return;
+  }
+
+  const [amountStr, tokenOrAddress, chainName] = args;
+  const amount = parseFloat(amountStr);
+  if (isNaN(amount) || amount <= 0) {
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? "❌ Amount must be number wey big pass 0! Try again."
+      : "❌ Amount must be a valid number greater than 0! Try again.");
+    return;
+  }
+
+  const chainId = relaySupportedChains[chainName];
+  if (!chainId) {
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? `❌ Chain "${chainName}" no dey o! Use one of these: ${Object.keys(relaySupportedChains).join(", ")}`
+      : `❌ Chain "${chainName}" not supported! Supported chains: ${Object.keys(relaySupportedChains).join(", ")}`);
+    return;
+  }
+
+  ctx.session.sellData = { amount, chainId };
+  if (isValidAddress(tokenOrAddress)) {
+    ctx.session.sellData.tokenAddress = tokenOrAddress;
+    ctx.session.sellData.isAddressInput = true;
+  } else {
+    ctx.session.sellData.tokenSearch = tokenOrAddress;
+  }
+
+  await ctx.replyWithMarkdown(userState.usePidgin
+    ? "🔍 *Step 1: Find Your Token*\n\nWe dey search for your token now..."
+    : "🔍 *Step 1: Find Your Token*\n\nSearching for your token now...");
+  await ctx.scene.enter("sell_to_naira_scene");
+});
+
+// Sell to Naira Scene
+const sellToNairaScene = new Scenes.WizardScene(
+  "sell_to_naira_scene",
+  // Step 0: Process Token Search or Address
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
-    if (userState.wallets.length === 0 || !userState.wallets.some(w => w.bank)) {
+    const { amount, chainId, tokenSearch, tokenAddress, isAddressInput, page = 0 } = ctx.session.sellData;
+
+    if (!userState.wallets.length || !userState.wallets.some(w => w.bank)) {
       await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Oga, you need wallet and bank linked o! Use *💼 Generate Wallet* and *⚙️ Settings* first."
-        : "❌ You need a wallet and linked bank first! Try *💼 Generate Wallet* and *⚙️ Settings*.");
+        ? "❌ Oga, you need wallet and bank linked o! Go *💼 Generate Wallet* and *⚙️ Settings* first."
+        : "❌ You need a wallet and linked bank first! Go to *💼 Generate Wallet* and *⚙️ Settings*.");
+      delete ctx.session.sellData;
       return ctx.scene.leave();
     }
 
-    const chainButtons = Object.entries(relaySupportedChains).map(([name, id]) => [
-      Markup.button.callback(name, `bridge_chain_${id}`),
-    ]);
-    await ctx.replyWithMarkdown(userState.usePidgin
-      ? "🌉 *Bridge & Cash Out*\n\nPick the chain wey your token dey:"
-      : "🌉 *Bridge & Cash Out*\n\nSelect the chain your token is on:",
-      Markup.inlineKeyboard([...chainButtons, [Markup.button.callback("❌ Cancel", "cancel")]])
-    );
-    return ctx.wizard.next();
+    try {
+      const payload = isAddressInput
+        ? {
+            defaultList: true,
+            chainIds: [chainId],
+            address: tokenAddress,
+            verified: true,
+            limit: 123,
+            includeAllChains: true,
+            useExternalSearch: true,
+            depositAddressOnly: true,
+          }
+        : {
+            defaultList: true,
+            chainIds: [chainId],
+            term: tokenSearch,
+            verified: true,
+            limit: 123,
+            includeAllChains: true,
+            useExternalSearch: true,
+            depositAddressOnly: true,
+          };
+
+      const response = await axios.post("https://api.relay.link/currencies/v1", payload, {
+        headers: { "Content-Type": "application/json" },
+      });
+      const tokenGroups = response.data;
+      logger.info(`Token search response for ${isAddressInput ? tokenAddress : tokenSearch}: ${JSON.stringify(tokenGroups)}`);
+
+      let tokens = Array.isArray(tokenGroups) ? tokenGroups.flat() : [];
+      if (!Array.isArray(tokens)) tokens = [tokens];
+      tokens = tokens.filter(t => t && t.symbol && Number.isInteger(t.decimals) && isValidAddress(t.address));
+
+      if (!tokens.length) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? `❌ No token found for "${isAddressInput ? tokenAddress : tokenSearch}" on ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}!\n\n` +
+            `Try again with the token contract address (0x...) or use different token. E.g., /sell ${amount} 0x123... ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}`
+          : `❌ No token found for "${isAddressInput ? tokenAddress : tokenSearch}" on ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}!\n\n` +
+            `Try again with the token contract address (0x...) or use a different token. E.g., /sell ${amount} 0x123... ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}`,
+          Markup.inlineKeyboard([[Markup.button.callback("❌ Cancel", "cancel")]])
+        );
+        ctx.session.sellData.awaitingAddress = true;
+        return ctx.wizard.next();
+      }
+
+      if (tokens.length === 1) {
+        ctx.session.sellData.token = tokens[0];
+        logger.info(`Token set for ${userId}: ${JSON.stringify(tokens[0])}`);
+        return ctx.wizard.selectStep(2);
+      }
+
+      const perPage = 5;
+      const tokenSlice = tokens.slice(page * perPage, (page + 1) * perPage);
+      const tokenList = tokenSlice.map((t, i) => `${page * perPage + i + 1}. *${t.symbol}* - ${t.name} (${t.address.slice(0, 6)}...${t.address.slice(-4)})`).join("\n");
+      const buttons = [];
+      if (page > 0) buttons.push(Markup.button.callback("⬅️ Prev", `page_${page - 1}`));
+      if ((page + 1) * perPage < tokens.length) buttons.push(Markup.button.callback("Next ➡️", `page_${page + 1}`));
+      buttons.push(Markup.button.callback("❌ Cancel", "cancel"));
+
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? `🔍 *Step 1: Find Your Token*\n\n` +
+          `We find plenty tokens (${page * perPage + 1}-${Math.min((page + 1) * perPage, tokens.length)} of ${tokens.length}):\n\n${tokenList}\n\n` +
+          `Pick number (e.g., ${page * perPage + 1}) or type the contract address (0x...):`
+        : `🔍 *Step 1: Find Your Token*\n\n` +
+          `Multiple tokens found (${page * perPage + 1}-${Math.min((page + 1) * perPage, tokens.length)} of ${tokens.length}):\n\n${tokenList}\n\n` +
+          `Select by number (e.g., ${page * perPage + 1}) or enter contract address (0x...):`,
+        Markup.inlineKeyboard([buttons])
+      );
+      ctx.session.sellData.tokenOptions = tokens;
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Token search failed for ${userId}: ${error.message}`);
+      let errorMsg = userState.usePidgin
+        ? "⚠️ Wahala dey o! We no fit find token. Try again or ping [@maxcswap]."
+        : "⚠️ Oops! Token search failed. Try again or contact [@maxcswap].";
+      if (error.response?.data) errorMsg += ` Reason: ${error.response.data.message || "Unknown"}`;
+      await ctx.replyWithMarkdown(errorMsg, Markup.inlineKeyboard([[Markup.button.callback("🔙 Retry", "retry")]]));
+      return;
+    }
   },
-  // Step 1: Token Name or Address Prompt
+  // Step 1: Handle Multiple Tokens or Address Input
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
 
     if (ctx.callbackQuery) {
-      const chainMatch = ctx.callbackQuery.data.match(/bridge_chain_(\d+)/);
-      if (chainMatch) {
-        ctx.session.bridgeData = { originChainId: Number(chainMatch[1]) };
-        logger.info(`User ${userId} selected chain: ${ctx.session.bridgeData.originChainId}`);
-        await ctx.replyWithMarkdown(userState.usePidgin
-          ? "💰 Wetin be the token name (e.g., ETH, DAI)? Or type *address* for contract:"
-          : "💰 What’s the token name (e.g., ETH, DAI)? Or type *address* for contract:",
-          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_chains")]])
-        );
-        await ctx.answerCbQuery();
-        return ctx.wizard.next();
-      }
       if (ctx.callbackQuery.data === "cancel") {
-        await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
-        delete ctx.session.bridgeData;
+        await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Sell don cancel!" : "👋 Sell canceled!");
+        delete ctx.session.sellData;
         await ctx.answerCbQuery();
         return ctx.scene.leave();
       }
-    }
-    return; // Wait for callback
-  },
-  // Step 2: Process Token Name
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-
-    if (ctx.callbackQuery?.data === "back_to_chains") {
-      delete ctx.session.bridgeData;
-      await ctx.answerCbQuery();
-      return ctx.wizard.selectStep(0);
-    }
-
-    const input = ctx.message?.text?.trim().toLowerCase();
-    if (!input) return;
-
-    if (input === "cancel") {
-      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
-      delete ctx.session.bridgeData;
-      return ctx.scene.leave();
-    }
-
-    if (input === "address") {
-      ctx.session.bridgeData.awaitingAddress = true;
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "📜 Enter token contract address (e.g., 0x...):"
-        : "📜 Enter token contract address (e.g., 0x...):",
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-      );
-      return ctx.wizard.next();
-    }
-
-    try {
-      const response = await axios.post("https://api.relay.link/currencies/v1", {
-        defaultList: true,
-        chainIds: [ctx.session.bridgeData.originChainId],
-        term: input,
-        verified: true,
-        useExternalSearch: true,
-        depositAddressOnly: true,
-      }, { headers: { "Content-Type": "application/json" } });
-      const tokens = response.data;
-      logger.info(`Token search response for ${input}: ${JSON.stringify(tokens)}`);
-      if (!tokens || !tokens.length) {
-        await ctx.replyWithMarkdown(userState.usePidgin
-          ? "❌ Token no dey! Try again or type *address* for contract:"
-          : "❌ Token not found! Try again or type *address* for contract:",
-          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-        );
-        return;
+      if (ctx.callbackQuery.data === "retry") {
+        await ctx.answerCbQuery();
+        return ctx.wizard.selectStep(0);
       }
-
-      ctx.session.bridgeData.token = tokens[0];
-      logger.info(`Token set for ${userId}: ${JSON.stringify(tokens[0])}`);
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? `💰 How much *${tokens[0].symbol}* you wan bridge? (e.g., 0.1):`
-        : `💰 How much *${tokens[0].symbol}* do you want to bridge? (e.g., 0.1):`,
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-      );
-      return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Token search failed for ${input} on chain ${ctx.session.bridgeData.originChainId}: ${error.message}`);
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "⚠️ Wahala dey o! Token no load. Try again or use *address*. Tell [@maxcswap] if e no work."
-        : "⚠️ Oops! Token search failed. Try again or use *address*. Contact [@maxcswap] if stuck.",
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-      );
-      return;
-    }
-  },
-  // Step 3: Amount or Address Processing
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-
-    if (ctx.callbackQuery?.data === "back_to_token") {
-      delete ctx.session.bridgeData.token;
-      delete ctx.session.bridgeData.awaitingAddress;
-      await ctx.answerCbQuery();
-      return ctx.wizard.selectStep(1);
+      if (ctx.callbackQuery.data.startsWith("page_")) {
+        ctx.session.sellData.page = parseInt(ctx.callbackQuery.data.split("_")[1]);
+        await ctx.answerCbQuery();
+        return ctx.wizard.selectStep(0);
+      }
     }
 
     const input = ctx.message?.text?.trim();
     if (!input) return;
 
     if (input.toLowerCase() === "cancel") {
-      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
-      delete ctx.session.bridgeData;
+      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Sell don cancel!" : "👋 Sell canceled!");
+      delete ctx.session.sellData;
       return ctx.scene.leave();
     }
 
-    if (ctx.session.bridgeData.awaitingAddress) {
+    if (ctx.session.sellData.awaitingAddress) {
       if (!isValidAddress(input)) {
         await ctx.replyWithMarkdown(userState.usePidgin
-          ? "❌ Address no correct! Try again:"
-          : "❌ Invalid address! Try again:",
-          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
+          ? "❌ Address no correct! Enter valid 0x...:"
+          : "❌ Invalid address! Enter a valid 0x...:",
+          Markup.inlineKeyboard([[Markup.button.callback("❌ Cancel", "cancel")]])
         );
         return;
       }
-      try {
-        const response = await axios.post("https://api.relay.link/currencies/v1", {
-          defaultList: true,
-          chainIds: [ctx.session.bridgeData.originChainId],
-          address: input,
-          verified: true,
-          limit: 123,
-          includeAllChains: true,
-          useExternalSearch: true,
-          depositAddressOnly: true,
-        }, { headers: { "Content-Type": "application/json" } });
-        const tokens = response.data;
-        if (!tokens || !tokens.length) {
-          await ctx.replyWithMarkdown(userState.usePidgin
-            ? "❌ This token no fit work! Try another:"
-            : "❌ This token isn’t supported! Try another:",
-            Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-          );
-          return;
-        }
-        ctx.session.bridgeData.token = tokens[0];
-        delete ctx.session.bridgeData.awaitingAddress;
-        logger.info(`Token set for address ${input} for ${userId}: ${JSON.stringify(tokens[0])}`);
-        await ctx.replyWithMarkdown(userState.usePidgin
-          ? `💰 How much *${tokens[0].symbol}* you wan bridge? (e.g., 0.1):`
-          : `💰 How much *${tokens[0].symbol}* do you want to bridge? (e.g., 0.1):`,
-          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-        );
-        return ctx.wizard.next();
-      } catch (error) {
-        logger.error(`Address search failed for ${input}: ${error.message}`);
-        await ctx.replyWithMarkdown(userState.usePidgin
-          ? "⚠️ Address check fail! Try again or ping [@maxcswap]."
-          : "⚠️ Address check failed! Try again or contact [@maxcswap].",
-          Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-        );
-        return;
-      }
+      ctx.session.sellData.tokenAddress = input;
+      ctx.session.sellData.isAddressInput = true;
+      delete ctx.session.sellData.awaitingAddress;
+      return ctx.wizard.selectStep(0);
     }
 
-    const amount = parseFloat(input);
-    if (isNaN(amount) || amount <= 0) {
+    const tokenOptions = ctx.session.sellData.tokenOptions;
+    if (!tokenOptions) {
+      await ctx.replyWithMarkdown(userState.usePidgin ? "❌ Something scatter! Start again with /sell." : "❌ Something went wrong! Restart with /sell.");
+      delete ctx.session.sellData;
+      return ctx.scene.leave();
+    }
+
+    if (!ctx.session.sellData.attempts) ctx.session.sellData.attempts = 0;
+    if (ctx.session.sellData.attempts++ > 3) {
       await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Amount no make sense! Enter proper number (e.g., 0.1):"
-        : "❌ Invalid amount! Enter a valid number (e.g., 0.1):",
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_amount")]])
-      );
-      return;
+        ? "❌ Too many wrong tries o! Start again with /sell."
+        : "❌ Too many invalid attempts! Restart with /sell.");
+      delete ctx.session.sellData;
+      return ctx.scene.leave();
     }
 
-    ctx.session.bridgeData.amount = amount;
+    if (isValidAddress(input)) {
+      const token = tokenOptions.find(t => t.address.toLowerCase() === input.toLowerCase());
+      if (!token) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "❌ That address no dey in the list! Try again:"
+          : "❌ That address isn’t in the list! Try again:",
+          Markup.inlineKeyboard([[Markup.button.callback("❌ Cancel", "cancel")]])
+        );
+        return;
+      }
+      ctx.session.sellData.token = token;
+    } else {
+      const choice = parseInt(input) - 1;
+      if (isNaN(choice) || choice < 0 || choice >= tokenOptions.length) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "❌ Pick correct number or valid address (0x...)!"
+          : "❌ Choose a valid number or enter a contract address (0x...)!",
+          Markup.inlineKeyboard([[Markup.button.callback("❌ Cancel", "cancel")]])
+        );
+        return;
+      }
+      ctx.session.sellData.token = tokenOptions[choice];
+    }
+
+    logger.info(`Token selected for ${userId}: ${JSON.stringify(ctx.session.sellData.token)}`);
+    delete ctx.session.sellData.tokenOptions;
+    delete ctx.session.sellData.attempts;
+    return ctx.wizard.next();
+  },
+  // Step 2: Confirmation Before Quote
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const { amount, chainId, token } = ctx.session.sellData;
+
+    if (!token || !token.decimals || !token.symbol || !token.address) {
+      logger.error(`Token data missing for ${userId}: ${JSON.stringify(ctx.session.sellData)}`);
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? "❌ Wahala! Token info no complete o. Start again with /sell."
+        : "❌ Error! Token info incomplete. Restart with /sell.",
+        Markup.inlineKeyboard([[Markup.button.callback("🔙 Retry", "retry")]])
+      );
+      delete ctx.session.sellData;
+      return ctx.scene.leave();
+    }
+
     await ctx.replyWithMarkdown(userState.usePidgin
-      ? "🔙 Refund go back to your wallet or you wan set another address?\n- Type *default* for wallet\n- Or enter address (0x...):"
-      : "🔙 Should refunds go to your wallet or a custom address?\n- Type *default* for wallet\n- Or enter address (0x...):",
-      Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_amount")]])
+      ? `✅ *Step 2: Confirm Your Sell*\n\n` +
+        `- Sell: ${amount} ${token.symbol} (${token.name})\n` +
+        `- Chain: ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}\n\n` +
+        `E correct?`
+      : `✅ *Step 2: Confirm Your Sell*\n\n` +
+        `- Sell: ${amount} ${token.symbol} (${token.name})\n` +
+        `- Chain: ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}\n\n` +
+        `Is this correct?`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Yes", "confirm_token"), Markup.button.callback("❌ No", "retry")]
+      ])
     );
     return ctx.wizard.next();
   },
-  // Step 4: Refund Address & Finalize
+  // Step 3: Confirm Refund Address
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
 
-    if (ctx.callbackQuery?.data === "back_to_amount") {
-      delete ctx.session.bridgeData.amount;
+    if (ctx.callbackQuery) {
+      if (ctx.callbackQuery.data === "confirm_token") {
+        await ctx.answerCbQuery();
+        const defaultRefundAddress = userState.wallets[0].address;
+        ctx.session.sellData.refundAddress = defaultRefundAddress;
+
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? `💼 *Step 3: Set Refund Wallet*\n\n` +
+            `If anything scatter (like double send), we go refund your funds to this address:\n` +
+            `\`${defaultRefundAddress}\`\n\n` +
+            `E okay? Or type new address (0x...) if you wan change am:`
+          : `💼 *Step 3: Set Refund Wallet*\n\n` +
+            `If something goes wrong (e.g., double send), we’ll refund your funds to this address:\n` +
+            `\`${defaultRefundAddress}\`\n\n` +
+            `Is this okay? Or type a new address (0x...) to change it:`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback("✅ Use This", "confirm_refund"), Markup.button.callback("❌ Change", "change_refund")],
+            [Markup.button.callback("🔙 Back", "retry"), Markup.button.callback("❌ Cancel", "cancel")]
+          ])
+        );
+        return ctx.wizard.next();
+      }
+      if (ctx.callbackQuery.data === "retry") {
+        delete ctx.session.sellData.token;
+        await ctx.answerCbQuery();
+        return ctx.wizard.selectStep(0);
+      }
       await ctx.answerCbQuery();
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? `💰 How much *${ctx.session.bridgeData.token.symbol}* you wan bridge? (e.g., 0.1):`
-        : `💰 How much *${ctx.session.bridgeData.token.symbol}* do you want to bridge? (e.g., 0.1):`,
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_token")]])
-      );
-      return ctx.wizard.selectStep(3);
+      return;
     }
+  },
+  // Step 4: Handle Refund Address Input and Advice
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
 
-    const refundInput = ctx.message?.text?.trim().toLowerCase();
-    if (!refundInput) return;
-
-    if (refundInput === "cancel") {
-      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Bridge don cancel!" : "👋 Bridge canceled!");
-      delete ctx.session.bridgeData;
-      return ctx.scene.leave();
-    }
-
-    const refundTo = refundInput === "default" ? userState.wallets[0].address : refundInput;
-    if (refundInput !== "default" && !isValidAddress(refundTo)) {
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Refund address no correct! Use *default* or valid 0x...:"
-        : "❌ Invalid refund address! Use *default* or a valid 0x...:",
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Back", "back_to_refund")]])
-      );
+    if (ctx.callbackQuery) {
+      if (ctx.callbackQuery.data === "confirm_refund") {
+        await ctx.answerCbQuery();
+        // Advise user about using a personal wallet
+        const defaultWallet = userState.wallets[0].address;
+        const isDefaultWallet = ctx.session.sellData.refundAddress === defaultWallet;
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? `📢 *Advice on Refund Wallet*\n\n` +
+            `You choose this refund address: \`${ctx.session.sellData.refundAddress}\`\n` +
+            `${isDefaultWallet ? "⚠️ Oga, this na your bot wallet o! If we refund to this address, e fit take 2-3 business days before you fit recover your assets. We recommend say make you use your personal wallet instead." : "✅ Good! This no be bot wallet, so refund go quick if anything scatter."}\n\n` +
+            `You wan change am?`
+          : `📢 *Advice on Refund Wallet*\n\n` +
+            `You’ve selected this refund address: \`${ctx.session.sellData.refundAddress}\`\n` +
+            `${isDefaultWallet ? "⚠️ Warning: This is your bot wallet! If we refund to this address, it may take 2-3 business days for asset recovery. We recommend using a personal wallet instead." : "✅ Great! This isn’t a bot wallet, so refunds will be faster if needed."}\n\n` +
+            `Would you like to change it?`,
+          Markup.inlineKeyboard([
+            [Markup.button.callback("✅ Keep It", "keep_refund"), Markup.button.callback("❌ Change", "change_refund_again")],
+            [Markup.button.callback("🔙 Back", "retry"), Markup.button.callback("❌ Cancel", "cancel")]
+          ])
+        );
+        return ctx.wizard.next();
+      }
+      if (ctx.callbackQuery.data === "change_refund") {
+        await ctx.answerCbQuery();
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "📝 *Enter New Refund Address*\n\nType the wallet address (0x...) wey we go send refund to if anything scatter:"
+          : "📝 *Enter New Refund Address*\n\nEnter the wallet address (0x...) where we should send refunds if something goes wrong:");
+        ctx.session.sellData.awaitingRefundAddress = true;
+        return;
+      }
+      if (ctx.callbackQuery.data === "retry") {
+        delete ctx.session.sellData.token;
+        await ctx.answerCbQuery();
+        return ctx.wizard.selectStep(0);
+      }
+      if (ctx.callbackQuery.data === "cancel") {
+        await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Sell don cancel!" : "👋 Sell canceled!");
+        delete ctx.session.sellData;
+        await ctx.answerCbQuery();
+        return ctx.scene.leave();
+      }
+      await ctx.answerCbQuery();
       return;
     }
 
-    const { originChainId, token, amount } = ctx.session.bridgeData;
-    if (!token || !token.decimals) {
-      logger.error(`Token data missing for user ${userId}: ${JSON.stringify(ctx.session.bridgeData)}`);
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Wahala! Token info lost o. Start again from *🌉 Bridge & Cash Out*."
-        : "❌ Error! Token info missing. Restart from *🌉 Bridge & Cash Out*.",
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Retry", "retry")]])
-      );
-      delete ctx.session.bridgeData;
-      return ctx.wizard.selectStep(0);
+    const input = ctx.message?.text?.trim();
+    if (!input) return;
+
+    if (input.toLowerCase() === "cancel") {
+      await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Sell don cancel!" : "👋 Sell canceled!");
+      delete ctx.session.sellData;
+      return ctx.scene.leave();
     }
+
+    if (ctx.session.sellData.awaitingRefundAddress) {
+      if (!isValidAddress(input)) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "❌ Address no correct! Enter valid 0x...:"
+          : "❌ Invalid address! Enter a valid 0x...:",
+          Markup.inlineKeyboard([[Markup.button.callback("❌ Cancel", "cancel")]])
+        );
+        return;
+      }
+      ctx.session.sellData.refundAddress = input;
+      delete ctx.session.sellData.awaitingRefundAddress;
+      // Advise user after input
+      const defaultWallet = userState.wallets[0].address;
+      const isDefaultWallet = ctx.session.sellData.refundAddress === defaultWallet;
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? `📢 *Advice on Refund Wallet*\n\n` +
+          `You choose this refund address: \`${ctx.session.sellData.refundAddress}\`\n` +
+          `${isDefaultWallet ? "⚠️ Oga, this na your bot wallet o! If we refund to this address, e fit take 2-3 business days before you fit recover your assets. We recommend say make you use your personal wallet instead." : "✅ Good! This no be bot wallet, so refund go quick if anything scatter."}\n\n` +
+          `You wan change am?`
+        : `📢 *Advice on Refund Wallet*\n\n` +
+          `You’ve selected this refund address: \`${ctx.session.sellData.refundAddress}\`\n` +
+          `${isDefaultWallet ? "⚠️ Warning: This is your bot wallet! If we refund to this address, it may take 2-3 business days for asset recovery. We recommend using a personal wallet instead." : "✅ Great! This isn’t a bot wallet, so refunds will be faster if needed."}\n\n` +
+          `Would you like to change it?`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback("✅ Keep It", "keep_refund"), Markup.button.callback("❌ Change", "change_refund_again")],
+          [Markup.button.callback("🔙 Back", "retry"), Markup.button.callback("❌ Cancel", "cancel")]
+        ])
+      );
+      return ctx.wizard.next();
+    }
+  },
+  // Step 5: Handle Refund Address Confirmation
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery) {
+      if (ctx.callbackQuery.data === "keep_refund") {
+        await ctx.answerCbQuery();
+        return ctx.wizard.next(); // Proceed to fetch quote
+      }
+      if (ctx.callbackQuery.data === "change_refund_again") {
+        await ctx.answerCbQuery();
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? "📝 *Enter New Refund Address*\n\nType the wallet address (0x...) wey we go send refund to if anything scatter:"
+          : "📝 *Enter New Refund Address*\n\nEnter the wallet address (0x...) where we should send refunds if something goes wrong:");
+        ctx.session.sellData.awaitingRefundAddress = true;
+        return;
+      }
+      if (ctx.callbackQuery.data === "retry") {
+        delete ctx.session.sellData.token;
+        await ctx.answerCbQuery();
+        return ctx.wizard.selectStep(0);
+      }
+      if (ctx.callbackQuery.data === "cancel") {
+        await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Sell don cancel!" : "👋 Sell canceled!");
+        delete ctx.session.sellData;
+        await ctx.answerCbQuery();
+        return ctx.scene.leave();
+      }
+      await ctx.answerCbQuery();
+      return;
+    }
+  },
+  // Step 6: Fetch Quote and Show Fees/Impact
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const { amount, chainId, token, refundAddress } = ctx.session.sellData;
 
     const amountInWei = toWei(amount, token.decimals).toString();
     const payload = {
       user: userState.wallets[0].address,
-      originChainId,
+      originChainId: chainId,
       originCurrency: token.address,
       destinationChainId: 8453,
       destinationCurrency: "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913",
@@ -2021,95 +2270,182 @@ const bridgeAndCashoutScene = new Scenes.WizardScene(
       recipient: userState.wallets[0].address,
       amount: amountInWei,
       useDepositAddress: true,
-      refundTo,
+      refundTo: refundAddress,
     };
 
     try {
       const response = await axios.post("https://api.relay.link/quote", payload, {
         headers: { "Content-Type": "application/json" },
       });
-      const { depositAddress, requestId } = response.data.steps[0];
-      const usdcOut = Number(response.data.details.currencyOut.amount) / 1e6; // Assuming 6 decimals for USDC
-      const ngnOut = (usdcOut * exchangeRates.USDC).toLocaleString("en-NG", { style: "currency", currency: "NGN" });
+      const quote = response.data;
+      logger.info(`Quote response for ${userId}: ${JSON.stringify(quote)}`);
 
-      const msg = userState.usePidgin
-        ? `🌉 *Bridge & Cash Out Ready!*\n\n` +
-          `*Token:* ${token.symbol}\n` +
-          `*Amount:* ${amount}\n` +
-          `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === originChainId)}\n` +
-          `*You Go Get:* ${usdcOut} USDC → ${ngnOut}\n` +
-          `*Send To:* \`${depositAddress}\`\n` +
-          `*Refund Go:* \`${refundTo}\`\n\n` +
-          `Send your *${token.symbol}* to this address sharp sharp! We go cash you out once e land.`
-        : `🌉 *Bridge & Cash Out Ready!*\n\n` +
-          `*Token:* ${token.symbol}\n` +
-          `*Amount:* ${amount}\n` +
-          `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === originChainId)}\n` +
-          `*You’ll Get:* ${usdcOut} USDC → ${ngnOut}\n` +
-          `*Send To:* \`${depositAddress}\`\n` +
-          `*Refund To:* \`${refundTo}\`\n\n` +
-          `Send your *${token.symbol}* to this address now! We’ll process your payout once it arrives.`;
-      await ctx.replyWithMarkdown(msg, Markup.inlineKeyboard([
-        [Markup.button.callback("✅ Done", "done"), Markup.button.callback("❌ Cancel", "cancel")]
-      ]));
-      await db.collection("bridgingIntents").doc(requestId).set({
-        userId,
-        originChainId,
-        originToken: token.symbol,
-        amount,
-        destinationAddress: userState.wallets[0].address,
+      const { depositAddress, requestId } = quote.steps[0];
+      const usdcOut = fromWei(quote.details.currencyOut.amount, quote.details.currencyOut.currency.decimals);
+      const ngnOut = (parseFloat(usdcOut) * exchangeRates.USDC).toLocaleString("en-NG", { style: "currency", currency: "NGN" });
+      const gasFeeEth = fromWei(quote.fees.gas.amount, 18);
+      const relayerFeeUsdc = fromWei(quote.fees.relayer.amount, 6);
+      const totalImpactPercent = quote.details.totalImpact.percent;
+      const rate = quote.details.rate;
+
+      // Calculate total fee in USDC
+      const gasFeeUsd = parseFloat(quote.fees.gas.amountUsd || "0");
+      const relayerFeeUsd = parseFloat(quote.fees.relayer.amountUsd || "0");
+      const totalFeeUsd = (gasFeeUsd + relayerFeeUsd).toFixed(6);
+
+      // Store quote details for the next step
+      ctx.session.sellData.quoteDetails = {
         depositAddress,
-        status: "Pending",
-        timestamp: new Date().toISOString(),
-      });
+        requestId,
+        usdcOut,
+        ngnOut,
+        gasFeeEth,
+        relayerFeeUsdc,
+        totalImpactPercent,
+        rate,
+        totalFeeUsd,
+      };
 
-      ctx.session.bridgeData.requestId = requestId;
+      let msg = userState.usePidgin
+        ? `💸 *Step 4: Review Your Quote*\n\n` +
+          `*You Dey Sell:* ${amount} ${token.symbol} (${token.name})\n` +
+          `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}\n` +
+          `*You Go Get:* ${ngnOut} (${usdcOut} USDC)\n` +
+          `*Rate:* 1 ${token.symbol} = ${rate} USDC\n` +
+          `*Total Fee:* ${totalFeeUsd} USDC (Gas: ${gasFeeEth} ETH, Relayer: ${relayerFeeUsdc} USDC)\n` +
+          `*Impact:* ${totalImpactPercent}%\n\n` +
+          `You wan continue with this sell?`
+        : `💸 *Step 4: Review Your Quote*\n\n` +
+          `*You’re Selling:* ${amount} ${token.symbol} (${token.name})\n` +
+          `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}\n` +
+          `*You’ll Get:* ${ngnOut} (${usdcOut} USDC)\n` +
+          `*Rate:* 1 ${token.symbol} = ${rate} USDC\n` +
+          `*Total Fee:* ${totalFeeUsd} USDC (Gas: ${gasFeeEth} ETH, Relayer: ${relayerFeeUsdc} USDC)\n` +
+          `*Impact:* ${totalImpactPercent}%\n\n` +
+          `Would you like to proceed with this sell?`;
+
+      if (Math.abs(parseFloat(totalImpactPercent)) > 10) {
+        msg += userState.usePidgin ? "\n⚠️ Oga, this rate no too good o! Check well." : "\n⚠️ Warning: High impact on this rate!";
+      }
+
+      await ctx.replyWithMarkdown(msg, Markup.inlineKeyboard([
+        [Markup.button.callback("✅ Proceed", "proceed"), Markup.button.callback("❌ Cancel", "cancel")]
+      ]));
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Relay quote failed for ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown(userState.usePidgin
-        ? "❌ Wahala! Bridge no work o. Try again or tell [@maxcswap]."
-        : "❌ Error! Bridge failed. Try again or contact [@maxcswap].",
-        Markup.inlineKeyboard([[Markup.button.callback("🔙 Retry", "retry")]])
-      );
+      logger.error(`Sell quote failed for ${userId}: ${error.message}`);
+      let errorMsg = userState.usePidgin
+        ? "❌ Wahala! We no fit get quote o. Try again or ping [@maxcswap]."
+        : "❌ Error! Couldn’t generate quote. Try again or contact [@maxcswap].";
+      if (error.response?.data) errorMsg += ` Reason: ${error.response.data.message || "Unknown"}`;
+      await ctx.replyWithMarkdown(errorMsg, Markup.inlineKeyboard([[Markup.button.callback("🔙 Retry", "retry")]]));
       return;
     }
   },
-  // Step 5: Confirmation
+  // Step 7: Show Final Deposit Details
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery) {
+      if (ctx.callbackQuery.data === "proceed") {
+        await ctx.answerCbQuery();
+        const { amount, chainId, token, refundAddress, quoteDetails } = ctx.session.sellData;
+        const { depositAddress, requestId, usdcOut, ngnOut, gasFeeEth, relayerFeeUsdc, totalImpactPercent, rate, totalFeeUsd } = quoteDetails;
+
+        let msg = userState.usePidgin
+          ? `💸 *Step 5: Deposit Details*\n\n` +
+            `*You Dey Sell:* ${amount} ${token.symbol} (${token.name})\n` +
+            `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}\n` +
+            `*You Go Get:* ${ngnOut} (${usdcOut} USDC)\n` +
+            `*Rate:* 1 ${token.symbol} = ${rate} USDC\n` +
+            `*Total Fee:* ${totalFeeUsd} USDC\n` +
+            `*Refund To:* \`${refundAddress}\`\n` +
+            `*Send To:* \`${depositAddress}\`\n\n` +
+            `📢 *Important Notice:*\n` +
+            `- If you send to wrong chain, we go try bridge am to the right chain, but new quote go dey generated.\n` +
+            `- If you send twice, second one go refund to your wallet.\n` +
+            `- If you send more or less, we go adjust the quote for you.\n\n` +
+            `Send your *${token.symbol}* to this address sharp sharp! We go send Naira once e land.`
+          : `💸 *Step 5: Deposit Details*\n\n` +
+            `*You’re Selling:* ${amount} ${token.symbol} (${token.name})\n` +
+            `*Chain:* ${Object.keys(relaySupportedChains).find(k => relaySupportedChains[k] === chainId)}\n` +
+            `*You’ll Get:* ${ngnOut} (${usdcOut} USDC)\n` +
+            `*Rate:* 1 ${token.symbol} = ${rate} USDC\n` +
+            `*Total Fee:* ${totalFeeUsd} USDC\n` +
+            `*Refund To:* \`${refundAddress}\`\n` +
+            `*Send To:* \`${depositAddress}\`\n\n` +
+            `📢 *Important Notice:*\n` +
+            `- If you deposit to the wrong chain, we’ll attempt to bridge it to the correct chain, but a new quote will be generated.\n` +
+            `- If you deposit twice, the second deposit will be refunded to your wallet.\n` +
+            `- If you deposit more or less, we’ll adjust the quote accordingly.\n\n` +
+            `Send your *${token.symbol}* to this address now! We’ll send Naira once it arrives.`;
+
+        const sentMessage = await ctx.replyWithMarkdown(msg, Markup.inlineKeyboard([
+          [Markup.button.callback("✅ Done", "done"), Markup.button.callback("❌ Cancel", "cancel")]
+        ]));
+        await db.collection("sellIntents").doc(requestId).set({
+          userId,
+          chatId: ctx.chat.id,
+          messageId: sentMessage.message_id,
+          chainId,
+          tokenSymbol: token.symbol,
+          tokenName: token.name,
+          amount,
+          depositAddress,
+          usdcOut,
+          ngnOut,
+          status: "Pending",
+          timestamp: new Date().toISOString(),
+        });
+
+        ctx.session.sellData.requestId = requestId;
+        return ctx.wizard.next();
+      }
+      if (ctx.callbackQuery.data === "cancel") {
+        await ctx.replyWithMarkdown(userState.usePidgin ? "👋 Sell don cancel!" : "👋 Sell canceled!");
+        delete ctx.session.sellData;
+        await ctx.answerCbQuery();
+        return ctx.scene.leave();
+      }
+      await ctx.answerCbQuery();
+      return;
+    }
+  },
+  // Step 8: Confirmation and Polling
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
 
     if (ctx.callbackQuery) {
       if (ctx.callbackQuery.data === "done") {
+        const intent = await db.collection("sellIntents").doc(ctx.session.sellData.requestId).get();
+        const intentData = intent.data();
         await ctx.replyWithMarkdown(userState.usePidgin
-          ? "✅ Good! We dey watch for your deposit. Relax, we go ping you soon."
-          : "✅ Great! We’re watching for your deposit. Sit tight, we’ll notify you soon.");
-        pollRelayStatus(userId, ctx.session.bridgeData.requestId, ctx.chat.id, userState);
+          ? "✅ *Step 6: We Dey Watch Your Deposit*\n\n" +
+            "We go check every minute and let you know once your funds land. Relax small!"
+          : "✅ *Step 6: Monitoring Your Deposit*\n\n" +
+            "We’ll check every minute and notify you once your funds are received. Please wait!");
+        pollExecutionStatus(userId, ctx.session.sellData.requestId, ctx.chat.id, userState, intentData.messageId, ctx.bot);
         await ctx.answerCbQuery();
-        delete ctx.session.bridgeData;
+        delete ctx.session.sellData;
         return ctx.scene.leave();
       }
       if (ctx.callbackQuery.data === "cancel") {
         await ctx.replyWithMarkdown(userState.usePidgin
-          ? "👋 Bridge don cancel! No wahala."
-          : "👋 Bridge canceled! No worries.");
-        await db.collection("bridgingIntents").doc(ctx.session.bridgeData.requestId).update({ status: "Canceled" });
+          ? "👋 Sell don cancel! No wahala."
+          : "👋 Sell canceled! No worries.");
+        await db.collection("sellIntents").doc(ctx.session.sellData.requestId).update({ status: "Canceled" });
         await ctx.answerCbQuery();
-        delete ctx.session.bridgeData;
+        delete ctx.session.sellData;
         return ctx.scene.leave();
       }
-      if (ctx.callbackQuery.data === "retry") {
-        delete ctx.session.bridgeData;
-        await ctx.answerCbQuery();
-        return ctx.wizard.selectStep(0);
-      }
     }
-    return; // Wait for callback
+    return;
   }
 );
 
-stage.register(bridgeAndCashoutScene);
+stage.register(sellToNairaScene);
 
 // =================== Settings Handler ===================
 bot.action('settings_set_refund_address', async (ctx) => {
