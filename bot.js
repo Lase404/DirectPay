@@ -2763,7 +2763,6 @@ async function handlePaycrestWebhook(req, res) {
     res.status(500).send('Internal server error');
   }
 }
-
 // =================== Blockradar Webhook Handler ===================
 app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
   const clientIp = req.clientIp;
@@ -2795,229 +2794,374 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
 
     // Handle different event types
     switch (eventType) {
-      // Replace the existing 'deposit.success' case with this corrected version
-case 'deposit.success':
-  const existingTxSnapshot = await db.collection('transactions').where('transactionHash', '==', transactionHash).get();
-  if (!existingTxSnapshot.empty) {
-    logger.info(`Transaction with hash ${transactionHash} already exists from IP: ${clientIp}. Skipping.`);
-    return res.status(200).send('OK');
-  }
+      case 'deposit.success':
+        const existingTxSnapshot = await db.collection('transactions').where('transactionHash', '==', transactionHash).get();
+        if (!existingTxSnapshot.empty) {
+          logger.info(`Transaction with hash ${transactionHash} already exists from IP: ${clientIp}. Skipping.`);
+          return res.status(200).send('OK');
+        }
 
-  const usersSnapshot = await db.collection('users').where('walletAddresses', 'array-contains', walletAddress).get();
-  if (usersSnapshot.empty) {
-    logger.warn(`No user found for wallet ${walletAddress} from IP: ${clientIp}`);
-    await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: ERROR_IMAGE }, {
-      caption: `⚠️ No user found for wallet address: \`${walletAddress}\` from IP: ${clientIp}`,
-      parse_mode: 'Markdown'
-    });
-    return res.status(200).send('OK');
-  }
-
-  const userDoc = usersSnapshot.docs[0];
-  const userId = userDoc.id;
-  const userState = userDoc.data();
-  const wallet = userState.wallets.find((w) => w.address === walletAddress);
-  const referenceId = event.data.reference || generateReferenceId();
-
-  if (!SUPPORTED_ASSETS.includes(asset)) {
-    const errorMsg = userState.usePidgin
-      ? `⚠️ You send ${asset}, but we only take USDC/USDT.\n\nContact [@maxcswap](https://t.me/maxcswap) for help!`
-      : `⚠️ Unsupported asset deposited: ${asset}.\n\nOnly USDC/USDT supported. Contact [@maxcswap](https://t.me/maxcswap) for assistance!`;
-    await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
-      caption: errorMsg,
-      parse_mode: 'Markdown'
-    });
-    await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: ERROR_IMAGE }, {
-      caption: `⚠️ User ${userId} deposited unsupported asset: ${amount} ${asset} on ${chainRaw} (Tx Hash: \`${transactionHash}\`)`,
-      parse_mode: 'Markdown'
-    });
-    return res.status(200).send('OK');
-  }
-
-  const rate = exchangeRates[asset];
-  if (!rate) {
-    await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
-      caption: userState.usePidgin
-        ? `❌ Rate for ${asset} no dey. Contact [@maxcswap](https://t.me/maxcswap)!`
-        : `❌ Rate for ${asset} unavailable. Contact [@maxcswap](https://t.me/maxcswap)!`,
-      parse_mode: 'Markdown'
-    });
-    throw new Error(`Exchange rate for ${asset} not available.`);
-  }
-
-  const payout = calculatePayout(asset, amount);
-
-  if (!wallet || !wallet.bank) {
-    const noBankMsg = userState.usePidgin
-      ? `⚠️ *Deposit Received - Bank Not Linked*\n\n` +
-        `*Ref ID:* \`${referenceId}\`\n` +
-        `*Amount:* ${amount} ${asset}\n` +
-        `*Potential Payout:* ₦${payout.toLocaleString()}\n` +
-        `*Network:* ${chainRaw}\n` +
-        `*Wallet Address:* \`${walletAddress}\`\n` +
-        `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-        `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-        `Deposit don land but no bank linked yet. Go "⚙️ Settings" to add bank and cash out ₦${payout.toLocaleString()}!`
-      : `⚠️ *Deposit Received - Bank Not Linked*\n\n` +
-        `*Reference ID:* \`${referenceId}\`\n` +
-        `*Amount:* ${amount} ${asset}\n` +
-        `*Potential Payout:* ₦${payout.toLocaleString()}\n` +
-        `*Network:* ${chainRaw}\n` +
-        `*Wallet Address:* \`${walletAddress}\`\n` +
-        `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
-        `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-        `Deposit received, but no bank account is linked. Visit "⚙️ Settings" to add a bank and withdraw ₦${payout.toLocaleString()}!`;
-    await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
-      caption: noBankMsg,
-      parse_mode: 'Markdown'
-    });
-
-    await db.collection('transactions').doc(referenceId).set({
-      userId,
-      walletAddress,
-      chain: chainRaw,
-      amount,
-      asset,
-      transactionHash,
-      referenceId,
-      payout,
-      timestamp: new Date(event.data.createdAt).toISOString(),
-      status: 'Pending'
-    });
-
-    await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
-      caption: `⚠️ *Deposit - No Bank Linked*\n\n` +
-               `*User ID:* ${userId}\n` +
-               `*First Name:* ${userState.firstName || 'Unknown'}\n` +
-               `*Amount:* ${amount} ${asset}\n` +
-               `*NGN Amount:* ₦${payout.toLocaleString()}\n` +
-               `*Chain:* ${chainRaw}\n` +
-               `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-               `*Ref ID:* ${referenceId}`,
-      parse_mode: 'Markdown'
-    });
-
-    logger.info(`Deposit processed for ${userId} (no bank): ${amount} ${asset} -> ₦${payout}, Ref: ${referenceId}, Tx: ${transactionHash}`);
-    return res.status(200).send('OK');
-  }
-
-  // Handle Paycrest order creation with proper error catching
-  let order;
-  try {
-    order = await createPaycrestOrder(userId, payout, asset, chain, wallet.bank, wallet.address);
-  } catch (paycrestError) {
-    logger.error(`Failed to create Paycrest order for user ${userId}: ${paycrestError.message}`);
-    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
-      `❗️ Failed to create Paycrest order for user ${userId}: ${paycrestError.message}\n` +
-      `Deposit: ${amount} ${asset}, Ref: ${referenceId}`,
-      { parse_mode: 'Markdown' }
-    );
-    await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
-      caption: userState.usePidgin
-        ? `⚠️ We see your ${amount} ${asset} deposit (Ref: \`${referenceId}\`), but payout don jam issue.\n\nContact [@maxcswap](https://t.me/maxcswap) sharp sharp!`
-        : `⚠️ We received your ${amount} ${asset} deposit (Ref: \`${referenceId}\`), but there’s an issue processing the payout.\n\nContact [@maxcswap](https://t.me/maxcswap) for help!`,
-      parse_mode: 'Markdown'
-    });
-  }
-
-  // Prepare transaction data, only include paycrestOrderId if order exists
-  const transactionData = {
-    userId,
-    walletAddress,
-    chain: chainRaw,
-    amount,
-    asset,
-    transactionHash,
-    referenceId,
-    bankDetails: wallet.bank,
-    payout,
-    timestamp: new Date(event.data.createdAt).toISOString(),
-    status: 'Pending',
-    messageId: null
-  };
-  if (order && order.orderId) {
-    transactionData.paycrestOrderId = order.orderId;
-  }
-
-  await db.collection('transactions').doc(referenceId).set(transactionData);
-
-  userState.wallets = userState.wallets.map(w => 
-    w.address === walletAddress ? { ...w, totalDeposits: (w.totalDeposits || 0) + amount } : w
-  );
-  await updateUserState(userId, { wallets: userState.wallets });
-
-  const depositMsg = userState.usePidgin
-    ? `✅ *Deposit Received*\n\n` +
-      `*Ref ID:* \`${referenceId}\`\n` +
-      `*Amount:* ${amount} ${asset}\n` +
-      `*Payout:* ₦${payout.toLocaleString()}\n` +
-      `*Network:* ${chainRaw}\n` +
-      `*Wallet Address:* \`${walletAddress}\`\n` +
-      `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-      `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-      `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-      (order ? `We dey process your payout now!` : `Payout dey delayed, we dey fix am!`)
-    : `✅ *Deposit Received*\n\n` +
-      `*Reference ID:* \`${referenceId}\`\n` +
-      `*Amount:* ${amount} ${asset}\n` +
-      `*Payout:* ₦${payout.toLocaleString()}\n` +
-      `*Network:* ${chainRaw}\n` +
-      `*Wallet Address:* \`${walletAddress}\`\n` +
-      `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
-      `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-      `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
-      (order ? `Your payout is being processed!` : `Payout delayed, we’re working on it!`);
-  const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
-    caption: depositMsg,
-    parse_mode: 'Markdown'
-  });
-  await db.collection('transactions').doc(referenceId).update({ messageId: msg.message_id });
-
-  await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
-    caption: `💰 *Deposit Received*\n\n` +
-             `*User ID:* ${userId}\n` +
-             `*First Name:* ${userState.firstName || 'Unknown'}\n` +
-             `*Amount:* ${amount} ${asset}\n` +
-             `*NGN Amount:* ₦${payout.toLocaleString()}\n` +
-             `*Chain:* ${chainRaw}\n` +
-             `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
-             `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
-             `*Ref ID:* ${referenceId}` +
-             (order ? `` : `\n*Note:* Payout creation failed, check logs.`),
-    parse_mode: 'Markdown'
-  });
-
-  logger.info(`Deposit processed for ${userId}: ${amount} ${asset} -> ₦${payout}, Ref: ${referenceId}, Tx: ${transactionHash}`);
-  res.status(200).send('OK');
-  break;
-        
-
-      case 'deposit.swept.success':
-        const sweptTxSnapshot = await db.collection('transactions').where('transactionHash', '==', transactionHash).get();
-        if (sweptTxSnapshot.empty) {
-          logger.error(`No transaction found for hash ${transactionHash}`);
+        const usersSnapshot = await db.collection('users').where('walletAddresses', 'array-contains', walletAddress).get();
+        if (usersSnapshot.empty) {
+          logger.warn(`No user found for wallet ${walletAddress} from IP: ${clientIp}`);
           await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: ERROR_IMAGE }, {
-            caption: `⚠️ No transaction for hash: \`${transactionHash}\``,
+            caption: `⚠️ No user found for wallet address: \`${walletAddress}\` from IP: ${clientIp}`,
             parse_mode: 'Markdown'
           });
           return res.status(200).send('OK');
         }
 
-        const sweptTxDoc = sweptTxSnapshot.docs[0];
-        const sweptTxData = sweptTxDoc.data();
-        if (sweptTxData.status !== 'Received') {
-          logger.info(`Transaction ${transactionHash} already processed: ${sweptTxData.status}`);
+        const userDoc = usersSnapshot.docs[0];
+        const userId = userDoc.id;
+        const userState = userDoc.data();
+        const wallet = userState.wallets.find((w) => w.address === walletAddress);
+        const referenceId = event.data.reference || generateReferenceId();
+
+        if (!SUPPORTED_ASSETS.includes(asset)) {
+          const errorMsg = userState.usePidgin
+            ? `⚠️ You send ${asset}, but we only take USDC/USDT.\n\nContact [@maxcswap](https://t.me/maxcswap) for help!`
+            : `⚠️ Unsupported asset deposited: ${asset}.\n\nOnly USDC/USDT supported. Contact [@maxcswap](https://t.me/maxcswap) for assistance!`;
+          await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
+            caption: errorMsg,
+            parse_mode: 'Markdown'
+          });
+          await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: ERROR_IMAGE }, {
+            caption: `⚠️ User ${userId} deposited unsupported asset: ${amount} ${asset} on ${chainRaw} (Tx Hash: \`${transactionHash}\`)`,
+            parse_mode: 'Markdown'
+          });
           return res.status(200).send('OK');
         }
 
-        await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
-          `🔄 *Deposit Swept*\n\n` +
-          `*User:* ${sweptTxData.userId}\n` +
-          `*Ref ID:* ${sweptTxData.referenceId}\n` +
-          `*Amount:* ${amount} ${asset}\n` +
-          `*Status:* Pending`, 
-          { parse_mode: 'Markdown' }
+        const rate = exchangeRates[asset];
+        if (!rate) {
+          await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
+            caption: userState.usePidgin
+              ? `❌ Rate for ${asset} no dey. Contact [@maxcswap](https://t.me/maxcswap)!`
+              : `❌ Rate for ${asset} unavailable. Contact [@maxcswap](https://t.me/maxcswap)!`,
+            parse_mode: 'Markdown'
+          });
+          throw new Error(`Exchange rate for ${asset} not available.`);
+        }
+
+        const payout = calculatePayout(asset, amount);
+
+        if (!wallet || !wallet.bank) {
+          const noBankMsg = userState.usePidgin
+            ? `⚠️ *Deposit Received - Bank Not Linked*\n\n` +
+              `*Ref ID:* \`${referenceId}\`\n` +
+              `*Amount:* ${amount} ${asset}\n` +
+              `*Potential Payout:* ₦${payout.toLocaleString()}\n` +
+              `*Network:* ${chainRaw}\n` +
+              `*Wallet Address:* \`${walletAddress}\`\n` +
+              `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
+              `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+              `Deposit don land but no bank linked yet. Go "⚙️ Settings" to add bank and cash out ₦${payout.toLocaleString()}!`
+            : `⚠️ *Deposit Received - Bank Not Linked*\n\n` +
+              `*Reference ID:* \`${referenceId}\`\n` +
+              `*Amount:* ${amount} ${asset}\n` +
+              `*Potential Payout:* ₦${payout.toLocaleString()}\n` +
+              `*Network:* ${chainRaw}\n` +
+              `*Wallet Address:* \`${walletAddress}\`\n` +
+              `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
+              `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+              `Deposit received, but no bank account is linked. Visit "⚙️ Settings" to add a bank and withdraw ₦${payout.toLocaleString()}!`;
+          await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+            caption: noBankMsg,
+            parse_mode: 'Markdown'
+          });
+
+          await db.collection('transactions').doc(referenceId).set({
+            userId,
+            walletAddress,
+            chain: chainRaw,
+            amount,
+            asset,
+            transactionHash,
+            referenceId,
+            payout,
+            timestamp: new Date(event.data.createdAt).toISOString(),
+            status: 'Pending'
+          });
+
+          await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
+            caption: `⚠️ *Deposit - No Bank Linked*\n\n` +
+                     `*User ID:* ${userId}\n` +
+                     `*First Name:* ${userState.firstName || 'Unknown'}\n` +
+                     `*Amount:* ${amount} ${asset}\n` +
+                     `*NGN Amount:* ₦${payout.toLocaleString()}\n` +
+                     `*Chain:* ${chainRaw}\n` +
+                     `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
+                     `*Ref ID:* ${referenceId}`,
+            parse_mode: 'Markdown'
+          });
+
+          logger.info(`Deposit processed for ${userId} (no bank): ${amount} ${asset} -> ₦${payout}, Ref: ${referenceId}, Tx: ${transactionHash}`);
+          return res.status(200).send('OK');
+        }
+
+        // Handle Paycrest order creation with proper error catching
+        let order;
+        try {
+          order = await createPaycrestOrder(userId, payout, asset, chain, wallet.bank, wallet.address);
+        } catch (paycrestError) {
+          logger.error(`Failed to create Paycrest order for user ${userId}: ${paycrestError.message}`);
+          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
+            `❗️ Failed to create Paycrest order for user ${userId}: ${paycrestError.message}\n` +
+            `Deposit: ${amount} ${asset}, Ref: ${referenceId}`,
+            { parse_mode: 'Markdown' }
+          );
+          await bot.telegram.sendPhoto(userId, { source: ERROR_IMAGE }, {
+            caption: userState.usePidgin
+              ? `⚠️ We see your ${amount} ${asset} deposit (Ref: \`${referenceId}\`), but payout don jam issue.\n\nContact [@maxcswap](https://t.me/maxcswap) sharp sharp!`
+              : `⚠️ We received your ${amount} ${asset} deposit (Ref: \`${referenceId}\`), but there’s an issue processing the payout.\n\nContact [@maxcswap](https://t.me/maxcswap) for help!`,
+            parse_mode: 'Markdown'
+          });
+        }
+
+        // Prepare transaction data, only include paycrestOrderId if order exists
+        const transactionData = {
+          userId,
+          walletAddress,
+          chain: chainRaw,
+          amount,
+          asset,
+          transactionHash,
+          referenceId,
+          bankDetails: wallet.bank,
+          payout,
+          timestamp: new Date(event.data.createdAt).toISOString(),
+          status: 'Pending',
+          messageId: null
+        };
+        if (order && order.orderId) {
+          transactionData.paycrestOrderId = order.orderId;
+        }
+
+        await db.collection('transactions').doc(referenceId).set(transactionData);
+
+        userState.wallets = userState.wallets.map(w => 
+          w.address === walletAddress ? { ...w, totalDeposits: (w.totalDeposits || 0) + amount } : w
         );
+        await updateUserState(userId, { wallets: userState.wallets });
+
+        const depositMsg = userState.usePidgin
+          ? `✅ *Deposit Received*\n\n` +
+            `*Ref ID:* \`${referenceId}\`\n` +
+            `*Amount:* ${amount} ${asset}\n` +
+            `*Payout:* ₦${payout.toLocaleString()}\n` +
+            `*Network:* ${chainRaw}\n` +
+            `*Wallet Address:* \`${walletAddress}\`\n` +
+            `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
+            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
+            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+            (order ? `We dey process your payout now!` : `Payout dey delayed, we dey fix am!`)
+          : `✅ *Deposit Received*\n\n` +
+            `*Reference ID:* \`${referenceId}\`\n` +
+            `*Amount:* ${amount} ${asset}\n` +
+            `*Payout:* ₦${payout.toLocaleString()}\n` +
+            `*Network:* ${chainRaw}\n` +
+            `*Wallet Address:* \`${walletAddress}\`\n` +
+            `*Transaction Hash:* [${transactionHash}](${explorerUrl})\n` +
+            `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
+            `*Date:* ${new Date(event.data.createdAt).toLocaleString()}\n\n` +
+            (order ? `Your payout is being processed!` : `Payout delayed, we’re working on it!`);
+        const msg = await bot.telegram.sendPhoto(userId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+          caption: depositMsg,
+          parse_mode: 'Markdown'
+        });
+        await db.collection('transactions').doc(referenceId).update({ messageId: msg.message_id });
+
+        await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
+          caption: `💰 *Deposit Received*\n\n` +
+                   `*User ID:* ${userId}\n` +
+                   `*First Name:* ${userState.firstName || 'Unknown'}\n` +
+                   `*Amount:* ${amount} ${asset}\n` +
+                   `*NGN Amount:* ₦${payout.toLocaleString()}\n` +
+                   `*Chain:* ${chainRaw}\n` +
+                   `*Tx Hash:* [${transactionHash}](${explorerUrl})\n` +
+                   `*Bank:* ${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})\n` +
+                   `*Ref ID:* ${referenceId}` +
+                   (order ? `` : `\n*Note:* Payout creation failed, check logs.`),
+          parse_mode: 'Markdown'
+        });
+
+        logger.info(`Deposit processed for ${userId}: ${amount} ${asset} -> ₦${payout}, Ref: ${referenceId}, Tx: ${transactionHash}`);
+        res.status(200).send('OK');
+        break;
+
+      case 'deposit.swept.success':
+        const sweptAmount = parseFloat(event.data?.assetSweptAmount) || 0; // USDC amount swept
+        const sweptTxHash = event.data?.assetSweptHash || transactionHash;
+        const sweptExplorerUrl = `${chainData.explorer}${sweptTxHash}`;
+        const sweptReferenceId = event.data?.reference || generateReferenceId();
+        const refundAddress = walletAddress; // Refund to user's deposit wallet
+
+        const sweptTxSnapshot = await db.collection('transactions')
+          .where('transactionHash', '==', sweptTxHash)
+          .get();
+        if (!sweptTxSnapshot.empty) {
+          logger.info(`Swept transaction with hash ${sweptTxHash} already exists from IP: ${clientIp}. Skipping.`);
+          return res.status(200).send('OK');
+        }
+
+        const sweptUsersSnapshot = await db.collection('users')
+          .where('walletAddresses', 'array-contains', walletAddress)
+          .get();
+        if (sweptUsersSnapshot.empty) {
+          logger.warn(`No user found for wallet ${walletAddress} from IP: ${clientIp}`);
+          await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: ERROR_IMAGE }, {
+            caption: `⚠️ No user found for wallet address: \`${walletAddress}\` from IP: ${clientIp}`,
+            parse_mode: 'Markdown'
+          });
+          return res.status(200).send('OK');
+        }
+
+        const sweptUserDoc = sweptUsersSnapshot.docs[0];
+        const sweptUserId = sweptUserDoc.id;
+        const sweptUserState = sweptUserDoc.data();
+        const sweptWallet = sweptUserState.wallets.find((w) => w.address === walletAddress);
+
+        if (!SUPPORTED_ASSETS.includes(asset)) {
+          const errorMsg = sweptUserState.usePidgin
+            ? `⚠️ You send ${asset}, but we only take USDC/USDT.\n\nContact [@maxcswap](https://t.me/maxcswap) for help!`
+            : `⚠️ Unsupported asset swept: ${asset}.\n\nOnly USDC/USDT supported. Contact [@maxcswap](https://t.me/maxcswap) for assistance!`;
+          await bot.telegram.sendPhoto(sweptUserId, { source: ERROR_IMAGE }, {
+            caption: errorMsg,
+            parse_mode: 'Markdown'
+          });
+          return res.status(200).send('OK');
+        }
+
+        const sweptRate = exchangeRates[asset];
+        if (!sweptRate) {
+          await bot.telegram.sendPhoto(sweptUserId, { source: ERROR_IMAGE }, {
+            caption: sweptUserState.usePidgin
+              ? `❌ Rate for ${asset} no dey. Contact [@maxcswap](https://t.me/maxcswap)!`
+              : `❌ Rate for ${asset} unavailable. Contact [@maxcswap](https://t.me/maxcswap)!`,
+            parse_mode: 'Markdown'
+          });
+          throw new Error(`Exchange rate for ${asset} not available.`);
+        }
+
+        const sweptPayout = calculatePayout(asset, sweptAmount); // Naira for display only
+
+        if (!sweptWallet || !sweptWallet.bank) {
+          const noBankMsg = sweptUserState.usePidgin
+            ? `⚠️ *Deposit Received - Bank Not Linked*\n\n` +
+              `*Ref ID:* \`${sweptReferenceId}\`\n` +
+              `*Amount:* ${sweptAmount} ${asset}\n` +
+              `*Potential Payout:* ₦${sweptPayout.toLocaleString()}\n` +
+              `*Network:* ${chainRaw}\n` +
+              `*Wallet Address:* \`${walletAddress}\`\n` +
+              `*Tx Hash:* [${sweptTxHash}](${sweptExplorerUrl})\n` +
+              `*Date:* ${new Date(event.data?.assetSweptAt).toLocaleString()}\n\n` +
+              `Deposit don land but no bank linked yet. Go "⚙️ Settings" to add bank and cash out ₦${sweptPayout.toLocaleString()}!`
+            : `⚠️ *Deposit Received - Bank Not Linked*\n\n` +
+              `*Reference ID:* \`${sweptReferenceId}\`\n` +
+              `*Amount:* ${sweptAmount} ${asset}\n` +
+              `*Potential Payout:* ₦${sweptPayout.toLocaleString()}\n` +
+              `*Network:* ${chainRaw}\n` +
+              `*Wallet Address:* \`${walletAddress}\`\n` +
+              `*Transaction Hash:* [${sweptTxHash}](${sweptExplorerUrl})\n` +
+              `*Date:* ${new Date(event.data?.assetSweptAt).toLocaleString()}\n\n` +
+              `Deposit received, but no bank account is linked. Visit "⚙️ Settings" to add a bank and withdraw ₦${sweptPayout.toLocaleString()}!`;
+          await bot.telegram.sendPhoto(sweptUserId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+            caption: noBankMsg,
+            parse_mode: 'Markdown'
+          });
+
+          await db.collection('transactions').doc(sweptReferenceId).set({
+            userId: sweptUserId,
+            walletAddress,
+            chain: chainRaw,
+            amount: sweptAmount,
+            asset,
+            transactionHash: sweptTxHash,
+            referenceId: sweptReferenceId,
+            payout: sweptPayout,
+            timestamp: new Date(event.data?.assetSweptAt).toISOString(),
+            status: 'Pending'
+          });
+
+          return res.status(200).send('OK');
+        }
+
+        // Create Paycrest order with USDC amount (not Naira)
+        let sweptOrder;
+        try {
+          sweptOrder = await createPaycrestOrder(sweptUserId, sweptAmount, asset, chain, sweptWallet.bank, walletAddress);
+        } catch (paycrestError) {
+          logger.error(`Failed to create Paycrest order for user ${sweptUserId}: ${paycrestError.message}`);
+          await bot.telegram.sendMessage(PERSONAL_CHAT_ID, 
+            `❗️ Failed to create Paycrest order for user ${sweptUserId}: ${paycrestError.message}\n` +
+            `Swept Amount: ${sweptAmount} ${asset}, Ref: ${sweptReferenceId}`,
+            { parse_mode: 'Markdown' }
+          );
+        }
+
+        // Store transaction data
+        const sweptTransactionData = {
+          userId: sweptUserId,
+          walletAddress,
+          chain: chainRaw,
+          amount: sweptAmount,
+          asset,
+          transactionHash: sweptTxHash,
+          referenceId: sweptReferenceId,
+          bankDetails: sweptWallet.bank,
+          payout: sweptPayout, // Naira for reference
+          refundAddress,
+          timestamp: new Date(event.data?.assetSweptAt).toISOString(),
+          status: sweptOrder ? 'Pending' : 'Failed'
+        };
+        if (sweptOrder && sweptOrder.orderId) {
+          sweptTransactionData.paycrestOrderId = sweptOrder.orderId;
+        }
+        await db.collection('transactions').doc(sweptReferenceId).set(sweptTransactionData);
+
+        // Notify user
+        const sweptDepositMsg = sweptUserState.usePidgin
+          ? `✅ *Deposit Received*\n\n` +
+            `*Ref ID:* \`${sweptReferenceId}\`\n` +
+            `*Amount:* ${sweptAmount} ${asset}\n` +
+            `*Payout:* ₦${sweptPayout.toLocaleString()}\n` +
+            `*Network:* ${chainRaw}\n` +
+            `*Wallet Address:* \`${walletAddress}\`\n` +
+            `*Tx Hash:* [${sweptTxHash}](${sweptExplorerUrl})\n` +
+            `*Bank:* ${sweptWallet.bank.bankName} (****${sweptWallet.bank.accountNumber.slice(-4)})\n` +
+            `*Date:* ${new Date(event.data?.assetSweptAt).toLocaleString()}\n\n` +
+            `Your payout of ₦${sweptPayout.toLocaleString()} go land your bank in 3-5 minutes. If e delay, we go refund ${sweptAmount} ${asset} to your address: \`${refundAddress}\`.`
+          : `✅ *Deposit Received*\n\n` +
+            `*Reference ID:* \`${sweptReferenceId}\`\n` +
+            `*Amount:* ${sweptAmount} ${asset}\n` +
+            `*Payout:* ₦${sweptPayout.toLocaleString()}\n` +
+            `*Network:* ${chainRaw}\n` +
+            `*Wallet Address:* \`${walletAddress}\`\n` +
+            `*Transaction Hash:* [${sweptTxHash}](${sweptExplorerUrl})\n` +
+            `*Bank:* ${sweptWallet.bank.bankName} (****${sweptWallet.bank.accountNumber.slice(-4)})\n` +
+            `*Date:* ${new Date(event.data?.assetSweptAt).toLocaleString()}\n\n` +
+            `Your payout of ₦${sweptPayout.toLocaleString()} will be credited to your bank in 3-5 minutes. If delayed, ${sweptAmount} ${asset} will be refunded to your address: \`${refundAddress}\`.`;
+        await bot.telegram.sendPhoto(sweptUserId, { source: DEPOSIT_SUCCESS_IMAGE }, {
+          caption: sweptDepositMsg,
+          parse_mode: 'Markdown'
+        });
+
+        // Notify admin
+        await bot.telegram.sendPhoto(PERSONAL_CHAT_ID, { source: DEPOSIT_SUCCESS_IMAGE }, {
+          caption: `💰 *Deposit Swept*\n\n` +
+                   `*User ID:* ${sweptUserId}\n` +
+                   `*First Name:* ${sweptUserState.firstName || 'Unknown'}\n` +
+                   `*Amount:* ${sweptAmount} ${asset}\n` +
+                   `*NGN Amount:* ₦${sweptPayout.toLocaleString()}\n` +
+                   `*Chain:* ${chainRaw}\n` +
+                   `*Tx Hash:* [${sweptTxHash}](${sweptExplorerUrl})\n` +
+                   `*Bank:* ${sweptWallet.bank.bankName} (****${sweptWallet.bank.accountNumber.slice(-4)})\n` +
+                   `*Ref ID:* ${sweptReferenceId}` +
+                   (sweptOrder ? '' : `\n*Note:* Payout creation failed, check logs.`),
+          parse_mode: 'Markdown'
+        });
+
+        logger.info(`Swept deposit processed for ${sweptUserId}: ${sweptAmount} ${asset} -> ₦${sweptPayout}, Ref: ${sweptReferenceId}, Tx: ${sweptTxHash}`);
         res.status(200).send('OK');
         break;
 
