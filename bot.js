@@ -956,7 +956,7 @@ setInterval(fetchExchangeRates, 300000); // 5 minutes
 const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
     [walletExists ? "💼 View Wallet" : "💼 Generate Wallet", "⚙️ Settings"],
-    ["💰 Transactions", "🌉 Bridge & Cash Out", "ℹ️ Support"],
+    ["💰 Transactions", "📘 Learn About Base", "ℹ️ Support"],
     ["📈 View Current Rates"],
   ]).resize();
 
