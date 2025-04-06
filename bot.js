@@ -3512,7 +3512,460 @@ async function pollExecutionStatus(userId, quote, chatId, userState, messageId, 
     ? "⏰ Time don pass! Contact support."
     : "⏰ Timed out! Contact support.", { parse_mode: "Markdown" });
 }
+// =================== Sell Scene ===================
+const sellScene = new Scenes.WizardScene(
+  'sell_scene',
+  // Step 0: Collect Sell Details
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const args = ctx.message.text.split(' ').slice(1);
 
+    if (args.length !== 3) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? '📝 Use: `/sell <amount> <token_address> <chain>`\nE.g., `/sell 100 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 Base`\nOr use symbol: `/sell <amount> <symbol> <chain>`'
+        : '📝 Usage: `/sell <amount> <token_address> <chain>`\nE.g., `/sell 100 0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913 Base`\nOr use symbol: `/sell <amount> <symbol> <chain>`');
+      return ctx.scene.leave();
+    }
+
+    const [amountStr, tokenInput, chainInput] = args;
+    const amount = parseFloat(amountStr);
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Amount must be number wey big pass 0!' : '❌ Amount must be a valid number > 0!');
+      return ctx.scene.leave();
+    }
+
+    const chainName = getNormalizedChainName(chainInput);
+    if (!chainName || !relaySupportedChains[chainName]) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? `❌ Chain "${chainInput}" no dey! Use: ${Object.keys(relaySupportedChains).join(', ')}`
+        : `❌ Chain "${chainInput}" not supported! Use: ${Object.keys(relaySupportedChains).join(', ')}`);
+      return ctx.scene.leave();
+    }
+
+    const chainId = relaySupportedChains[chainName];
+    let tokenData;
+
+    if (ethers.utils.isAddress(tokenInput)) {
+      tokenData = (await fetchTokenData(chainId, tokenInput))[0];
+      if (!tokenData) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? `❌ Token address "${tokenInput}" no dey for ${chainName}!`
+          : `❌ Token address "${tokenInput}" not found on ${chainName}!`);
+        return ctx.scene.leave();
+      }
+    } else {
+      const tokens = await fetchTokenData(chainId, tokenInput);
+      if (tokens.length === 0) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? `❌ Asset "${tokenInput}" no dey for ${chainName}! Enter the token address instead.`
+          : `❌ Asset "${tokenInput}" not found on ${chainName}! Please provide the token address.`);
+        return ctx.scene.leave();
+      } else if (tokens.length > 1) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? `❌ Too many "${tokenInput}" for ${chainName}! Use token address instead:\n` + tokens.map(t => `- \`${t.address}\``).join('\n')
+          : `❌ Multiple "${tokenInput}" found on ${chainName}! Use token address instead:\n` + tokens.map(t => `- \`${t.address}\``).join('\n'));
+        return ctx.scene.leave();
+      } else {
+        tokenData = tokens[0];
+      }
+    }
+
+    ctx.session.sellData = {
+      amount,
+      tokenAddress: tokenData.address,
+      tokenSymbol: tokenData.symbol,
+      tokenDecimals: tokenData.decimals,
+      chainName,
+      chainId,
+    };
+
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? `🏦 Which bank you dey use? E.g., GTB, Zenith`
+      : `🏦 Which bank do you use? E.g., GTB, Zenith`);
+    return ctx.wizard.next();
+  },
+  // Step 1: Collect Bank Name
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const bankInput = ctx.message.text.trim();
+
+    const { bank, distance } = findClosestBank(bankInput);
+    if (!bank || distance > 3) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? `❌ Bank "${bankInput}" no dey! Try again. E.g., GTB, Zenith`
+        : `❌ Bank "${bankInput}" not found! Try again. E.g., GTB, Zenith`);
+      return;
+    }
+
+    ctx.session.sellData.bankName = bank.name;
+    ctx.session.sellData.bankCode = bank.code;
+
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? `🏦 Okay, ${bank.name}. Now enter your 10-digit account number:`
+      : `🏦 Got it, ${bank.name}. Now enter your 10-digit account number:`);
+    return ctx.wizard.next();
+  },
+  // Step 2: Collect Account Number and Verify
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const accountNumber = ctx.message.text.trim();
+
+    if (!/^\d{10}$/.test(accountNumber)) {
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? '❌ Account number must be 10 digits! Try again.'
+        : '❌ Account number must be 10 digits! Try again.');
+      return;
+    }
+
+    const { bankName, bankCode } = ctx.session.sellData;
+    const verification = await verifyBankAccount(accountNumber, bankCode);
+
+    if (!verification.status || !verification.data) {
+      logger.error(`Bank verification failed for user ${userId}: ${JSON.stringify(verification)}`);
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? '❌ Bank no verify! Check your account number and try again.'
+        : '❌ Failed to verify bank! Check your account number and try again.');
+      return;
+    }
+
+    ctx.session.sellData.bankDetails = {
+      accountNumber,
+      bankName,
+      bankCode,
+      accountName: verification.data.account_name,
+    };
+
+    await ctx.replyWithMarkdown(
+      userState.usePidgin
+        ? `✅ Bank don verify!\n- Name: ${verification.data.account_name}\n- Bank: ${bankName}\n- Account: \`${accountNumber}\`\n\nConfirm abeg?`
+        : `✅ Bank verified!\n- Name: ${verification.data.account_name}\n- Bank: ${bankName}\n- Account: \`${accountNumber}\`\n\nConfirm?`,
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes', 'confirm_bank'), Markup.button.callback('❌ No', 'retry_bank')]
+      ])
+    );
+    return ctx.wizard.next();
+  },
+  // Step 3: Connect Wallet
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery?.data === 'confirm_bank') {
+      await ctx.answerCbQuery();
+      const blockradarWalletAddress = await generateWallet('Base');
+      ctx.session.sellData.blockradarWalletAddress = blockradarWalletAddress;
+
+      const { chainId, chainName } = ctx.session.sellData;
+      const isSolana = chainId === SOLANA_CHAIN_ID;
+
+      if (isSolana) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? '🌞 Connect your Solana wallet:\n- Open your wallet (Phantom, Solflare, etc.) and get ready to scan or click.\nPress "Ready" when you dey set.'
+          : '🌞 Connect your Solana wallet:\n- Open your wallet (Phantom, Solflare, etc.) and prepare to scan or click.\nPress "Ready" when ready.');
+        return ctx.replyWithMarkdown('Press "Ready" to continue:', Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Ready', 'solana_ready'), Markup.button.callback('❌ Cancel', 'cancel')]
+        ]));
+      }
+
+      const options = await generateEVMConnectionOptions(chainId);
+      await ctx.replyWithPhoto({ source: fs.createReadStream(options.tempQRPath) }, {
+        caption: userState.usePidgin
+          ? `💼 Connect your wallet for ${chainName}:\n- Scan QR code or use link below (mobile only).\nPress "Connected" when you don finish.`
+          : `💼 Connect your wallet for ${chainName}:\n- Scan QR code or use a link below (mobile only).\nPress "Connected" when done.`,
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          [Markup.button.url("MetaMask", options.deeplinks.metamask)],
+          [Markup.button.url("Trust Wallet", options.deeplinks.trustwallet)],
+          [Markup.button.url("Rainbow", options.deeplinks.rainbow)],
+          [Markup.button.callback('✅ Connected', 'wallet_connected'), Markup.button.callback('❌ Cancel', 'cancel')]
+        ]),
+      });
+      fs.unlinkSync(options.tempQRPath);
+      return ctx.wizard.next();
+    }
+
+    if (ctx.callbackQuery?.data === 'retry_bank') {
+      await ctx.answerCbQuery();
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? `🏦 Which bank you dey use? E.g., GTB, Zenith`
+        : `🏦 Which bank do you use? E.g., GTB, Zenith`);
+      return ctx.wizard.selectStep(1);
+    }
+  },
+  // Step 4: Handle Solana Address or EVM Connection
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const { chainId, amount, tokenAddress, tokenSymbol, tokenDecimals, blockradarWalletAddress } = ctx.session.sellData;
+    const isSolana = chainId === SOLANA_CHAIN_ID;
+
+    if (isSolana && ctx.callbackQuery?.data === 'solana_ready') {
+      await ctx.answerCbQuery();
+      await ctx.replyWithMarkdown(userState.usePidgin
+        ? '🌞 Enter your Solana wallet address:'
+        : '🌞 Enter your Solana wallet address:');
+      return;
+    }
+
+    if (isSolana && ctx.message?.text) {
+      const solanaAddress = ctx.message.text.trim();
+      if (!isValidSolanaAddress(solanaAddress)) {
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? '❌ Solana address no good! Try again.'
+          : '❌ Invalid Solana address! Try again.');
+        return;
+      }
+      ctx.session.sellData.solanaAddress = solanaAddress;
+
+      const amountInWei = await toWeiWithDecimals(amount, tokenAddress, chainId);
+      const quote = await getClient().actions.getQuote({
+        user: solanaAddress,
+        originChainId: chainId,
+        originCurrency: tokenAddress,
+        destinationChainId: BASE_CHAIN_ID,
+        destinationCurrency: BASE_USDC_ADDRESS,
+        tradeType: "EXACT_INPUT",
+        recipient: blockradarWalletAddress,
+        amount: amountInWei.toString(),
+        refundTo: solanaAddress,
+        slippagePercentage: 1.5,
+      });
+
+      await showQuote(ctx, quote, { address: tokenAddress, symbol: tokenSymbol, decimals: tokenDecimals });
+      return ctx.wizard.next();
+    }
+
+    if (ctx.callbackQuery?.data === 'wallet_connected') {
+      await ctx.answerCbQuery();
+      try {
+        const provider = new ethers.providers.Web3Provider(walletKit.getProvider());
+        const signer = provider.getSigner();
+        const userAddress = await signer.getAddress();
+        ctx.session.sellData.userAddress = userAddress;
+
+        const amountInWei = await toWeiWithDecimals(amount, tokenAddress, chainId);
+        const quote = await getClient().actions.getQuote({
+          user: userAddress,
+          originChainId: chainId,
+          originCurrency: tokenAddress,
+          destinationChainId: BASE_CHAIN_ID,
+          destinationCurrency: BASE_USDC_ADDRESS,
+          tradeType: "EXACT_INPUT",
+          recipient: blockradarWalletAddress,
+          amount: amountInWei.toString(),
+          refundTo: userAddress,
+          slippagePercentage: 1.5,
+        });
+
+        await showQuote(ctx, quote, { address: tokenAddress, symbol: tokenSymbol, decimals: tokenDecimals });
+        return ctx.wizard.next();
+      } catch (error) {
+        logger.error(`Error connecting wallet for user ${userId}: ${error.message}`);
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? '❌ Wallet connection failed! Try again later.'
+          : '❌ Wallet connection failed! Please try again later.');
+        return ctx.scene.leave();
+      }
+    }
+
+    if (ctx.callbackQuery?.data === 'cancel') {
+      await ctx.replyWithMarkdown(userState.usePidgin ? '👋 Sell don cancel!' : '👋 Sell canceled!');
+      try {
+        await walletKit.close();
+      } catch (error) {
+        logger.error(`Error closing WalletKit: ${error.message}`);
+      }
+      delete ctx.session.sellData;
+      await ctx.answerCbQuery();
+      return ctx.scene.leave();
+    }
+  },
+  // Step 5: Execute Transaction
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    
+    if (!ctx.session.sellData) {
+      await ctx.replyWithMarkdown(userState.usePidgin 
+        ? '❌ No data found! Start again.'
+        : '❌ Session data missing! Please start over.');
+      return ctx.scene.leave();
+    }
+    
+    const { quote, chainId, tokenSymbol, blockradarWalletAddress, bankDetails } = ctx.session.sellData;
+
+    if (ctx.callbackQuery?.data === 'confirm_quote') {
+      await ctx.answerCbQuery();
+      ctx.session.sellData.quoteConfirmed = true;
+
+      try {
+        const provider = new ethers.providers.Web3Provider(walletKit.getProvider());
+        const signer = provider.getSigner();
+
+        for (const step of quote.steps) {
+          if (step.id === "approve" || step.id === "deposit") {
+            await ctx.replyWithMarkdown(userState.usePidgin
+              ? `📝 Sign ${step.id} now...`
+              : `📝 Sign the ${step.id} transaction now...`);
+            const tx = await signer.sendTransaction({
+              to: step.items[0].data.to,
+              data: step.items[0].data.data,
+              value: step.items[0].data.value || "0",
+            });
+            await tx.wait();
+            await ctx.replyWithMarkdown(`✅ ${step.id.charAt(0).toUpperCase() + step.id.slice(1)} done! Tx: \`${tx.hash}\``);
+          }
+        }
+
+        const referenceId = generateReferenceId();
+        await db.collection('transactions').doc(referenceId).set({
+          userId,
+          walletAddress: blockradarWalletAddress,
+          chain: ctx.session.sellData.chainName,
+          amount: ctx.session.sellData.amount,
+          asset: tokenSymbol,
+          transactionHash: quote.inTxHashes?.[0] || 'Pending',
+          referenceId,
+          bankDetails,
+          payout: calculatePayout('USDC', fromWeiWithDecimals(quote.details.currencyOut.amount, { decimals: 6 })),
+          timestamp: new Date().toISOString(),
+          status: 'Pending',
+        });
+
+        ctx.session.sellData.referenceId = referenceId;
+        const sentMessage = await ctx.replyWithMarkdown(userState.usePidgin
+          ? '✅ Dey watch deposit to Blockradar wallet...'
+          : '✅ Monitoring deposit to Blockradar wallet...');
+        ctx.session.sellData.messageId = sentMessage.message_id;
+        pollExecutionStatus(userId, quote, ctx.chat.id, userState, sentMessage.message_id, ctx.bot, blockradarWalletAddress, bankDetails, referenceId);
+        return ctx.wizard.next();
+      } catch (error) {
+        logger.error(`Error executing sell transaction for user ${userId}: ${error.message}`);
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? '❌ Transaction failed! Check wallet or try again later.'
+          : '❌ Transaction failed! Please check your wallet or try again later.');
+        try {
+          await walletKit.close();
+        } catch (closeError) {
+          logger.error(`Error closing WalletKit: ${closeError.message}`);
+        }
+        return ctx.scene.leave();
+      }
+    }
+
+    if (ctx.callbackQuery?.data === 'confirm_solana_quote') {
+      await ctx.answerCbQuery();
+      ctx.session.sellData.quoteConfirmed = true;
+
+      try {
+        const depositStep = quote.steps.find(s => s.id === "deposit");
+        if (!depositStep || !depositStep.items[0].data.instructions) {
+          await ctx.replyWithMarkdown(userState.usePidgin
+            ? '❌ No deposit instructions! Try again later.'
+            : '❌ No deposit instructions found! Try again later.');
+          return ctx.scene.leave();
+        }
+
+        const instructions = depositStep.items[0].data.instructions;
+        const options = await generateSolanaConnectionOptions(instructions, quote.requestId);
+        await ctx.replyWithPhoto({ source: fs.createReadStream(options.tempQRPath) }, {
+          caption: userState.usePidgin
+            ? `🌞 Complete your Solana transaction:\n- Scan QR code or [click here](${options.deeplink}) to open wallet.\nPress "Signed" when you don finish.`
+            : `🌞 Complete your Solana transaction:\n- Scan QR code or [click here](${options.deeplink}) to open wallet.\nPress "Signed" when done.`,
+          parse_mode: 'Markdown',
+          reply_markup: Markup.inlineKeyboard([
+            [Markup.button.url("Phantom", options.deeplinks.phantom)],
+            [Markup.button.url("Solflare", options.deeplinks.solflare)],
+            [Markup.button.callback('✅ Signed', 'sol_tx_signed'), Markup.button.callback('❌ Cancel', 'cancel')]
+          ]),
+        });
+        fs.unlinkSync(options.tempQRPath);
+        return ctx.wizard.next();
+      } catch (error) {
+        logger.error(`Error handling Solana transaction for user ${userId}: ${error.message}`);
+        await ctx.replyWithMarkdown(userState.usePidgin
+          ? '❌ Could not create Solana transaction! Try again later.'
+          : '❌ Failed to create Solana transaction! Please try again later.');
+        return ctx.scene.leave();
+      }
+    }
+
+    if (ctx.callbackQuery?.data === 'cancel_quote') {
+      await ctx.replyWithMarkdown(userState.usePidgin ? '👋 Sell don cancel!' : '👋 Sell canceled!');
+      try {
+        await walletKit.close();
+      } catch (error) {
+        logger.error(`Error closing WalletKit: ${error.message}`);
+      }
+      delete ctx.session.sellData;
+      await ctx.answerCbQuery();
+      return ctx.scene.leave();
+    }
+  },
+  // Step 6: Finalize
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+
+    if (ctx.callbackQuery?.data === 'sol_tx_signed') {
+      await ctx.answerCbQuery();
+      
+      if (!ctx.session.sellData) {
+        await ctx.replyWithMarkdown(userState.usePidgin 
+          ? '❌ No data found! Start again.'
+          : '❌ Session data missing! Please start over.');
+        return ctx.scene.leave();
+      }
+      
+      const { quote, blockradarWalletAddress, bankDetails } = ctx.session.sellData;
+
+      const referenceId = generateReferenceId();
+      await db.collection('transactions').doc(referenceId).set({
+        userId,
+        walletAddress: blockradarWalletAddress,
+        chain: ctx.session.sellData.chainName,
+        amount: ctx.session.sellData.amount,
+        asset: ctx.session.sellData.tokenSymbol,
+        transactionHash: 'Pending',
+        referenceId,
+        bankDetails,
+        payout: calculatePayout('USDC', fromWeiWithDecimals(quote.details.currencyOut.amount, { decimals: 6 })),
+        timestamp: new Date().toISOString(),
+        status: 'Pending',
+      });
+
+      ctx.session.sellData.referenceId = referenceId;
+      const sentMessage = await ctx.replyWithMarkdown(userState.usePidgin
+        ? '✅ Dey watch deposit to Blockradar wallet...'
+        : '✅ Monitoring deposit to Blockradar wallet...');
+      ctx.session.sellData.messageId = sentMessage.message_id;
+      pollExecutionStatus(userId, quote, ctx.chat.id, userState, sentMessage.message_id, ctx.bot, blockradarWalletAddress, bankDetails, referenceId);
+    }
+
+    if (ctx.callbackQuery?.data === 'cancel') {
+      await ctx.replyWithMarkdown(userState.usePidgin ? '👋 Sell don cancel!' : '👋 Sell canceled!');
+      try {
+        await walletKit.close();
+      } catch (error) {
+        logger.error(`Error closing WalletKit: ${error.message}`);
+      }
+      delete ctx.session.sellData;
+      await ctx.answerCbQuery();
+      return ctx.scene.leave();
+    }
+
+    try {
+      await walletKit.close();
+    } catch (error) {
+      logger.error(`Error closing WalletKit in final step: ${error.message}`);
+    }
+    delete ctx.session.sellData;
+    return ctx.scene.leave();
+  }
+);
 // =================== Blockradar Webhook Handler ===================
 app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
   const clientIp = req.clientIp;
