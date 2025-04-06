@@ -19,6 +19,7 @@ const { WalletKit } = require('@reown/walletkit');
 const { getClient } = require('@reservoir0x/relay-sdk');
 const QRCode = require('qrcode');
 const { Transaction, PublicKey } = require('@solana/web3.js');
+const module = { require: require };
 require('dotenv').config();
 
 // =================== Initialize Logging ===================
