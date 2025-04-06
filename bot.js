@@ -3737,8 +3737,6 @@ const sellScene = new Scenes.WizardScene(
     delete ctx.session.sellData;
     return ctx.scene.leave();
   }
-  
-stage.register(sellScene);
 
 );
 
@@ -3838,6 +3836,7 @@ async function pollExecutionStatus(userId, quote, chatId, userState, messageId, 
     ? "⏰ Time don pass! Contact support."
     : "⏰ Timed out! Contact support.", { parse_mode: "Markdown" });
 }
+  stage.register(sellScene);
 });
 
 // =================== Server Startup ===================
