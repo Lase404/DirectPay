@@ -2780,8 +2780,29 @@ bot.command('sell', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
   await ctx.scene.enter('sell_scene');
-
-// Change this from await syntax to Promise-based
+function getNormalizedChainName(input) {
+  if (!input) return null;
+  const normalizedInput = input.toLowerCase().trim();
+  
+  for (const [key, value] of Object.entries(relaySupportedChains)) {
+    if (key.toLowerCase() === normalizedInput) {
+      return key;
+    }
+  }
+  
+  // Check for common aliases
+  if (normalizedInput === 'eth' || normalizedInput === 'mainnet') return 'Ethereum';
+  if (normalizedInput === 'bsc' || normalizedInput === 'bnb') return 'BNB Smart Chain';
+  if (normalizedInput === 'matic') return 'Polygon';
+  if (normalizedInput === 'sol') return 'Solana';
+  
+  return null;
+}
+  const relayClient = getClient({
+  apiKey: process.env.RELAY_API_KEY || 'https://api.relay.link',
+  source: 'directpay-bot'
+});
+  
 let walletKit;
 WalletKit.init({
   core,
