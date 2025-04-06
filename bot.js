@@ -103,16 +103,25 @@ const core = new Core({
   projectId: WALLETCONNECT_PROJECT_ID,
 });
 
-const walletKit = await WalletKit.init({
-  core,
-  metadata: {
-    name: 'DirectPay',
-    description: 'DirectPay Bot for Crypto-to-Naira Swaps',
-    url: 'https://t.me/yourBotUsername',
-    icons: ['https://assets.reown.com/reown-profile-pic.png'],
-  },
-});
+let walletKit; // Declare globally, initialize in async function
 
+(async () => {
+  try {
+    walletKit = await WalletKit.init({
+      core,
+      metadata: {
+        name: 'DirectPay',
+        description: 'DirectPay Bot for Crypto-to-Naira Swaps',
+        url: 'https://t.me/directpaynairabot',
+        icons: ['https://assets.reown.com/reown-profile-pic.png'],
+      },
+    });
+    logger.info('WalletConnect initialized successfully');
+  } catch (error) {
+    logger.error(`Failed to initialize WalletConnect: ${error.message}`);
+    process.exit(1); // Exit if initialization fails
+  }
+})();
 // =================== Define Constants ===================
 const BASE_CHAIN_ID = 8453;
 const BASE_USDC_ADDRESS = "0x833589fcd6edb6e08f4c7c32d4f71b54bda02913";
