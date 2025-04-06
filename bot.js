@@ -3206,8 +3206,6 @@ const core = new Core({
   projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782',
 });
 
-stage.register(sellScene);
-
 bot.command('sell', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userState = await getUserState(userId);
@@ -3739,6 +3737,9 @@ const sellScene = new Scenes.WizardScene(
     delete ctx.session.sellData;
     return ctx.scene.leave();
   }
+  
+stage.register(sellScene);
+
 );
 
 async function showQuote(ctx, quote, tokenData) {
