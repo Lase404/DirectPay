@@ -3,6 +3,7 @@
   "version": "1.0.1",
   "description": "DirectPay Telegram Bot for cryptocurrency-to-cash conversion.",
   "main": "bot.js",
+  "type": "commonjs", // Add this line
   "scripts": {
     "start": "node bot.js",
     "dev": "nodemon bot.js"
