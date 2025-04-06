@@ -3206,6 +3206,13 @@ const core = new Core({
   projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782',
 });
 
+stage.register(sellScene);
+
+bot.command('sell', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId);
+  await ctx.scene.enter('sell_scene');
+
 // Change this from await syntax to Promise-based
 let walletKit;
 WalletKit.init({
@@ -3830,13 +3837,6 @@ async function pollExecutionStatus(userId, quote, chatId, userState, messageId, 
     ? "⏰ Time don pass! Contact support."
     : "⏰ Timed out! Contact support.", { parse_mode: "Markdown" });
 }
-
-stage.register(sellScene);
-
-bot.command('sell', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const userState = await getUserState(userId);
-  await ctx.scene.enter('sell_scene');
 });
 
 // =================== Server Startup ===================
