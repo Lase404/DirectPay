@@ -22,6 +22,7 @@
   "dependencies": {
     "@reown/walletkit": "^1.2.0",
     "@reservoir0x/relay-sdk": "^1.0.1",
+    "@solana/web3.js": "^1.87.6",
     "@walletconnect/core": "^2.11.2",
     "@walletconnect/web3-provider": "^1.8.0",
     "axios": "^1.4.0",
@@ -38,9 +39,13 @@
     "sharp": "^0.33.5",
     "telegraf": "^4.12.2",
     "winston": "^3.8.2",
-    "cron": "^4.1.0"
+    "cron": "^4.1.0",
+    "util": "^0.12.5"
   },
   "devDependencies": {
     "nodemon": "^3.0.1"
+  },
+  "engines": {
+    "node": ">=16.0.0"
   }
 }
