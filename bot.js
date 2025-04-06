@@ -3233,43 +3233,7 @@ const relaySupportedChains = {
   "Polygon": 137,
   "BNB Smart Chain": 56,
   "Solana": SOLANA_CHAIN_ID,
-};
-
-const chains = {
-  'Base': {
-    chainId: 8453,
-    explorer: 'https://basescan.org/tx/',
-    supportedAssets: ['USDC', 'USDT'],
-    assets: { 'USDC': '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913' }
-  },
-  'Ethereum': {
-    chainId: 1,
-    explorer: 'https://etherscan.io/tx/',
-    supportedAssets: ['USDC', 'USDT'],
-    assets: {
-      'USDC': '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48',
-      'USDT': '0xdAC17F958D2ee523a2206206994597C13D831ec7'
-    }
-  },
-  'Polygon': {
-    chainId: 137,
-    explorer: 'https://polygonscan.com/tx/',
-    supportedAssets: ['USDC', 'USDT'],
-    assets: {
-      'USDC': '0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174',
-      'USDT': '0xc2132D05D31c914a87C6611C10748AEb04B58e8F'
-    }
-  },
-  'BNB Smart Chain': {
-    chainId: 56,
-    explorer: 'https://bscscan.com/tx/',
-    supportedAssets: ['USDC', 'BUSD'],
-    assets: {
-      'USDC': '0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d',
-      'BUSD': '0xe9e7CEA3DedcA5984780Bafc599bD69ADd087D56'
-    }
-  },
-};
+}; 
 
 async function fetchTokenData(chainId, query) {
   try {
