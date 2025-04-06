@@ -16,7 +16,6 @@ const requestIp = require('request-ip');
 const ethers = require('ethers'); 
 require('dotenv').config();
 const WalletConnectProvider = require('@walletconnect/web3-provider').default;
-const { createClient, getClient, MAINNET_RELAY_API } = require('@reservoir0x/relay-sdk');
 
 // =================== Initialize Logging ===================
 const logger = winston.createLogger({
