@@ -531,10 +531,7 @@ async function generateEVMConnectionOptions(chainId) {
 }
 
 // =================== Define Scenes ===================
-const bankLinkingScene = new Scenes.WizardScene(
-  'bank_linking_scene',
-  // (Existing bank linking scene unchanged)
-);
+
 
 const sendMessageScene = new Scenes.WizardScene(
   'send_message_scene',
