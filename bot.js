@@ -3200,12 +3200,15 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
 const { Core } = require('@walletconnect/core');
 const { WalletKit } = require('@reown/walletkit');
 const { getClient } = require('@reservoir0x/relay-sdk');
+
 // WalletKit setup
 const core = new Core({
   projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782',
 });
 
-const walletKit = await WalletKit.init({
+// Change this from await syntax to Promise-based
+let walletKit;
+WalletKit.init({
   core,
   metadata: {
     name: 'DirectPay',
@@ -3213,6 +3216,11 @@ const walletKit = await WalletKit.init({
     url: 'https://t.me/directpaynairabot',
     icons: ['https://assets.reown.com/reown-profile-pic.png'],
   },
+}).then(kit => {
+  walletKit = kit;
+  logger.info('WalletKit initialized successfully');
+}).catch(error => {
+  logger.error(`Failed to initialize WalletKit: ${error.message}`);
 });
 
 const BASE_CHAIN_ID = 8453;
