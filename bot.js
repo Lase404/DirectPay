@@ -3810,10 +3810,10 @@ async function pollExecutionStatus(userId, quote, chatId, userState, messageId, 
         failureReason: status,
         updatedAt: new Date().toISOString(),
       });
-      await bot.telegram telegram.editMessageText(chatId, messageId, null, userState.usePidgin
-        ? `❌ Sell No Work!\nTransaction ${status === "refund" ? "don refund" : "fail"}.\n*Tx:* \`${inTxHashes[0] || "N/A"}\``
-        : `❌ Sell Failed!\nTransaction ${status === "refund" ? "refunded" : "failed"}.\n*Tx:* \`${inTxHashes[0] || "N/A"}\``,
-        { parse_mode: "Markdown" });
+      await bot.telegram.editMessageText(chatId, messageId, null, userState.usePidgin
+  ? `❌ Sell No Work!\nTransaction ${status === "refund" ? "don refund" : "fail"}.\n*Tx:* \`${inTxHashes[0] || "N/A"}\``
+  : `❌ Sell Failed!\nTransaction ${status === "refund" ? "refunded" : "failed"}.\n*Tx:* \`${inTxHashes[0] || "N/A"}\``,
+  { parse_mode: "Markdown" });
       return;
     }
 
