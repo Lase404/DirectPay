@@ -16,6 +16,8 @@ const requestIp = require('request-ip');
 const ethers = require('ethers'); 
 require('dotenv').config();
 const WalletConnectProvider = require('@walletconnect/web3-provider').default;
+const { Transaction, PublicKey } = require('@solana/web3.js');
+const QRCode = require('qrcode');
 
 // =================== Initialize Logging ===================
 const logger = winston.createLogger({
