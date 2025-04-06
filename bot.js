@@ -1,5 +1,4 @@
 // =================== Import Required Libraries ===================
-const module = { require: require };
 const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const express = require('express');
 const bodyParser = require('body-parser');
