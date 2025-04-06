@@ -546,6 +546,98 @@ const receiptGenerationScene = new Scenes.WizardScene(
   // (Existing receipt generation scene unchanged)
 );
 
+// =================== Define Scenes ===================
+
+// Bank Linking Scene (Placeholder - Adjust as per your actual implementation)
+const bankLinkingScene = new Scenes.WizardScene(
+  'bank_linking_scene',
+  async (ctx) => {
+    await ctx.reply('Please enter your bank name (e.g., GTB, Zenith):');
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const bankName = ctx.message.text.trim();
+    ctx.session.bankName = bankName; // Store temporarily
+    await ctx.reply('Enter your 10-digit account number:');
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const accountNumber = ctx.message.text.trim();
+    if (!/^\d{10}$/.test(accountNumber)) {
+      await ctx.reply('Invalid account number! Must be 10 digits. Try again.');
+      return;
+    }
+    ctx.session.accountNumber = accountNumber;
+    await ctx.reply(`Bank: ${ctx.session.bankName}, Account: ${accountNumber}. Confirm? (Yes/No)`);
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const response = ctx.message.text.trim().toLowerCase();
+    if (response === 'yes') {
+      await ctx.reply('Bank linked successfully!');
+      delete ctx.session.bankName;
+      delete ctx.session.accountNumber;
+      return ctx.scene.leave();
+    } else {
+      await ctx.reply('Bank linking canceled.');
+      return ctx.scene.leave();
+    }
+  }
+);
+
+// Send Message Scene (Placeholder - Adjust as per your actual implementation)
+const sendMessageScene = new Scenes.WizardScene(
+  'send_message_scene',
+  async (ctx) => {
+    await ctx.reply('Enter the message you want to send to all users:');
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const message = ctx.message.text.trim();
+    ctx.session.broadcastMessage = message;
+    await ctx.reply(`Message: "${message}". Confirm sending to all users? (Yes/No)`);
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const response = ctx.message.text.trim().toLowerCase();
+    if (response === 'yes') {
+      await ctx.reply('Message sent to all users!'); // Placeholder logic
+      delete ctx.session.broadcastMessage;
+      return ctx.scene.leave();
+    } else {
+      await ctx.reply('Message sending canceled.');
+      return ctx.scene.leave();
+    }
+  }
+);
+
+// Receipt Generation Scene (Placeholder - Adjust as per your actual implementation)
+const receiptGenerationScene = new Scenes.WizardScene(
+  'receipt_generation_scene',
+  async (ctx) => {
+    await ctx.reply('Enter transaction ID to generate receipt:');
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const txId = ctx.message.text.trim();
+    ctx.session.txId = txId;
+    await ctx.reply(`Generating receipt for Tx ID: ${txId}. Confirm? (Yes/No)`);
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const response = ctx.message.text.trim().toLowerCase();
+    if (response === 'yes') {
+      await ctx.reply(`Receipt generated for Tx ID: ${ctx.session.txId}!`); // Placeholder logic
+      delete ctx.session.txId;
+      return ctx.scene.leave();
+    } else {
+      await ctx.reply('Receipt generation canceled.');
+      return ctx.scene.leave();
+    }
+  }
+);
+
+// Sell Scene (Your Provided Code - Fixed Syntax)
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // Step 0: Collect Sell Details
@@ -939,104 +1031,7 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
-async function showQuote(ctx, quote, tokenData) {
-  const userState = await getUserState(ctx.from.id.toString());
-  const inAmount = fromWeiWithDecimals(quote.details.currencyIn.amount, tokenData);
-  const outAmount = fromWeiWithDecimals(quote.details.currencyOut.amount, { decimals: 6 });
-  const ngnAmount = calculatePayout('USDC', outAmount);
-  const isSolana = ctx.session.sellData.chainId === SOLANA_CHAIN_ID;
-
-  await ctx.replyWithMarkdown(userState.usePidgin
-    ? `📊 *Quote Details*:\n` +
-      `- You send: ${inAmount} ${tokenData.symbol}\n` +
-      `- You get: ${outAmount} USDC on Base\n` +
-      `- Est. Naira: ₦${ngnAmount.toLocaleString('en-NG')}\n` +
-      `Proceed abeg?`
-    : `📊 *Quote Details*:\n` +
-      `- You send: ${inAmount} ${tokenData.symbol}\n` +
-      `- You get: ${outAmount} USDC on Base\n` +
-      `- Est. Naira: ₦${ngnAmount.toLocaleString('en-NG')}\n` +
-      `Proceed?`,
-    Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Yes, Proceed', isSolana ? 'confirm_solana_quote' : 'confirm_quote'), Markup.button.callback('❌ No, Cancel', 'cancel_quote')]
-    ])
-  );
-  ctx.session.sellData.quote = quote;
-}
-
-async function pollExecutionStatus(userId, quote, chatId, userState, messageId, bot, blockradarWalletAddress, bankDetails, referenceId) {
-  const maxAttempts = 30;
-  let attempts = 0;
-
-  while (attempts < maxAttempts) {
-    const response = await axios.get(`https://api.relay.link/intents/status/v2?requestId=${quote.requestId}`);
-    const { status, inTxHashes } = response.data;
-
-    if (status === "success") {
-      const usdcAmount = fromWeiWithDecimals(quote.details.currencyOut.amount, { decimals: 6 });
-      const ngnAmount = calculatePayout('USDC', usdcAmount);
-
-      const withdrawTx = await withdrawFromBlockradar(
-        'Base',
-        chains['Base'].assets.USDC,
-        process.env.PAYCREST_USDC_ADDRESS,
-        usdcAmount,
-        referenceId,
-        { userId }
-      );
-
-      const paycrestOrder = await createPaycrestOrder(
-        userId,
-        usdcAmount,
-        'USDC',
-        'Base',
-        bankDetails,
-        blockradarWalletAddress
-      );
-
-      await db.collection('transactions').doc(referenceId).update({
-        status: 'Pending',
-        paycrestOrderId: paycrestOrder.orderId,
-        sweepTxHash: withdrawTx.transactionHash,
-        updatedAt: new Date().toISOString(),
-      });
-
-      await bot.telegram.editMessageText(chatId, messageId, null, userState.usePidgin
-        ? `✅ Sell Don Finish!\n- Deposited ${usdcAmount} USDC to Blockradar\n- Swept to Paycrest\n- ₦${ngnAmount.toLocaleString('en-NG')} don land your bank`
-        : `✅ Sell Complete!\n- Deposited ${usdcAmount} USDC to Blockradar\n- Swept to Paycrest\n- ₦${ngnAmount.toLocaleString('en-NG')} sent to your bank`,
-        { parse_mode: "Markdown" });
-      logger.info(`Sell completed for user ${userId}: ${usdcAmount} USDC -> ₦${ngnAmount}`);
-      return;
-    }
-
-    if (status === "failure" || status === "refund") {
-      await db.collection('transactions').doc(referenceId).update({
-        status: status === "refund" ? 'Refunded' : 'Failed',
-        failureReason: status,
-        updatedAt: new Date().toISOString(),
-      });
-      await bot.telegram.editMessageText(chatId, messageId, null, userState.usePidgin
-        ? `❌ Sell No Work!\nTransaction ${status === "refund" ? "don refund" : "fail"}.\n*Tx:* \`${inTxHashes[0] || "N/A"}\``
-        : `❌ Sell Failed!\nTransaction ${status === "refund" ? "refunded" : "failed"}.\n*Tx:* \`${inTxHashes[0] || "N/A"}\``,
-        { parse_mode: "Markdown" });
-      return;
-    }
-
-    await new Promise(resolve => setTimeout(resolve, 60000));
-    attempts++;
-  }
-
-  await db.collection('transactions').doc(referenceId).update({
-    status: 'Failed',
-    failureReason: 'Timeout',
-    updatedAt: new Date().toISOString(),
-  });
-  await bot.telegram.editMessageText(chatId, messageId, null, userState.usePidgin
-    ? "⏰ Time don pass! Contact support."
-    : "⏰ Timed out! Contact support.", { parse_mode: "Markdown" });
-}
-
-// =================== Register Scenes with Stage ===================
+// Register Scenes with Stage
 const stage = new Scenes.Stage();
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, sellScene);
 bot.use(session());
