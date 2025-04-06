@@ -530,18 +530,7 @@ async function generateEVMConnectionOptions(chainId) {
   }
 }
 
-// =================== Define Scenes ===================
 
-
-const sendMessageScene = new Scenes.WizardScene(
-  'send_message_scene',
-  // (Existing send message scene unchanged)
-);
-
-const receiptGenerationScene = new Scenes.WizardScene(
-  'receipt_generation_scene',
-  // (Existing receipt generation scene unchanged)
-);
 
 // =================== Define Scenes ===================
 
