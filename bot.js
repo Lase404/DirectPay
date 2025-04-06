@@ -400,6 +400,7 @@ function findClosestBank(input, bankList) {
 }
 
 // =================== Define Scenes ===================
+const sellScene = new Scenes.WizardScene('sell_scene');
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   async (ctx) => {
