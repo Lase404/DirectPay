@@ -19,7 +19,10 @@ const { createClient } = require('@reservoir0x/relay-sdk'); // New: Relay SDK
 const { Core } = require('@walletconnect/core'); // New: WalletConnect Core
 const { WalletKit } = require('@reown/walletkit'); // New: WalletKit
 const QRCode = require('qrcode'); // New: For QR code generation
-
+const relayClient = createClient({
+  baseUrl: 'https://api.relay.link', // Adjust as per Relay SDK docs
+  source: 'DirectPayBot', // Optional identifier
+});
 require('dotenv').config();
 
 // =================== Initialize Logging ===================
@@ -1278,11 +1281,6 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
-// =================== Register Scenes with Stage ===================
-const stage = new Scenes.Stage();
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
-bot.use(session());
-bot.use(stage.middleware());
 
 // =================== Apply Telegraf Webhook Middleware ===================
 if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
