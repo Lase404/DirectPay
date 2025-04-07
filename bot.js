@@ -92,19 +92,32 @@ for (const key of requiredKeys) {
   }
 }
 // =================== WalletConnect Setup ===================
-const core = new Core({ projectId: WALLETCONNECT_PROJECT_ID });
-const walletKit = await WalletKit.init({
-  core,
-  metadata: {
-    name: 'DirectPay',
-    description: 'Sell crypto seamlessly',
-    url: 'https://t.me/directpaynairabot',
-    icons: ['https://assets.reown.com/reown-profile-pic.png'],
-  },
-}).catch(err => {
-  logger.error('WalletKit initialization failed:', err);
-  process.exit(1);
-});
+const { Core } = require('@walletconnect/core');
+const { WalletKit } = require('@reown/walletkit');
+
+let walletKit; // Declare outside to be accessible globally
+
+async function initWalletConnect() {
+  const core = new Core({ projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782' });
+  try {
+    walletKit = await WalletKit.init({
+      core,
+      metadata: {
+        name: 'DirectPay',
+        description: 'Sell crypto seamlessly',
+        url: 'https://t.me/directpaynairabot',
+        icons: ['https://assets.reown.com/reown-profile-pic.png'],
+      },
+    });
+    logger.info('WalletKit initialized successfully');
+  } catch (err) {
+    logger.error('WalletKit initialization failed:', err);
+    process.exit(1);
+  }
+}
+
+// Call the async function immediately to initialize
+initWalletConnect();
 
 
 const WALLET_GENERATED_IMAGE = './wallet_generated_base1.png';
