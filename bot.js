@@ -92,8 +92,6 @@ for (const key of requiredKeys) {
   }
 }
 // =================== WalletConnect Setup ===================
-const { Core } = require('@walletconnect/core');
-const { WalletKit } = require('@reown/walletkit');
 
 let walletKit; // Declare outside to be accessible globally
 
