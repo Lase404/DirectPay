@@ -126,6 +126,11 @@ const ERROR_IMAGE = './error.png';
 // =================== Initialize Express and Telegraf ===================
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
+// Register all scenes
+const stage = new Scenes.Stage();
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
+bot.use(session());
+bot.use(stage.middleware());
 
 // =================== Define Supported Banks ===================
 const bankList = [
@@ -544,11 +549,7 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
-// Register all scenes
-const stage = new Scenes.Stage();
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
-bot.use(session());
-bot.use(stage.middleware());
+
 
 // =================== Command Handler ===================
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
