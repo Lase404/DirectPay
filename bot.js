@@ -94,7 +94,6 @@ for (const key of requiredKeys) {
 
 const { SignClient } = require('@walletconnect/sign-client');
 const { getSdkError } = require('@walletconnect/utils');
-const logger = require('./logger'); // Your existing logger
 
 class WalletConnectManager {
   constructor(projectId) {
