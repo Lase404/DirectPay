@@ -236,8 +236,6 @@ const WALLET_GENERATED_IMAGE = './wallet_generated_base1.png';
 const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
 const PAYOUT_SUCCESS_IMAGE = './payout_success.png';
 const ERROR_IMAGE = './error.png';
-const { initWalletConnect } = require('./walletconnect'); // Adjust path
-const logger = require('./logger');
 
 (async () => {
   try {
