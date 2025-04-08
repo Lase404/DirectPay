@@ -410,8 +410,6 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
   }
 );
 
-const { Scenes, Markup } = require('telegraf');
-const { walletKit } = require('./walletconnect'); // Import walletKit directly
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
