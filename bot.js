@@ -1,4 +1,3 @@
-
 // =================== Import Required Libraries ===================
 const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const express = require('express');
@@ -93,30 +92,160 @@ for (const key of requiredKeys) {
   }
 }
 
-let walletKit;
+const { SignClient } = require('@walletconnect/sign-client');
+const { getSdkError } = require('@walletconnect/utils');
+const admin = require('firebase-admin');
+const logger = require('./logger'); // Your existing logger
 
-async function initWalletConnect() {
-  const core = new Core({
-    projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782',
-  });
-  try {
-    walletKit = await WalletKit.init({
-      core,
-      metadata: {
-        name: 'DirectPay',
-        description: 'Sell crypto seamlessly',
-        url: 'https://t.me/directpaynairabot',
-        icons: ['https://assets.reown.com/reown-profile-pic.png'],
+class WalletConnectManager {
+  constructor(projectId) {
+    this.projectId = projectId || '04c09c92b20bcfac0b83ee76fde1d782';
+    this.client = null;
+    this.session = null;
+  }
+
+  // Initialize the Sign Client
+  async initialize() {
+    try {
+      this.client = await SignClient.init({
+        projectId: this.projectId,
+        metadata: {
+          name: 'DirectPay',
+          description: 'Sell crypto seamlessly',
+          url: 'https://t.me/directpaynairabot',
+          icons: ['https://assets.reown.com/reown-profile-pic.png'],
+        },
+      });
+      logger.info('WalletConnect Sign Client initialized successfully');
+      await this.logToBackend('WalletConnect Initialized', { status: 'success' });
+    } catch (error) {
+      logger.error('WalletConnect initialization failed:', error.message);
+      await this.logToBackend('WalletConnect Initialization Failed', { status: 'error', error: error.message });
+      throw error;
+    }
+  }
+
+  // Connect to a wallet and return URI for QR code
+  async connect(chainId) {
+    if (!this.client) await this.initialize();
+
+    try {
+      const requiredNamespaces = {
+        eip155: {
+          methods: ['eth_sendTransaction', 'personal_sign'],
+          chains: [`eip155:${chainId}`],
+          events: ['chainChanged', 'accountsChanged'],
+        },
+      };
+
+      const { uri, approval } = await this.client.connect({
+        requiredNamespaces,
+      });
+
+      if (!uri) throw new Error('Failed to generate WalletConnect URI');
+
+      logger.info('WalletConnect connection initiated', { uri });
+      await this.logToBackend('WalletConnect Connect Initiated', { uri, chainId });
+
+      // Wait for session approval
+      this.session = await approval();
+      const userAddress = this.session.namespaces.eip155.accounts[0].split(':')[2];
+      
+      logger.info('WalletConnect session approved', { userAddress });
+      await this.logToBackend('WalletConnect Session Approved', {
+        userAddress,
+        sessionTopic: this.session.topic,
+        namespaces: this.session.namespaces,
+      });
+
+      return { uri, userAddress };
+    } catch (error) {
+      logger.error('WalletConnect connection failed:', error.message);
+      await this.logToBackend('WalletConnect Connection Failed', { status: 'error', error: error.message });
+      throw error;
+    }
+  }
+
+  // Approve a transaction (deposit) using eth_sendTransaction
+  async sendTransaction({ chainId, from, to, value, data }) {
+    if (!this.session) throw new Error('No active WalletConnect session');
+
+    const request = {
+      topic: this.session.topic,
+      chainId: `eip155:${chainId}`,
+      request: {
+        method: 'eth_sendTransaction',
+        params: [{
+          from,
+          to,
+          value: value || '0x0',
+          data: data || '0x',
+        }],
       },
-    });
-    logger.info('WalletKit initialized successfully');
-  } catch (err) {
-    logger.error('WalletKit initialization failed:', err);
-    process.exit(1);
+    };
+
+    try {
+      const result = await this.client.request(request);
+      logger.info('WalletConnect transaction approved', { txHash: result });
+      await this.logToBackend('WalletConnect Transaction Approved', {
+        txHash: result,
+        chainId,
+        from,
+        to,
+      });
+      return result;
+    } catch (error) {
+      logger.error('WalletConnect transaction failed:', error.message);
+      await this.logToBackend('WalletConnect Transaction Failed', {
+        status: 'error',
+        error: error.message,
+        chainId,
+        from,
+        to,
+      });
+      throw error;
+    }
+  }
+
+  // Disconnect the session
+  async disconnect() {
+    if (!this.session) return;
+
+    try {
+      await this.client.disconnect({
+        topic: this.session.topic,
+        reason: getSdkError('USER_DISCONNECTED'),
+      });
+      logger.info('WalletConnect session disconnected', { topic: this.session.topic });
+      await this.logToBackend('WalletConnect Session Disconnected', { topic: this.session.topic });
+      this.session = null;
+    } catch (error) {
+      logger.error('WalletConnect disconnection failed:', error.message);
+      await this.logToBackend('WalletConnect Disconnection Failed', { status: 'error', error: error.message });
+    }
+  }
+
+  // Log activity to Firestore backend
+  async logToBackend(event, data) {
+    try {
+      await admin.firestore().collection('walletconnect_logs').add({
+        event,
+        data,
+        timestamp: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      logger.error('Failed to log WalletConnect event to backend:', error.message);
+    }
+  }
+
+  // Get current user address
+  getUserAddress() {
+    if (!this.session) throw new Error('No active WalletConnect session');
+    return this.session.namespaces.eip155.accounts[0].split(':')[2];
   }
 }
 
-initWalletConnect();
+module.exports = new WalletConnectManager();
 
 
 const WALLET_GENERATED_IMAGE = './wallet_generated_base1.png';
@@ -194,6 +323,7 @@ const chains = {
   }
 };
 
+const walletConnectManager = require('./walletConnectManager');
 // =================== Chain Mapping ===================
 const chainMapping = {
   'base': 'Base',
@@ -203,8 +333,6 @@ const chainMapping = {
   'bnb chain': 'BNB Smart Chain',
   'bnb': 'BNB Smart Chain',
 };
-
-
 const bankLinkingSceneTemp = new Scenes.WizardScene(
   'bank_linking_scene_temp',
   async (ctx) => {
@@ -309,6 +437,7 @@ const sellScene = new Scenes.WizardScene(
     let currencyRes;
     try {
       currencyRes = await axios.post('https://api.relay.link/currencies/v1', payload);
+      await walletConnectManager.logToBackend('Relay Currency Validation', { request: payload, response: currencyRes.data });
     } catch (err) {
       logger.error(`Relay currency validation failed for ${caOrTerm} on ${network}: ${err.message}`);
       await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Currency or address check fail. Try again.' : '❌ Error validating currency or address. Please try again.');
@@ -421,79 +550,66 @@ const sellScene = new Scenes.WizardScene(
       referenceId,
     });
 
-    const { uri, approval } = await walletKit.core.pairing.create();
-    const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
-    const encodedUri = encodeURIComponent(uri);
-    const walletOptions = [
-      Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
-      Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
-      // Display raw URI as text instead of a button
-    ];
+    try {
+      const { uri, userAddress } = await walletConnectManager.connect(ctx.wizard.state.data.chainId);
+      ctx.wizard.state.data.userAddress = userAddress;
 
-    const connectMsg = userState.usePidgin
-      ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
-      : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
-    await ctx.editMessageMedia(
-      { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
-      { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
-    );
+      const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
+      const encodedUri = encodeURIComponent(uri);
+      const walletOptions = [
+        Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
+        Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
+      ];
 
-    walletKit.on('session_proposal', async (proposal) => {
-      try {
-        const session = await walletKit.approveSession({
-          id: proposal.id,
-          namespaces: {
-            eip155: {
-              chains: [`eip155:${ctx.wizard.state.data.chainId}`],
-              methods: ['eth_sendTransaction', 'personal_sign'],
-              events: ['accountsChanged', 'chainChanged'],
-              accounts: [`eip155:${ctx.wizard.state.data.chainId}:${proposal.params.proposer.publicKey}`],
-            },
-          },
-        });
-        const userAddress = session.namespaces.eip155.accounts[0].split(':')[2] || 'Unknown';
+      const connectMsg = userState.usePidgin
+        ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
+        : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
+      await ctx.editMessageMedia(
+        { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
+        { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
+      );
 
-        const quote = await relayClient.actions.getQuote({
-          user: userAddress,
-          originChainId: ctx.wizard.state.data.chainId,
-          originCurrency: ctx.wizard.state.data.originCurrency,
-          destinationChainId: 8453,
-          destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-          tradeType: 'EXACT_INPUT',
-          recipient: ctx.wizard.state.data.recipient,
-          amount: ctx.wizard.state.data.amountInWei,
-          refundTo: userAddress,
-        });
+      const quote = await relayClient.actions.getQuote({
+        user: userAddress,
+        originChainId: ctx.wizard.state.data.chainId,
+        originCurrency: ctx.wizard.state.data.originCurrency,
+        destinationChainId: 8453,
+        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        tradeType: 'EXACT_INPUT',
+        recipient: ctx.wizard.state.data.recipient,
+        amount: ctx.wizard.state.data.amountInWei,
+        refundTo: userAddress,
+      });
+      await walletConnectManager.logToBackend('Relay Quote Fetched', { quote });
 
-        const details = quote.details;
-        const quoteMsg = userState.usePidgin
-          ? `Sell Details:\n` +
-            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-            `You wan approve this?`
-          : `Sell Details:\n` +
-            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-            `Approve this transaction?`;
-        await ctx.editMessageText(quoteMsg, {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.inlineKeyboard([
-            Markup.button.callback('✅ Approve', 'approve'),
-            Markup.button.callback('❌ Cancel', 'cancel'),
-          ]).reply_markup,
-        });
+      const details = quote.details;
+      const quoteMsg = userState.usePidgin
+        ? `Sell Details:\n` +
+          `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
+          `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
+          `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
+          `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
+          `You wan approve this?`
+        : `Sell Details:\n` +
+          `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
+          `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
+          `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
+          `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
+          `Approve this transaction?`;
+      await ctx.editMessageText(quoteMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          Markup.button.callback('✅ Approve', 'approve'),
+          Markup.button.callback('❌ Cancel', 'cancel'),
+        ]).reply_markup,
+      });
 
-        ctx.wizard.state.data.quote = quote;
-        ctx.wizard.state.data.userAddress = userAddress;
-      } catch (error) {
-        logger.error(`Session proposal error for ${userId}: ${error.message}`);
-        await ctx.editMessageText(userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error occurred. Try again.', { parse_mode: 'Markdown' });
-      }
-    });
+      ctx.wizard.state.data.quote = quote;
+    } catch (error) {
+      logger.error(`WalletConnect or Relay error for ${userId}: ${error.message}`);
+      await ctx.editMessageText(userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error occurred. Try again.', { parse_mode: 'Markdown' });
+      return ctx.scene.leave();
+    }
 
     return ctx.wizard.next();
   },
@@ -503,43 +619,58 @@ const sellScene = new Scenes.WizardScene(
 
     const userState = await getUserState(ctx.wizard.state.data.userId);
     if (action === 'cancel') {
+      await walletConnectManager.disconnect();
       await ctx.editMessageText(userState.usePidgin ? 'Transaction don cancel.' : 'Transaction cancelled.', { parse_mode: 'Markdown' });
       return ctx.scene.leave();
     }
 
     if (action === 'approve') {
-      const { quote, userAddress } = ctx.wizard.state.data;
-      await relayClient.actions.execute({
-        quote,
-        wallet: { address: userAddress },
-        onProgress: async (steps) => {
-          const depositStep = steps.find(s => s.id === 'deposit');
-          if (depositStep && depositStep.items[0].status === 'complete') {
-            const amountFormatted = ctx.wizard.state.data.amount;
-            const txDoc = await db.collection('transactions')
-              .where('userId', '==', ctx.wizard.state.data.userId)
-              .where('status', '==', 'pending')
-              .where('referenceId', '==', ctx.wizard.state.data.referenceId)
-              .limit(1)
-              .get();
-            if (!txDoc.empty) {
-              await txDoc.docs[0].ref.update({ status: 'Processing' });
-              const chainName = Object.keys(chains).find(key => chains[key].chainId === ctx.wizard.state.data.chainId);
-              const success = userState.usePidgin
-                ? `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} don land! Payout dey process.`
-                : `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} succeeded! Payout is being processed.`;
-              await ctx.editMessageText(success, { parse_mode: 'Markdown' });
+      const { quote, userAddress, chainId, originCurrency, recipient, amountInWei } = ctx.wizard.state.data;
+
+      try {
+        const txHash = await walletConnectManager.sendTransaction({
+          chainId,
+          from: userAddress,
+          to: originCurrency, // Assuming token transfer to itself for approval
+          value: '0x0',
+          data: '0x', // Simplified; real implementation needs token approval/transfer data
+        });
+
+        await relayClient.actions.execute({
+          quote,
+          wallet: { address: userAddress },
+          onProgress: async (steps) => {
+            const depositStep = steps.find(s => s.id === 'deposit');
+            if (depositStep && depositStep.items[0].status === 'complete') {
+              const amountFormatted = ctx.wizard.state.data.amount;
+              const txDoc = await db.collection('transactions')
+                .where('userId', '==', ctx.wizard.state.data.userId)
+                .where('status', '==', 'pending')
+                .where('referenceId', '==', ctx.wizard.state.data.referenceId)
+                .limit(1)
+                .get();
+              if (!txDoc.empty) {
+                await txDoc.docs[0].ref.update({ status: 'Processing', txHash });
+                const chainName = Object.keys(chains).find(key => chains[key].chainId === chainId);
+                const success = userState.usePidgin
+                  ? `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} don land! Payout dey process.`
+                  : `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} succeeded! Payout is being processed.`;
+                await ctx.editMessageText(success, { parse_mode: 'Markdown' });
+              }
             }
-          }
-        },
-      }).catch(err => {
-        logger.error(`Relay execution failed for ${ctx.wizard.state.data.userId}: ${err.message}`);
-        ctx.editMessageText(userState.usePidgin ? '❌ Transaction fail o. Try again.' : '❌ Transaction failed. Please try again.', { parse_mode: 'Markdown' });
-      });
-      const submit = userState.usePidgin
-        ? 'Transaction don submit. Confirm for your wallet o.'
-        : 'Transaction submitted. Please confirm in your wallet.';
-      await ctx.editMessageText(submit, { parse_mode: 'Markdown' });
+          },
+        });
+
+        const submit = userState.usePidgin
+          ? 'Transaction don submit. Confirm for your wallet o.'
+          : 'Transaction submitted. Please confirm in your wallet.';
+        await ctx.editMessageText(submit, { parse_mode: 'Markdown' });
+      } catch (err) {
+        logger.error(`Transaction execution failed for ${userId}: ${err.message}`);
+        await ctx.editMessageText(userState.usePidgin ? '❌ Transaction fail o. Try again.' : '❌ Transaction failed. Please try again.', { parse_mode: 'Markdown' });
+      } finally {
+        await walletConnectManager.disconnect();
+      }
     }
     return ctx.scene.leave();
   }
@@ -549,7 +680,8 @@ stage.register(bankLinkingSceneTemp, sellScene);
 
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
 
-// =================== Helper Functions ===================
+// =================== Command Handler ===================
+bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));// =================== Helper Functions ===================
 
 function mapToPaycrest(asset, chainName) {
   if (!['USDC', 'USDT'].includes(asset)) return null;
