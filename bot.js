@@ -24,6 +24,8 @@ const relayClient = createClient({
   source: 'DirectPayBot', // Optional identifier
 });
 require('dotenv').config();
+// Register scenes after all definitions
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 // =================== Initialize Logging ===================
 const logger = winston.createLogger({
