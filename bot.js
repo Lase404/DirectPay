@@ -1,3 +1,4 @@
+
 // =================== Import Required Libraries ===================
 const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const express = require('express');
@@ -202,6 +203,8 @@ const chainMapping = {
   'bnb chain': 'BNB Smart Chain',
   'bnb': 'BNB Smart Chain',
 };
+
+
 const bankLinkingSceneTemp = new Scenes.WizardScene(
   'bank_linking_scene_temp',
   async (ctx) => {
@@ -384,7 +387,7 @@ const sellScene = new Scenes.WizardScene(
       const wallet = userState.wallets.find(w => w.bank);
       if (wallet) {
         ctx.wizard.state.data.bankDetails = wallet.bank;
-        blockradarAddress = wallet.address; // Reuse existing wallet address
+        blockradarAddress = wallet.address;
       }
     } else if (action === 'link_new') {
       await ctx.scene.enter('bank_linking_scene_temp');
@@ -418,25 +421,23 @@ const sellScene = new Scenes.WizardScene(
       referenceId,
     });
 
-    // Updated WalletKit session creation
     const { uri, approval } = await walletKit.core.pairing.create();
-    const deepLink = `wc:${uri}`;
     const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
+    const encodedUri = encodeURIComponent(uri);
     const walletOptions = [
-      Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodeURIComponent(uri)}`),
-      Markup.button.url('Trust Wallet', `trust://wc?uri=${encodeURIComponent(uri)}`),
-      Markup.button.url('Other Wallet', deepLink),
+      Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
+      Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
+      // Display raw URI as text instead of a button
     ];
 
     const connectMsg = userState.usePidgin
-      ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection`
-      : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection`;
+      ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
+      : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
     await ctx.editMessageMedia(
       { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
       { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
     );
 
-    // Handle session proposal
     walletKit.on('session_proposal', async (proposal) => {
       try {
         const session = await walletKit.approveSession({
@@ -546,8 +547,9 @@ const sellScene = new Scenes.WizardScene(
 
 stage.register(bankLinkingSceneTemp, sellScene);
 
-// =================== Command Handler ===================
-bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));// =================== Helper Functions ===================
+bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
+
+// =================== Helper Functions ===================
 
 function mapToPaycrest(asset, chainName) {
   if (!['USDC', 'USDT'].includes(asset)) return null;
