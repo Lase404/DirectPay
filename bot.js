@@ -203,11 +203,6 @@ const chainMapping = {
   'bnb': 'BNB Smart Chain',
 };
 
-const walletOptions = [
-  Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodeURIComponent(uri)}`),
-  Markup.button.url('Trust Wallet', `trust://wc?uri=${encodeURIComponent(uri)}`),
-  Markup.button.url('Other Wallet', deepLink),
-];
 
 const bankLinkingSceneTemp = new Scenes.WizardScene(
   'bank_linking_scene_temp',
