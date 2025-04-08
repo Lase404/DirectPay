@@ -92,31 +92,140 @@ for (const key of requiredKeys) {
   }
 }
 
+
+const { buildApprovedNamespaces, getSdkError } = require('@walletconnect/utils');
+
 let walletKit;
 
-async function initWalletConnect() {
+async function initWalletConnect(bot) {
   const core = new Core({
-    projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782',
+    projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782'
   });
+
   try {
     walletKit = await WalletKit.init({
       core,
       metadata: {
         name: 'DirectPay',
-        description: 'Sell crypto seamlessly',
+        description: 'Sell crypto seamlessly via Telegram',
         url: 'https://t.me/directpaynairabot',
         icons: ['https://assets.reown.com/reown-profile-pic.png'],
       },
     });
     logger.info('WalletKit initialized successfully');
+
+    const activeSessions = walletKit.getActiveSessions();
+    logger.info(`Active sessions on startup: ${Object.keys(activeSessions).length}`);
+
+    // Global session proposal handler
+    walletKit.on('session_proposal', async (proposal) => {
+      const userId = proposal.params.proposer.metadata?.context || 'unknown'; // Fallback if no context
+      logger.info(`Global session proposal received for user ${userId}: ${JSON.stringify(proposal.params)}`);
+
+      // Find the active scene context
+      const ctx = bot.context; // Assumes bot middleware preserves context; adjust if needed
+      if (!ctx || !ctx.wizard || !ctx.wizard.state.data || ctx.wizard.state.data.userId !== userId) {
+        logger.warn(`No active context found for user ${userId}`);
+        await walletKit.rejectSession({
+          id: proposal.id,
+          reason: getSdkError('USER_REJECTED'),
+        });
+        return;
+      }
+
+      const userState = await getUserState(userId);
+      try {
+        const supportedNamespaces = {
+          eip155: {
+            chains: Object.values(chains).map(c => `eip155:${c.chainId}`),
+            methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData', 'eth_signTypedData_v4'],
+            events: ['accountsChanged', 'chainChanged'],
+            accounts: [],
+          },
+        };
+        const approvedNamespaces = buildApprovedNamespaces({
+          proposal: proposal.params,
+          supportedNamespaces,
+        });
+
+        const session = await walletKit.approveSession({
+          id: proposal.id,
+          namespaces: approvedNamespaces,
+        });
+        const userAddress = session.namespaces.eip155.accounts[0]?.split(':')[2] || 'Unknown';
+        logger.info(`Session approved for user ${userId} with address ${userAddress}`);
+
+        const quote = await relayClient.actions.getQuote({
+          user: userAddress,
+          originChainId: ctx.wizard.state.data.chainId,
+          originCurrency: ctx.wizard.state.data.originCurrency,
+          destinationChainId: 8453,
+          destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          tradeType: 'EXACT_INPUT',
+          recipient: ctx.wizard.state.data.recipient,
+          amount: ctx.wizard.state.data.amountInWei,
+          refundTo: userAddress,
+        });
+
+        const details = quote.details;
+        const quoteMsg = userState.usePidgin
+          ? `Sell Details:\n` +
+            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
+            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
+            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
+            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
+            `You wan approve this?`
+          : `Sell Details:\n` +
+            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
+            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
+            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
+            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
+            `Approve this transaction?`;
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          ctx.wizard.state.data.messageId,
+          undefined,
+          quoteMsg,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: Markup.inlineKeyboard([
+              Markup.button.callback('✅ Approve', 'approve'),
+              Markup.button.callback('❌ Cancel', 'cancel'),
+            ]).reply_markup,
+          }
+        );
+
+        ctx.wizard.state.data.quote = quote;
+        ctx.wizard.state.data.userAddress = userAddress;
+        ctx.wizard.state.data.sessionTopic = session.topic;
+      } catch (error) {
+        logger.error(`Session proposal error for ${userId}: ${error.message}`);
+        await walletKit.rejectSession({
+          id: proposal.id,
+          reason: getSdkError('USER_REJECTED'),
+        });
+        await ctx.telegram.editMessageText(
+          ctx.chat.id,
+          ctx.wizard.state.data.messageId,
+          undefined,
+          userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error occurred. Try again.',
+          { parse_mode: 'Markdown' }
+        );
+      }
+    });
+
+    // Optional: Log session requests for debugging
+    walletKit.on('session_request', async (event) => {
+      logger.info(`Session request received: ${JSON.stringify(event)}`);
+    });
+
   } catch (err) {
     logger.error('WalletKit initialization failed:', err);
     process.exit(1);
   }
 }
 
-initWalletConnect();
-
+module.exports = { initWalletConnect, walletKit }; 
 
 const WALLET_GENERATED_IMAGE = './wallet_generated_base1.png';
 const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
@@ -378,7 +487,7 @@ const sellScene = new Scenes.WizardScene(
     const action = ctx.callbackQuery?.data;
     if (!action) return;
 
-    const { userId } = ctx.wizard.state.data;
+    const { userId, chainId } = ctx.wizard.state.data;
     const userState = await getUserState(userId);
     let blockradarAddress;
 
@@ -416,83 +525,31 @@ const sellScene = new Scenes.WizardScene(
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       amount: ctx.wizard.state.data.amount,
       asset: ctx.wizard.state.data.ca,
-      chain: Object.keys(chains).find(key => chains[key].chainId === ctx.wizard.state.data.chainId),
+      chain: Object.keys(chains).find(key => chains[key].chainId === chainId),
       referenceId,
     });
 
-    const { uri, approval } = await walletKit.core.pairing.create();
+    const { uri } = await walletKit.core.pairing.create();
+    logger.info(`Generated WalletConnect URI for user ${userId}: ${uri}`);
+    await walletKit.pair({ uri }); // Ensure pairing is active
     const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
     const encodedUri = encodeURIComponent(uri);
+
     const walletOptions = [
       Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
       Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
-      // Display raw URI as text instead of a button
     ];
 
     const connectMsg = userState.usePidgin
       ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
       : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
-    await ctx.editMessageMedia(
+    const message = await ctx.editMessageMedia(
       { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
       { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
     );
+    ctx.wizard.state.data.messageId = message.message_id;
 
-    walletKit.on('session_proposal', async (proposal) => {
-      try {
-        const session = await walletKit.approveSession({
-          id: proposal.id,
-          namespaces: {
-            eip155: {
-              chains: [`eip155:${ctx.wizard.state.data.chainId}`],
-              methods: ['eth_sendTransaction', 'personal_sign'],
-              events: ['accountsChanged', 'chainChanged'],
-              accounts: [`eip155:${ctx.wizard.state.data.chainId}:${proposal.params.proposer.publicKey}`],
-            },
-          },
-        });
-        const userAddress = session.namespaces.eip155.accounts[0].split(':')[2] || 'Unknown';
-
-        const quote = await relayClient.actions.getQuote({
-          user: userAddress,
-          originChainId: ctx.wizard.state.data.chainId,
-          originCurrency: ctx.wizard.state.data.originCurrency,
-          destinationChainId: 8453,
-          destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-          tradeType: 'EXACT_INPUT',
-          recipient: ctx.wizard.state.data.recipient,
-          amount: ctx.wizard.state.data.amountInWei,
-          refundTo: userAddress,
-        });
-
-        const details = quote.details;
-        const quoteMsg = userState.usePidgin
-          ? `Sell Details:\n` +
-            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-            `You wan approve this?`
-          : `Sell Details:\n` +
-            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-            `Approve this transaction?`;
-        await ctx.editMessageText(quoteMsg, {
-          parse_mode: 'Markdown',
-          reply_markup: Markup.inlineKeyboard([
-            Markup.button.callback('✅ Approve', 'approve'),
-            Markup.button.callback('❌ Cancel', 'cancel'),
-          ]).reply_markup,
-        });
-
-        ctx.wizard.state.data.quote = quote;
-        ctx.wizard.state.data.userAddress = userAddress;
-      } catch (error) {
-        logger.error(`Session proposal error for ${userId}: ${error.message}`);
-        await ctx.editMessageText(userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error occurred. Try again.', { parse_mode: 'Markdown' });
-      }
-    });
+    logger.info(`Pairing initiated for user ${userId} with URI: ${uri}`);
 
     return ctx.wizard.next();
   },
@@ -502,12 +559,18 @@ const sellScene = new Scenes.WizardScene(
 
     const userState = await getUserState(ctx.wizard.state.data.userId);
     if (action === 'cancel') {
+      if (ctx.wizard.state.data.sessionTopic) {
+        await walletKit.disconnectSession({
+          topic: ctx.wizard.state.data.sessionTopic,
+          reason: getSdkError('USER_DISCONNECTED'),
+        });
+      }
       await ctx.editMessageText(userState.usePidgin ? 'Transaction don cancel.' : 'Transaction cancelled.', { parse_mode: 'Markdown' });
       return ctx.scene.leave();
     }
 
     if (action === 'approve') {
-      const { quote, userAddress } = ctx.wizard.state.data;
+      const { quote, userAddress, sessionTopic } = ctx.wizard.state.data;
       await relayClient.actions.execute({
         quote,
         wallet: { address: userAddress },
@@ -539,13 +602,17 @@ const sellScene = new Scenes.WizardScene(
         ? 'Transaction don submit. Confirm for your wallet o.'
         : 'Transaction submitted. Please confirm in your wallet.';
       await ctx.editMessageText(submit, { parse_mode: 'Markdown' });
+
+      if (sessionTopic) {
+        await walletKit.extendSession({ topic: sessionTopic });
+        logger.info(`Session extended for topic ${sessionTopic}`);
+      }
     }
     return ctx.scene.leave();
   }
 );
 
 stage.register(bankLinkingSceneTemp, sellScene);
-
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
 
 // =================== Helper Functions ===================
