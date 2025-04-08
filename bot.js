@@ -16,6 +16,8 @@ const requestIp = require('request-ip');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
 const { createClient } = require('@reservoir0x/relay-sdk'); // New: Relay SDK
+const { Core } = require('@walletconnect/core'); // New: WalletConnect Core
+const { WalletKit } = require('@reown/walletkit'); // New: WalletKit
 const QRCode = require('qrcode'); // New: For QR code generation
 const relayClient = createClient({
   baseUrl: 'https://api.relay.link', // Adjust as per Relay SDK docs
@@ -90,172 +92,37 @@ for (const key of requiredKeys) {
   }
 }
 
-
-const { Core } = require('@walletconnect/core');
-const { WalletKit } = require('@reown/walletkit');
-const { buildApprovedNamespaces, getSdkError } = require('@walletconnect/utils');
-
 let walletKit;
 
-async function initWalletConnect(bot) {
-  if (walletKit) {
-    logger.info('WalletKit already initialized');
-    return walletKit;
-  }
-
+async function initWalletConnect() {
   const core = new Core({
     projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782',
-    relayUrl: 'wss://relay.walletconnect.com',
   });
-
   try {
     walletKit = await WalletKit.init({
       core,
       metadata: {
         name: 'DirectPay',
-        description: 'Sell crypto seamlessly via Telegram',
+        description: 'Sell crypto seamlessly',
         url: 'https://t.me/directpaynairabot',
         icons: ['https://assets.reown.com/reown-profile-pic.png'],
       },
     });
     logger.info('WalletKit initialized successfully');
-
-    const activeSessions = walletKit.getActiveSessions();
-    logger.info(`Active sessions on startup: ${Object.keys(activeSessions).length}`);
-
-    walletKit.on('session_proposal', async (proposal) => {
-      const userId = proposal.params.proposer.metadata?.context || 'unknown';
-      logger.info(`Global session proposal received for user ${userId}: ${JSON.stringify(proposal.params)}`);
-
-      const ctx = bot.context;
-      if (!ctx || !ctx.wizard || !ctx.wizard.state.data || ctx.wizard.state.data.userId !== userId) {
-        logger.warn(`No active context found for user ${userId}`);
-        await walletKit.rejectSession({
-          id: proposal.id,
-          reason: getSdkError('USER_REJECTED'),
-        });
-        return;
-      }
-
-      const userState = await getUserState(userId);
-      try {
-        const supportedNamespaces = {
-          eip155: {
-            chains: Object.values(chains).map(c => `eip155:${c.chainId}`),
-            methods: ['eth_sendTransaction', 'personal_sign', 'eth_signTypedData', 'eth_signTypedData_v4'],
-            events: ['accountsChanged', 'chainChanged'],
-            accounts: [],
-          },
-        };
-        const approvedNamespaces = buildApprovedNamespaces({
-          proposal: proposal.params,
-          supportedNamespaces,
-        });
-
-        const session = await walletKit.approveSession({
-          id: proposal.id,
-          namespaces: approvedNamespaces,
-        });
-        const userAddress = session.namespaces.eip155.accounts[0]?.split(':')[2] || 'Unknown';
-        logger.info(`Session approved for user ${userId} with address ${userAddress}`);
-
-        const quote = await relayClient.actions.getQuote({
-          user: userAddress,
-          originChainId: ctx.wizard.state.data.chainId,
-          originCurrency: ctx.wizard.state.data.originCurrency,
-          destinationChainId: 8453,
-          destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-          tradeType: 'EXACT_INPUT',
-          recipient: ctx.wizard.state.data.recipient,
-          amount: ctx.wizard.state.data.amountInWei,
-          refundTo: userAddress,
-        });
-
-        const details = quote.details;
-        const quoteMsg = userState.usePidgin
-          ? `Sell Details:\n` +
-            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-            `You wan approve this?`
-          : `Sell Details:\n` +
-            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-            `Approve this transaction?`;
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          ctx.wizard.state.data.messageId,
-          undefined,
-          quoteMsg,
-          {
-            parse_mode: 'Markdown',
-            reply_markup: Markup.inlineKeyboard([
-              Markup.button.callback('✅ Approve', 'approve'),
-              Markup.button.callback('❌ Cancel', 'cancel'),
-            ]).reply_markup,
-          }
-        );
-
-        ctx.wizard.state.data.quote = quote;
-        ctx.wizard.state.data.userAddress = userAddress;
-        ctx.wizard.state.data.sessionTopic = session.topic;
-      } catch (error) {
-        logger.error(`Session proposal error for ${userId}: ${error.message}`);
-        await walletKit.rejectSession({
-          id: proposal.id,
-          reason: getSdkError('USER_REJECTED'),
-        });
-        await ctx.telegram.editMessageText(
-          ctx.chat.id,
-          ctx.wizard.state.data.messageId,
-          undefined,
-          userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error occurred. Try again.',
-          { parse_mode: 'Markdown' }
-        );
-      }
-    });
-
-    walletKit.on('session_request', async (event) => {
-      logger.info(`Session request received: ${JSON.stringify(event)}`);
-    });
-
   } catch (err) {
-    logger.error(`WalletKit initialization failed: ${err.message}`);
-    throw err; // Ensure caller handles failure
+    logger.error('WalletKit initialization failed:', err);
+    process.exit(1);
   }
-
-  return walletKit;
 }
 
-module.exports = { initWalletConnect };
+initWalletConnect();
+
 
 const WALLET_GENERATED_IMAGE = './wallet_generated_base1.png';
 const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
 const PAYOUT_SUCCESS_IMAGE = './payout_success.png';
 const ERROR_IMAGE = './error.png';
 
-(async () => {
-  try {
-    await initWalletConnect(bot);
-    logger.info('Bot initialization complete');
-
-    // Register scenes after initialization
-    const { bankLinkingSceneTemp, sellScene } = require('./scenes'); // Adjust path to your scenes file
-    stage.register(bankLinkingSceneTemp, sellScene);
-
-    bot.use(stage.middleware());
-    bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
-
-    bot.launch();
-    logger.info('Bot launched successfully');
-  } catch (err) {
-    logger.error('Failed to initialize bot:', err);
-    process.exit(1);
-  }
-})();
 // =================== Initialize Express and Telegraf ===================
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
@@ -335,10 +202,6 @@ const chainMapping = {
   'bnb chain': 'BNB Smart Chain',
   'bnb': 'BNB Smart Chain',
 };
-
-c
-
-
 const bankLinkingSceneTemp = new Scenes.WizardScene(
   'bank_linking_scene_temp',
   async (ctx) => {
@@ -409,7 +272,6 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
     }
   }
 );
-
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
@@ -514,7 +376,7 @@ const sellScene = new Scenes.WizardScene(
     const action = ctx.callbackQuery?.data;
     if (!action) return;
 
-    const { userId, chainId } = ctx.wizard.state.data;
+    const { userId } = ctx.wizard.state.data;
     const userState = await getUserState(userId);
     let blockradarAddress;
 
@@ -522,7 +384,7 @@ const sellScene = new Scenes.WizardScene(
       const wallet = userState.wallets.find(w => w.bank);
       if (wallet) {
         ctx.wizard.state.data.bankDetails = wallet.bank;
-        blockradarAddress = wallet.address;
+        blockradarAddress = wallet.address; // Reuse existing wallet address
       }
     } else if (action === 'link_new') {
       await ctx.scene.enter('bank_linking_scene_temp');
@@ -552,43 +414,85 @@ const sellScene = new Scenes.WizardScene(
       createdAt: admin.firestore.FieldValue.serverTimestamp(),
       amount: ctx.wizard.state.data.amount,
       asset: ctx.wizard.state.data.ca,
-      chain: Object.keys(chains).find(key => chains[key].chainId === chainId),
+      chain: Object.keys(chains).find(key => chains[key].chainId === ctx.wizard.state.data.chainId),
       referenceId,
     });
 
-    if (!walletKit) {
-      logger.error('WalletKit not initialized');
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Wallet connection no work. Try again later.' : '❌ Wallet connection failed. Please try again later.');
-      return ctx.scene.leave();
-    }
+    // Updated WalletKit session creation
+    const { uri, approval } = await walletKit.core.pairing.create();
+    const deepLink = `wc:${uri}`;
+    const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
+    const walletOptions = [
+      Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodeURIComponent(uri)}`),
+      Markup.button.url('Trust Wallet', `trust://wc?uri=${encodeURIComponent(uri)}`),
+      Markup.button.url('Other Wallet', deepLink),
+    ];
 
-    try {
-      const { uri } = await walletKit.core.pairing.create();
-      logger.info(`Generated WalletConnect URI for user ${userId}: ${uri}`);
-      await walletKit.pair({ uri });
-      const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
-      const encodedUri = encodeURIComponent(uri);
+    const connectMsg = userState.usePidgin
+      ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection`
+      : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection`;
+    await ctx.editMessageMedia(
+      { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
+      { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
+    );
 
-      const walletOptions = [
-        Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
-        Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
-      ];
+    // Handle session proposal
+    walletKit.on('session_proposal', async (proposal) => {
+      try {
+        const session = await walletKit.approveSession({
+          id: proposal.id,
+          namespaces: {
+            eip155: {
+              chains: [`eip155:${ctx.wizard.state.data.chainId}`],
+              methods: ['eth_sendTransaction', 'personal_sign'],
+              events: ['accountsChanged', 'chainChanged'],
+              accounts: [`eip155:${ctx.wizard.state.data.chainId}:${proposal.params.proposer.publicKey}`],
+            },
+          },
+        });
+        const userAddress = session.namespaces.eip155.accounts[0].split(':')[2] || 'Unknown';
 
-      const connectMsg = userState.usePidgin
-        ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
-        : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
-      const message = await ctx.editMessageMedia(
-        { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
-        { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
-      );
-      ctx.wizard.state.data.messageId = message.message_id;
+        const quote = await relayClient.actions.getQuote({
+          user: userAddress,
+          originChainId: ctx.wizard.state.data.chainId,
+          originCurrency: ctx.wizard.state.data.originCurrency,
+          destinationChainId: 8453,
+          destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+          tradeType: 'EXACT_INPUT',
+          recipient: ctx.wizard.state.data.recipient,
+          amount: ctx.wizard.state.data.amountInWei,
+          refundTo: userAddress,
+        });
 
-      logger.info(`Pairing initiated for user ${userId} with URI: ${uri}`);
-    } catch (err) {
-      logger.error(`WalletConnect pairing failed for user ${userId}: ${err.message}`);
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Wallet connection no work. Try again.' : '❌ Wallet connection failed. Please try again.');
-      return ctx.scene.leave();
-    }
+        const details = quote.details;
+        const quoteMsg = userState.usePidgin
+          ? `Sell Details:\n` +
+            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
+            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
+            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
+            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
+            `You wan approve this?`
+          : `Sell Details:\n` +
+            `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
+            `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
+            `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
+            `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
+            `Approve this transaction?`;
+        await ctx.editMessageText(quoteMsg, {
+          parse_mode: 'Markdown',
+          reply_markup: Markup.inlineKeyboard([
+            Markup.button.callback('✅ Approve', 'approve'),
+            Markup.button.callback('❌ Cancel', 'cancel'),
+          ]).reply_markup,
+        });
+
+        ctx.wizard.state.data.quote = quote;
+        ctx.wizard.state.data.userAddress = userAddress;
+      } catch (error) {
+        logger.error(`Session proposal error for ${userId}: ${error.message}`);
+        await ctx.editMessageText(userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error occurred. Try again.', { parse_mode: 'Markdown' });
+      }
+    });
 
     return ctx.wizard.next();
   },
@@ -598,18 +502,12 @@ const sellScene = new Scenes.WizardScene(
 
     const userState = await getUserState(ctx.wizard.state.data.userId);
     if (action === 'cancel') {
-      if (ctx.wizard.state.data.sessionTopic) {
-        await walletKit.disconnectSession({
-          topic: ctx.wizard.state.data.sessionTopic,
-          reason: getSdkError('USER_DISCONNECTED'),
-        });
-      }
       await ctx.editMessageText(userState.usePidgin ? 'Transaction don cancel.' : 'Transaction cancelled.', { parse_mode: 'Markdown' });
       return ctx.scene.leave();
     }
 
     if (action === 'approve') {
-      const { quote, userAddress, sessionTopic } = ctx.wizard.state.data;
+      const { quote, userAddress } = ctx.wizard.state.data;
       await relayClient.actions.execute({
         quote,
         wallet: { address: userAddress },
@@ -641,20 +539,15 @@ const sellScene = new Scenes.WizardScene(
         ? 'Transaction don submit. Confirm for your wallet o.'
         : 'Transaction submitted. Please confirm in your wallet.';
       await ctx.editMessageText(submit, { parse_mode: 'Markdown' });
-
-      if (sessionTopic) {
-        await walletKit.extendSession({ topic: sessionTopic });
-        logger.info(`Session extended for topic ${sessionTopic}`);
-      }
     }
     return ctx.scene.leave();
   }
 );
 
-module.exports = { sellScene, bankLinkingSceneTemp }; 
-// Export scenes
-// 
-// // =================== Helper Functions ===================
+stage.register(bankLinkingSceneTemp, sellScene);
+
+// =================== Command Handler ===================
+bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));// =================== Helper Functions ===================
 
 function mapToPaycrest(asset, chainName) {
   if (!['USDC', 'USDT'].includes(asset)) return null;
