@@ -548,7 +548,8 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
+stage.register(sellScene);
+
 
 // =================== Command Handler ===================
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
@@ -3592,7 +3593,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     });
   }
 });
-
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 // =================== Server Startup ===================
 app.listen(PORT, () => {
