@@ -128,7 +128,6 @@ const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
 const stage = new Scenes.Stage();
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -549,7 +548,7 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
-
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 // =================== Command Handler ===================
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
