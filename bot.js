@@ -202,7 +202,7 @@ const chainMapping = {
   'bnb chain': 'BNB Smart Chain',
   'bnb': 'BNB Smart Chain',
 };
-const deepLink = `wc:${uri}`;
+
 const walletOptions = [
   Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodeURIComponent(uri)}`),
   Markup.button.url('Trust Wallet', `trust://wc?uri=${encodeURIComponent(uri)}`),
