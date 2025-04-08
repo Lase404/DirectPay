@@ -16,8 +16,6 @@ const requestIp = require('request-ip');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
 const { createClient } = require('@reservoir0x/relay-sdk'); // New: Relay SDK
-const { Core } = require('@walletconnect/core'); // New: WalletConnect Core
-const { WalletKit } = require('@reown/walletkit'); // New: WalletKit
 const QRCode = require('qrcode'); // New: For QR code generation
 const relayClient = createClient({
   baseUrl: 'https://api.relay.link', // Adjust as per Relay SDK docs
@@ -93,13 +91,21 @@ for (const key of requiredKeys) {
 }
 
 
+const { Core } = require('@walletconnect/core');
+const { WalletKit } = require('@reown/walletkit');
 const { buildApprovedNamespaces, getSdkError } = require('@walletconnect/utils');
 
 let walletKit;
 
 async function initWalletConnect(bot) {
+  if (walletKit) {
+    logger.info('WalletKit already initialized');
+    return walletKit;
+  }
+
   const core = new Core({
-    projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782'
+    projectId: process.env.WALLETCONNECT_PROJECT_ID || '04c09c92b20bcfac0b83ee76fde1d782',
+    relayUrl: 'wss://relay.walletconnect.com',
   });
 
   try {
@@ -117,13 +123,11 @@ async function initWalletConnect(bot) {
     const activeSessions = walletKit.getActiveSessions();
     logger.info(`Active sessions on startup: ${Object.keys(activeSessions).length}`);
 
-    // Global session proposal handler
     walletKit.on('session_proposal', async (proposal) => {
-      const userId = proposal.params.proposer.metadata?.context || 'unknown'; // Fallback if no context
+      const userId = proposal.params.proposer.metadata?.context || 'unknown';
       logger.info(`Global session proposal received for user ${userId}: ${JSON.stringify(proposal.params)}`);
 
-      // Find the active scene context
-      const ctx = bot.context; // Assumes bot middleware preserves context; adjust if needed
+      const ctx = bot.context;
       if (!ctx || !ctx.wizard || !ctx.wizard.state.data || ctx.wizard.state.data.userId !== userId) {
         logger.warn(`No active context found for user ${userId}`);
         await walletKit.rejectSession({
@@ -214,18 +218,19 @@ async function initWalletConnect(bot) {
       }
     });
 
-    // Optional: Log session requests for debugging
     walletKit.on('session_request', async (event) => {
       logger.info(`Session request received: ${JSON.stringify(event)}`);
     });
 
   } catch (err) {
     logger.error('WalletKit initialization failed:', err);
-    process.exit(1);
+    throw err; // Throw to be caught in bot setup
   }
+
+  return walletKit;
 }
 
-module.exports = { initWalletConnect, walletKit }; 
+module.exports = { initWalletConnect };
 
 const WALLET_GENERATED_IMAGE = './wallet_generated_base1.png';
 const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
@@ -529,27 +534,39 @@ const sellScene = new Scenes.WizardScene(
       referenceId,
     });
 
-    const { uri } = await walletKit.core.pairing.create();
-    logger.info(`Generated WalletConnect URI for user ${userId}: ${uri}`);
-    await walletKit.pair({ uri }); // Ensure pairing is active
-    const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
-    const encodedUri = encodeURIComponent(uri);
+    if (!walletKit) {
+      logger.error('WalletKit not initialized');
+      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Wallet connection no work. Try again later.' : '❌ Wallet connection failed. Please try again later.');
+      return ctx.scene.leave();
+    }
 
-    const walletOptions = [
-      Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
-      Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
-    ];
+    try {
+      const { uri } = await walletKit.core.pairing.create();
+      logger.info(`Generated WalletConnect URI for user ${userId}: ${uri}`);
+      await walletKit.pair({ uri });
+      const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
+      const encodedUri = encodeURIComponent(uri);
 
-    const connectMsg = userState.usePidgin
-      ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
-      : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
-    const message = await ctx.editMessageMedia(
-      { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
-      { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
-    );
-    ctx.wizard.state.data.messageId = message.message_id;
+      const walletOptions = [
+        Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
+        Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
+      ];
 
-    logger.info(`Pairing initiated for user ${userId} with URI: ${uri}`);
+      const connectMsg = userState.usePidgin
+        ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
+        : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
+      const message = await ctx.editMessageMedia(
+        { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
+        { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
+      );
+      ctx.wizard.state.data.messageId = message.message_id;
+
+      logger.info(`Pairing initiated for user ${userId} with URI: ${uri}`);
+    } catch (err) {
+      logger.error(`WalletConnect pairing failed for user ${userId}: ${err.message}`);
+      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Wallet connection no work. Try again.' : '❌ Wallet connection failed. Please try again.');
+      return ctx.scene.leave();
+    }
 
     return ctx.wizard.next();
   },
