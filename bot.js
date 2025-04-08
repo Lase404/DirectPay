@@ -91,7 +91,7 @@ for (const key of requiredKeys) {
 }
 
 
-const { Core } = require('@walletconnect/core');
+cconst { Core } = require('@walletconnect/core');
 const { WalletKit } = require('@reown/walletkit');
 const { buildApprovedNamespaces, getSdkError } = require('@walletconnect/utils');
 
@@ -223,8 +223,8 @@ async function initWalletConnect(bot) {
     });
 
   } catch (err) {
-    logger.error('WalletKit initialization failed:', err);
-    throw err; // Throw to be caught in bot setup
+    logger.error(`WalletKit initialization failed: ${err.message}`);
+    throw err; // Ensure caller handles failure
   }
 
   return walletKit;
@@ -236,7 +236,29 @@ const WALLET_GENERATED_IMAGE = './wallet_generated_base1.png';
 const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
 const PAYOUT_SUCCESS_IMAGE = './payout_success.png';
 const ERROR_IMAGE = './error.png';
+onst { Telegraf, Scenes } = require('telegraf');
+const { initWalletConnect } = require('./walletconnect'); // Adjust path
+const logger = require('./logger');
 
+(async () => {
+  try {
+    await initWalletConnect(bot);
+    logger.info('Bot initialization complete');
+
+    // Register scenes after initialization
+    const { bankLinkingSceneTemp, sellScene } = require('./scenes'); // Adjust path to your scenes file
+    stage.register(bankLinkingSceneTemp, sellScene);
+
+    bot.use(stage.middleware());
+    bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
+
+    bot.launch();
+    logger.info('Bot launched successfully');
+  } catch (err) {
+    logger.error('Failed to initialize bot:', err);
+    process.exit(1);
+  }
+})();
 // =================== Initialize Express and Telegraf ===================
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
@@ -317,6 +339,8 @@ const chainMapping = {
   'bnb': 'BNB Smart Chain',
 };
 
+c
+
 
 const bankLinkingSceneTemp = new Scenes.WizardScene(
   'bank_linking_scene_temp',
@@ -388,6 +412,9 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
     }
   }
 );
+
+const { Scenes, Markup } = require('telegraf');
+const { walletKit } = require('./walletconnect'); // Import walletKit directly
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
@@ -629,10 +656,10 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
-stage.register(bankLinkingSceneTemp, sellScene);
-bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
-
-// =================== Helper Functions ===================
+module.exports = { sellScene, bankLinkingSceneTemp }; 
+// Export scenes
+// 
+// // =================== Helper Functions ===================
 
 function mapToPaycrest(asset, chainName) {
   if (!['USDC', 'USDT'].includes(asset)) return null;
