@@ -205,23 +205,24 @@ const chainMapping = {
 const bankLinkingSceneTemp = new Scenes.WizardScene(
   'bank_linking_scene_temp',
   async (ctx) => {
-    const userState = await getUserState(ctx.from.id.toString());
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
     const prompt = userState.usePidgin
       ? '🏦 Enter your bank name for this sell (e.g., GTBank, Access):'
       : '🏦 Please enter your bank name for this sell (e.g., GTBank, Access):';
     await ctx.replyWithMarkdown(prompt);
-    ctx.wizard.state.data = { userId: ctx.from.id };
+    ctx.wizard.state.data = { userId };
     return ctx.wizard.next();
   },
   async (ctx) => {
     const bankName = ctx.message.text.trim();
-    const userState = await getUserState(ctx.from.id.toString());
+    const userState = await getUserState(ctx.wizard.state.data.userId);
     const { bank, distance } = findClosestBank(bankName, bankList);
 
     if (!bank || distance > 3) {
       const errorMsg = userState.usePidgin
-        ? `❌ Bank name no match o. Try again or type "exit" to stop:`
-        : `❌ No matching bank found. Try again or type "exit" to cancel:`;
+        ? '❌ Bank name no match o. Try again or type "exit" to stop:'
+        : '❌ No matching bank found. Try again or type "exit" to cancel:';
       await ctx.replyWithMarkdown(errorMsg);
       return;
     }
@@ -235,7 +236,7 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
   },
   async (ctx) => {
     const accountNumber = ctx.message.text.trim();
-    const userState = await getUserState(ctx.from.id.toString());
+    const userState = await getUserState(ctx.wizard.state.data.userId);
     if (accountNumber.toLowerCase() === 'exit') {
       await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Cancelled.' : '❌ Cancelled.');
       return ctx.scene.leave();
@@ -244,19 +245,20 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
     if (!/^\d{10}$/.test(accountNumber)) {
       const errorMsg = userState.usePidgin
         ? '❌ Account number no correct. Enter valid 10-digit number:'
-        : '❌ Invalid account number. Please enter a valid 10-digit number:';
+        : '❌ Invalid account number. Enter a valid 10-digit number:';
       await ctx.replyWithMarkdown(errorMsg);
       return;
     }
 
     try {
-      const verificationResult = await verifyBankAccount(accountNumber, bankList.find(b => b.name === ctx.wizard.state.data.bankName).code);
+      const bankCode = bankList.find(b => b.name === ctx.wizard.state.data.bankName).code;
+      const verificationResult = await verifyBankAccount(accountNumber, bankCode);
       const relayAddress = await generateWallet('Base'); // Generate wallet for Relay destination
       ctx.wizard.state.data.bankDetails = {
         bankName: ctx.wizard.state.data.bankName,
         accountNumber,
         accountName: verificationResult.data.account_name,
-        relayAddress
+        relayAddress,
       };
       const confirmMsg = userState.usePidgin
         ? `✅ Bank linked for this sell:\n- *Bank:* ${ctx.wizard.state.data.bankName}\n- *Account:* \`${accountNumber}\`\n- *Name:* ${verificationResult.data.account_name}`
@@ -264,7 +266,7 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
       await ctx.replyWithMarkdown(confirmMsg);
       return ctx.scene.leave();
     } catch (error) {
-      logger.error(`Error verifying bank account: ${error.message}`);
+      logger.error(`Error verifying bank account for user ${ctx.wizard.state.data.userId}: ${error.message}`);
       await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Bank verification fail. Try again.' : '❌ Bank verification failed. Try again.');
       return;
     }
@@ -276,17 +278,19 @@ const sellScene = new Scenes.WizardScene(
   async (ctx) => {
     const userId = ctx.from.id.toString();
     const userState = await getUserState(userId);
-    const [_, amountStr, ca, network] = ctx.message.text.split(' ');
+    const [_, amountStr, caOrTerm, network] = ctx.message.text.split(' ');
     const amount = parseFloat(amountStr);
 
-    if (!amount || isNaN(amount) || !ca || !network) {
+    // Basic input validation
+    if (!amount || isNaN(amount) || !caOrTerm || !network) {
       const usage = userState.usePidgin
-        ? 'Usage: /sell <amount> <currency> <network>\nE.g., /sell 10 USDC base'
-        : 'Usage: /sell <amount> <currency> <network>\nExample: /sell 10 USDC base';
+        ? 'Usage: /sell <amount> <currency or address> <network>\nE.g., /sell 10 USDC base or /sell 10 0x833589f... base'
+        : 'Usage: /sell <amount> <currency or address> <network>\nExample: /sell 10 USDC base or /sell 10 0x833589f... base';
       await ctx.replyWithMarkdown(usage);
       return ctx.scene.leave();
     }
 
+    // Network validation
     const chainId = networkMap[network.toLowerCase()];
     if (!chainId || !Object.values(chains).some(c => c.chainId === chainId)) {
       const error = userState.usePidgin
@@ -296,42 +300,62 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    const chain = Object.keys(chains).find(key => chains[key].chainId === chainId);
-    const supportedAssets = chains[chain].supportedAssets;
-    if (!supportedAssets.includes(ca.toUpperCase())) {
+    // Determine if caOrTerm is an address or a term
+    const isAddress = /^0x[a-fA-F0-9]{40}$/.test(caOrTerm);
+    const payload = isAddress
+      ? {
+          chainIds: [chainId],
+          address: caOrTerm.toLowerCase(),
+          verified: true,
+          limit: 123,
+          includeAllChains: true,
+          useExternalSearch: true,
+          depositAddressOnly: true,
+        }
+      : {
+          chainIds: [chainId],
+          term: caOrTerm.toLowerCase(),
+          verified: true,
+          limit: 123,
+          includeAllChains: true,
+          useExternalSearch: true,
+          depositAddressOnly: true,
+        };
+
+    // Query Relay API for currency validation
+    let currencyRes;
+    try {
+      currencyRes = await axios.post('https://api.relay.link/currencies/v1', payload);
+    } catch (err) {
+      logger.error(`Relay currency validation failed for ${caOrTerm} on ${network}: ${err.message}`);
       const error = userState.usePidgin
-        ? `Currency ${ca} no dey for ${network}. We take only ${supportedAssets.join(', ')}.`
-        : `Currency ${ca} not supported on ${network}. Supported: ${supportedAssets.join(', ')}.`;
+        ? '❌ Wahala dey o. Currency or address check fail. Try again.'
+        : '❌ Error validating currency or address. Please try again.';
       await ctx.replyWithMarkdown(error);
       return ctx.scene.leave();
     }
 
-    const currencyRes = await axios.post('https://api.relay.link/currencies/v1', {
-      defaultList: true,
-      chainIds: [chainId],
-      symbol: ca.toUpperCase(),
-      verified: true,
-      limit: 1,
-      includeAllChains: false,
-      useExternalSearch: true,
-      depositAddressOnly: true,
-    }).catch(err => {
-      logger.error(`Relay currency validation failed for ${ca} on ${network}: ${err.message}`);
-      throw new Error('Currency validation failed');
-    });
-
+    // Validate API response
     if (!currencyRes.data[0]?.length) {
       const error = userState.usePidgin
-        ? `Currency ${ca} no dey for ${network}.`
-        : `Currency ${ca} not found on ${network}.`;
+        ? `❌ ${caOrTerm} no dey for ${network}. Check am well o.`
+        : `❌ ${caOrTerm} not found on ${network}. Please check your input.`;
       await ctx.replyWithMarkdown(error);
       return ctx.scene.leave();
     }
 
     const currencyData = currencyRes.data[0][0];
+    if (currencyData.chainId !== chainId) {
+      const error = userState.usePidgin
+        ? `❌ ${caOrTerm} no match ${network}. E dey another chain.`
+        : `❌ ${caOrTerm} does not match ${network}. It’s on a different chain.`;
+      await ctx.replyWithMarkdown(error);
+      return ctx.scene.leave();
+    }
+
+    // Store validated data
     const decimals = currencyData.decimals;
     const amountInWei = (amount * Math.pow(10, decimals)).toString();
-
     ctx.wizard.state.data = {
       userId,
       amount,
@@ -342,9 +366,10 @@ const sellScene = new Scenes.WizardScene(
       decimals,
     };
 
+    // Prompt for confirmation
     const confirm = userState.usePidgin
-      ? `You wan sell ${amount} ${ca} on ${network}?\nPress "Yes" to go ahead, "No" to stop.`
-      : `Sell ${amount} ${ca} on ${network}?\nReply "Yes" to confirm, "No" to cancel.`;
+      ? `You wan sell ${amount} ${currencyData.symbol} on ${network}?\nPress "Yes" to go ahead, "No" to stop.`
+      : `Sell ${amount} ${currencyData.symbol} on ${network}?\nReply "Yes" to confirm, "No" to cancel.`;
     await ctx.replyWithMarkdown(confirm, Markup.inlineKeyboard([
       Markup.button.callback('✅ Yes', 'yes'),
       Markup.button.callback('❌ No', 'no'),
@@ -364,7 +389,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    const userWallets = (await getUserState(ctx.wizard.state.data.userId)).wallets;
+    const userWallets = userState.wallets;
     const linkedBank = userWallets.find(w => w.bank)?.bank;
 
     const prompt = linkedBank
@@ -380,7 +405,7 @@ const sellScene = new Scenes.WizardScene(
       reply_markup: Markup.inlineKeyboard([
         linkedBank ? Markup.button.callback('✅ Use Existing', 'use_existing') : null,
         Markup.button.callback('🏦 Link New', 'link_new'),
-      ].filter(Boolean)).reply_markup
+      ].filter(Boolean)).reply_markup,
     });
     return ctx.wizard.next();
   },
@@ -447,7 +472,7 @@ const sellScene = new Scenes.WizardScene(
       : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection`;
     await ctx.editMessageMedia(
       { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
-      { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup }
+      { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
     );
 
     walletKit.on('session_proposal', async (proposal) => {
@@ -465,9 +490,6 @@ const sellScene = new Scenes.WizardScene(
           recipient: ctx.wizard.state.data.recipient,
           amount: ctx.wizard.state.data.amountInWei,
           refundTo: userAddress,
-        }).catch(err => {
-          logger.error(`Relay quote fetch failed for ${userId}: ${err.message}`);
-          throw err;
         });
 
         const details = quote.details;
@@ -489,7 +511,7 @@ const sellScene = new Scenes.WizardScene(
           reply_markup: Markup.inlineKeyboard([
             Markup.button.callback('✅ Approve', 'approve'),
             Markup.button.callback('❌ Cancel', 'cancel'),
-          ]).reply_markup
+          ]).reply_markup,
         });
 
         ctx.wizard.state.data.quote = quote;
@@ -528,9 +550,10 @@ const sellScene = new Scenes.WizardScene(
               .get();
             if (!txDoc.empty) {
               await txDoc.docs[0].ref.update({ status: 'Processing' });
+              const chainName = Object.keys(chains).find(key => chains[key].chainId === ctx.wizard.state.data.chainId);
               const success = userState.usePidgin
-                ? `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${ctx.wizard.state.data.chain} don land! Payout dey process.`
-                : `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${ctx.wizard.state.data.chain} succeeded! Payout is being processed.`;
+                ? `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} don land! Payout dey process.`
+                : `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} succeeded! Payout is being processed.`;
               await ctx.editMessageText(success, { parse_mode: 'Markdown' });
             }
           }
@@ -548,12 +571,10 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
-stage.register(sellScene);
-
+stage.register(bankLinkingSceneTemp, sellScene);
 
 // =================== Command Handler ===================
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
-
 // =================== Helper Functions ===================
 
 function mapToPaycrest(asset, chainName) {
