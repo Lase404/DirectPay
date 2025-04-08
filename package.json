@@ -26,9 +26,10 @@
   "author": "Toluwalase",
   "license": "MIT",
   "dependencies": {
-    "@reown/walletkit": "^1.2.0",
     "@reservoir0x/relay-sdk": "^1.0.1",
     "@walletconnect/core": "^2.11.2",
+    "@walletconnect/sign-client": "^2.11.2",
+    "@walletconnect/utils": "^2.11.2",
     "axios": "^1.4.0",
     "body-parser": "^1.20.2",
     "dotenv": "^16.0.3",
@@ -40,10 +41,10 @@
     "sharp": "^0.33.5",
     "telegraf": "^4.12.2",
     "uuid": "^9.0.1",
-    "winston": "^3.8.2" 
+    "winston": "^3.8.2"
   },
   "devDependencies": {
-    "nodemon": "^3.0.1" 
+    "nodemon": "^3.0.1"
   },
   "engines": {
     "node": ">=16.0.0"
