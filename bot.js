@@ -91,7 +91,7 @@ for (const key of requiredKeys) {
 }
 
 
-cconst { Core } = require('@walletconnect/core');
+const { Core } = require('@walletconnect/core');
 const { WalletKit } = require('@reown/walletkit');
 const { buildApprovedNamespaces, getSdkError } = require('@walletconnect/utils');
 
