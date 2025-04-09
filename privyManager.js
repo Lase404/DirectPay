@@ -1,5 +1,6 @@
 const { PrivyClient } = require('@privy-io/server-auth');
 const admin = require('firebase-admin');
+const winston = require('winston');
 // =================== Initialize Logging ===================
 const logger = winston.createLogger({
   level: 'info',
