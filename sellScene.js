@@ -1,6 +1,6 @@
 const { Scenes, Markup } = require('telegraf');
 const axios = require('axios');
-const { createClient } = require('@relay-link/sdk');
+const { createClient } = require('@reservoir0x/relay-sdk');
 const { v4: uuidv4 } = require('uuid');
 
 // Relay SDK setup
