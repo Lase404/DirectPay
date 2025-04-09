@@ -23,7 +23,7 @@ const relayClient = createClient({
   source: 'DirectPayBot', // Optional identifier
 });
 require('dotenv').config();
-
+require('./sellScene')(bot, db);
 ///////////////
 
 
