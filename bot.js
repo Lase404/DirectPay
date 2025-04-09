@@ -25,19 +25,7 @@ const relayClient = createClient({
 require('dotenv').config();
 
 ///////////////
-import React from 'react';
-import ReactDOM from 'react-dom';
-import { BrowserRouter, Route, Routes } from 'react-router-dom';
-import ConnectWalletApp from './ConnectWallet';
 
-ReactDOM.render(
-  <BrowserRouter>
-    <Routes>
-      <Route path="/connect" element={<ConnectWalletApp />} />
-    </Routes>
-  </BrowserRouter>,
-  document.getElementById('root')
-);
 
 // =================== Initialize Logging ===================
 const logger = winston.createLogger({
