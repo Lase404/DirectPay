@@ -404,6 +404,8 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
 
 
 
+const privyManager = require('./privyManager');
+
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   async (ctx) => {
@@ -414,8 +416,8 @@ const sellScene = new Scenes.WizardScene(
 
     if (!amount || isNaN(amount) || !caOrTerm || !network) {
       const usage = userState.usePidgin
-        ? 'Usage: /sell <amount> <currency or address> <network>\nE.g., /sell 10 USDC base or /sell 10 0x833589f... base'
-        : 'Usage: /sell <amount> <currency or address> <network>\nExample: /sell 10 USDC base or /sell 10 0x833589f... base';
+        ? 'Usage: /sell <amount> <currency or address> <network>\nE.g., /sell 10 USDC base'
+        : 'Usage: /sell <amount> <currency or address> <network>\nExample: /sell 10 USDC base';
       await ctx.replyWithMarkdown(usage);
       return ctx.scene.leave();
     }
@@ -437,7 +439,7 @@ const sellScene = new Scenes.WizardScene(
     let currencyRes;
     try {
       currencyRes = await axios.post('https://api.relay.link/currencies/v1', payload);
-      await walletConnectManager.logToBackend('Relay Currency Validation', { request: payload, response: currencyRes.data });
+      await privyManager.logToBackend('Relay Currency Validation', { request: payload, response: currencyRes.data });
     } catch (err) {
       logger.error(`Relay currency validation failed for ${caOrTerm} on ${network}: ${err.message}`);
       await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Currency or address check fail. Try again.' : '❌ Error validating currency or address. Please try again.');
@@ -484,7 +486,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    const userWallets = userState.wallets;
+    const userWallets = userState.wallets || [];
     const linkedBank = userWallets.find(w => w.bank)?.bank;
 
     const prompt = linkedBank
@@ -537,7 +539,7 @@ const sellScene = new Scenes.WizardScene(
 
     ctx.wizard.state.data.recipient = blockradarAddress;
 
-    const referenceId = generateReferenceId();
+    const referenceId = uuidv4();
     await db.collection('transactions').doc(referenceId).set({
       userId,
       bankDetails: ctx.wizard.state.data.bankDetails,
@@ -550,53 +552,61 @@ const sellScene = new Scenes.WizardScene(
       referenceId,
     });
 
-    let uri, userAddress;
-    try {
-      ({ uri, userAddress } = await walletConnectManager.connect(ctx.wizard.state.data.chainId));
-      ctx.wizard.state.data.userAddress = userAddress;
-    } catch (error) {
-      logger.error(`WalletConnect connection error for ${userId}: ${error.message}`);
-      const errorMsg = userState.usePidgin
-        ? `❌ Wahala dey o: ${error.message}. Press "Retry" to try again.`
-        : `❌ Error: ${error.message}. Press "Retry" to try again.`;
-      await ctx.editMessageText(errorMsg, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([
-          Markup.button.callback('🔄 Retry', 'retry_connect'),
-        ]).reply_markup,
-      });
-      return;
+    // Privy SIWE login URL
+    const state = `${userId}:${referenceId}`;
+    const loginUrl = `https://auth.privy.io/login?app_id=${process.env.PRIVY_APP_ID}&redirect_uri=${encodeURIComponent(`${process.env.BOT_SERVER_URL}/privy-callback`)}&state=${encodeURIComponent(state)}&wallet_chain_type=ethereum-only`;
+    const qrCodeBuffer = await QRCode.toBuffer(loginUrl, { width: 200 });
+    const connectMsg = userState.usePidgin
+      ? `Connect your wallet (MetaMask, Trust, etc.) to sell:\n\n1. Open your wallet app\n2. Scan this QR code or click link\n3. Sign the message to connect\n\n[Connect Wallet](${loginUrl})`
+      : `Connect your wallet (MetaMask, Trust, etc.) to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or click the link\n3. Sign the message to connect\n\n[Connect Wallet](${loginUrl})`;
+
+    await ctx.editMessageMedia(
+      { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
+      { reply_markup: Markup.inlineKeyboard([
+        Markup.button.url('MetaMask', `https://metamask.app.link/dapp/auth.privy.io/login?app_id=${process.env.PRIVY_APP_ID}&redirect_uri=${encodeURIComponent(`${process.env.BOT_SERVER_URL}/privy-callback`)}&state=${encodeURIComponent(state)}`),
+        Markup.button.url('Trust Wallet', `https://link.trustwallet.com/open_url?url=${encodeURIComponent(loginUrl)}`),
+        Markup.button.callback('✅ Connected', 'wallet_connected'),
+      ]).reply_markup },
+    );
+
+    ctx.wizard.state.data.referenceId = referenceId;
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const action = ctx.callbackQuery?.data;
+    if (!action || action !== 'wallet_connected') return;
+
+    const userState = await getUserState(ctx.wizard.state.data.userId);
+    const { referenceId } = ctx.wizard.state.data;
+
+    const txDoc = await db.collection('transactions').doc(referenceId).get();
+    const walletAddress = txDoc.exists && txDoc.data().walletAddress;
+
+    if (!walletAddress) {
+      await ctx.editMessageText(userState.usePidgin
+        ? '❌ Wallet no connect yet o. Scan the QR code or click link again.'
+        : '❌ Wallet not connected yet. Please scan the QR code or click the link again.',
+        { parse_mode: 'Markdown' });
+      return ctx.wizard.selectStep(ctx.wizard.cursor - 1);
     }
 
+    ctx.wizard.state.data.userAddress = walletAddress;
+
+    const { userAddress, chainId, originCurrency, recipient, amountInWei } = ctx.wizard.state.data;
+
     try {
-      const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
-      const encodedUri = encodeURIComponent(uri);
-      const walletOptions = [
-        Markup.button.callback('🔄 Retry', 'retry_connect'),
-        Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
-        Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
-      ];
-
-      const connectMsg = userState.usePidgin
-        ? `Connect your wallet to sell (60 secs):\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\`\n\nNo connect? Press "Retry".`
-        : `Connect your wallet to proceed with the sell (60 secs):\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\`\n\nNot connecting? Press "Retry".`;
-      await ctx.editMessageMedia(
-        { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
-        { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
-      );
-
       const quote = await relayClient.actions.getQuote({
         user: userAddress,
-        originChainId: ctx.wizard.state.data.chainId,
-        originCurrency: ctx.wizard.state.data.originCurrency,
+        originChainId: chainId,
+        originCurrency,
         destinationChainId: 8453,
         destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
         tradeType: 'EXACT_INPUT',
-        recipient: ctx.wizard.state.data.recipient,
-        amount: ctx.wizard.state.data.amountInWei,
+        recipient,
+        amount: amountInWei,
         refundTo: userAddress,
       });
-      await walletConnectManager.logToBackend('Relay Quote Fetched', { quote });
+      await privyManager.logToBackend('Relay Quote Fetched', { quote });
 
       const details = quote.details;
       const quoteMsg = userState.usePidgin
@@ -612,10 +622,13 @@ const sellScene = new Scenes.WizardScene(
           `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
           `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
           `Approve this transaction?`;
-      await ctx.editMessageText(quoteMsg, {
+
+      // DApp URL for approval
+      const approveUrl = `${process.env.BOT_SERVER_URL}/approve?ref=${referenceId}`;
+      await ctx.editMessageText(quoteMsg + `\n\n[Approve in Wallet](${approveUrl})`, {
         parse_mode: 'Markdown',
         reply_markup: Markup.inlineKeyboard([
-          Markup.button.callback('✅ Approve', 'approve'),
+          Markup.button.url('Approve', approveUrl),
           Markup.button.callback('❌ Cancel', 'cancel'),
         ]).reply_markup,
       });
@@ -623,17 +636,9 @@ const sellScene = new Scenes.WizardScene(
       ctx.wizard.state.data.quote = quote;
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Post-connection error for ${userId}: ${error.message}`);
-      const errorMsg = userState.usePidgin
-        ? `❌ Wahala dey o: ${error.message}. Press "Retry" to try again.`
-        : `❌ Error: ${error.message}. Press "Retry" to try again.`;
-      await ctx.editMessageText(errorMsg, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([
-          Markup.button.callback('🔄 Retry', 'retry_connect'),
-        ]).reply_markup,
-      });
-      return;
+      logger.error(`Relay quote error for ${userId}: ${error.message}`);
+      await ctx.editMessageText(userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error fetching quote. Please try again.', { parse_mode: 'Markdown' });
+      return ctx.scene.leave();
     }
   },
   async (ctx) => {
@@ -641,66 +646,32 @@ const sellScene = new Scenes.WizardScene(
     if (!action) return;
 
     const userState = await getUserState(ctx.wizard.state.data.userId);
-
-    if (action === 'retry_connect') {
-      return ctx.wizard.selectStep(ctx.wizard.cursor);
-    }
+    const { referenceId } = ctx.wizard.state.data;
 
     if (action === 'cancel') {
-      await walletConnectManager.disconnect();
       await ctx.editMessageText(userState.usePidgin ? 'Transaction don cancel.' : 'Transaction cancelled.', { parse_mode: 'Markdown' });
       return ctx.scene.leave();
     }
 
-    if (action === 'approve') {
-      const { quote, userAddress, chainId, originCurrency, recipient, amountInWei } = ctx.wizard.state.data;
+    // Check if approval and deposit are complete
+    const txDoc = await db.collection('transactions').doc(referenceId).get();
+    const status = txDoc.exists && txDoc.data().status;
 
-      try {
-        const txHash = await walletConnectManager.sendTransaction({
-          chainId,
-          from: userAddress,
-          to: originCurrency,
-          value: '0x0',
-          data: '0x',
-        });
-
-        await relayClient.actions.execute({
-          quote,
-          wallet: { address: userAddress },
-          onProgress: async (steps) => {
-            const depositStep = steps.find(s => s.id === 'deposit');
-            if (depositStep && depositStep.items[0].status === 'complete') {
-              const amountFormatted = ctx.wizard.state.data.amount;
-              const txDoc = await db.collection('transactions')
-                .where('userId', '==', ctx.wizard.state.data.userId)
-                .where('status', '==', 'pending')
-                .where('referenceId', '==', ctx.wizard.state.data.referenceId)
-                .limit(1)
-                .get();
-              if (!txDoc.empty) {
-                await txDoc.docs[0].ref.update({ status: 'Processing', txHash });
-                const chainName = Object.keys(chains).find(key => chains[key].chainId === chainId);
-                const success = userState.usePidgin
-                  ? `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} don land! Payout dey process.`
-                  : `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} succeeded! Payout is being processed.`;
-                await ctx.editMessageText(success, { parse_mode: 'Markdown' });
-              }
-            }
-          },
-        });
-
-        const submit = userState.usePidgin
-          ? 'Transaction don submit. Confirm for your wallet o.'
-          : 'Transaction submitted. Please confirm in your wallet.';
-        await ctx.editMessageText(submit, { parse_mode: 'Markdown' });
-      } catch (err) {
-        logger.error(`Transaction execution failed for ${userId}: ${err.message}`);
-        await ctx.editMessageText(userState.usePidgin ? '❌ Transaction fail o. Try again.' : '❌ Transaction failed. Please try again.', { parse_mode: 'Markdown' });
-      } finally {
-        await walletConnectManager.disconnect();
-      }
+    if (status === 'Processing') {
+      const amountFormatted = ctx.wizard.state.data.amount;
+      const chainName = Object.keys(chains).find(key => chains[key].chainId === ctx.wizard.state.data.chainId);
+      const success = userState.usePidgin
+        ? `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} don land! Payout dey process.`
+        : `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} succeeded! Payout is being processed.`;
+      await ctx.editMessageText(success, { parse_mode: 'Markdown' });
+      return ctx.scene.leave();
     }
-    return ctx.scene.leave();
+
+    await ctx.editMessageText(userState.usePidgin
+      ? '❌ You never approve yet o. Click the link above to approve for your wallet.'
+      : '❌ Approval not completed yet. Please click the link above to approve in your wallet.',
+      { parse_mode: 'Markdown' });
+    return ctx.wizard.selectStep(ctx.wizard.cursor); // Stay here until approved
   }
 );
 
