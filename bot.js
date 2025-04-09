@@ -16,8 +16,6 @@ const requestIp = require('request-ip');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
 const { createClient } = require('@reservoir0x/relay-sdk'); // New: Relay SDK
-const { Core } = require('@walletconnect/core'); // New: WalletConnect Core
-const { WalletKit } = require('@reown/walletkit'); // New: WalletKit
 const QRCode = require('qrcode'); // New: For QR code generation
 const relayClient = createClient({
   baseUrl: 'https://api.relay.link', // Adjust as per Relay SDK docs
