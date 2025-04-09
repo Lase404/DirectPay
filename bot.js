@@ -110,6 +110,7 @@ const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 const stage = new Scenes.Stage();
 bot.use(session());
 bot.use(stage.middleware());
+require('./sellScene')(bot, db);
 
 // =================== Define Supported Banks ===================
 const bankList = [
@@ -3235,7 +3236,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
   }
 });
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
-require('./sellScene')(bot, db);
+
 
 // =================== Server Startup ===================
 app.listen(PORT, () => {
