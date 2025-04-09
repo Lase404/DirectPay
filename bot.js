@@ -205,6 +205,7 @@ const chainMapping = {
   'bnb': 'BNB Smart Chain',
 };
 // Validate token with Relay
+// Validate token with Relay
 async function validateToken(symbol, network) {
   try {
     const response = await axios.post('https://api.relay.link/currencies/v1', {
