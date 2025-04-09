@@ -405,7 +405,6 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
 
 
 const privyManager = require('./privyManager');
-const { relayClient } = require('./relayClient');
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   async (ctx) => {
