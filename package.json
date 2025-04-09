@@ -6,7 +6,7 @@
   "type": "commonjs",
   "scripts": {
     "start": "node bot.js",
-    "dev": "nodemon bot.js",{
+    "dev": "nodemon bot.js",
   "name": "directpay-bot",
   "version": "1.0.2",
   "description": "DirectPay Telegram Bot for converting cryptocurrency (USDC/USDT) to Naira with Relay and Privy integration.",
