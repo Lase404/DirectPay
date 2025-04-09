@@ -137,7 +137,7 @@ const sellScene = new Scenes.WizardScene(
     }
 
     const { userId, amount, asset, chainId, token, amountInWei } = ctx.wizard.state.data;
-    const bankDetails = ctx.wizard.state.data.bankDetails; // Set from linkedBank or bankLinkingSceneTemp
+    const bankDetails = ctx.wizard.state.data.bankDetails;
 
     // Fetch Relay quote
     const quote = await relayClient.actions.getQuote({
@@ -210,8 +210,4 @@ sellScene.on('enter', async (ctx) => {
   }
 });
 
-module.exports = (bot, db) => {
-  const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
-  bot.use(stage.middleware());
-  bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
-};
+module.exports = sellScene;
