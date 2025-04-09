@@ -1,7 +1,6 @@
 const { SignClient } = require('@walletconnect/sign-client');
 const { getSdkError } = require('@walletconnect/utils');
 const admin = require('firebase-admin');
-const logger = require('./logger'); // Your existing logger
 
 class WalletConnectManager {
   constructor(projectId) {
