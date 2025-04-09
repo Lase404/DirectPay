@@ -1,6 +1,17 @@
 const { PrivyClient } = require('@privy-io/server-auth');
 const admin = require('firebase-admin');
-const logger = require('./logger');
+// =================== Initialize Logging ===================
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`)
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 })
+  ],
+});
 
 class PrivyManager {
   constructor() {
