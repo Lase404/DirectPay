@@ -23,7 +23,7 @@ const relayClient = createClient({
   source: 'DirectPayBot', // Optional identifier
 });
 require('dotenv').config();
-require('./sellScene')(bot, db);
+
 ///////////////
 
 
@@ -3235,6 +3235,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
   }
 });
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
+require('./sellScene')(bot, db);
 
 // =================== Server Startup ===================
 app.listen(PORT, () => {
