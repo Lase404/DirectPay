@@ -405,7 +405,7 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
 
 
 const privyManager = require('./privyManager');
-
+const { relayClient } = require('./relayClient');
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   async (ctx) => {
@@ -552,7 +552,6 @@ const sellScene = new Scenes.WizardScene(
       referenceId,
     });
 
-    // Privy SIWE login URL
     const state = `${userId}:${referenceId}`;
     const loginUrl = `https://auth.privy.io/login?app_id=${process.env.PRIVY_APP_ID}&redirect_uri=${encodeURIComponent(`${process.env.BOT_SERVER_URL}/privy-callback`)}&state=${encodeURIComponent(state)}&wallet_chain_type=ethereum-only`;
     const qrCodeBuffer = await QRCode.toBuffer(loginUrl, { width: 200 });
@@ -623,7 +622,6 @@ const sellScene = new Scenes.WizardScene(
           `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
           `Approve this transaction?`;
 
-      // DApp URL for approval
       const approveUrl = `${process.env.BOT_SERVER_URL}/approve?ref=${referenceId}`;
       await ctx.editMessageText(quoteMsg + `\n\n[Approve in Wallet](${approveUrl})`, {
         parse_mode: 'Markdown',
@@ -653,7 +651,6 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Check if approval and deposit are complete
     const txDoc = await db.collection('transactions').doc(referenceId).get();
     const status = txDoc.exists && txDoc.data().status;
 
@@ -671,15 +668,13 @@ const sellScene = new Scenes.WizardScene(
       ? '❌ You never approve yet o. Click the link above to approve for your wallet.'
       : '❌ Approval not completed yet. Please click the link above to approve in your wallet.',
       { parse_mode: 'Markdown' });
-    return ctx.wizard.selectStep(ctx.wizard.cursor); // Stay here until approved
+    return ctx.wizard.selectStep(ctx.wizard.cursor);
   }
 );
 
 stage.register(bankLinkingSceneTemp, sellScene);
 
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
-// =================== Command Handler ===================
-bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));// =================== Helper Functions ===================
 
 function mapToPaycrest(asset, chainName) {
   if (!['USDC', 'USDT'].includes(asset)) return null;
@@ -924,6 +919,151 @@ function findClosestBank(input, bankList) {
 
   return { bank: bestMatch, distance: minDistance };
 }
+//////////////////////////////////////////////////////
+app.use(express.urlencoded({ extended: true }));
+app.use(express.static('public'));
+
+app.get('/privy-callback', async (req, res) => {
+  const { state } = req.query;
+  const [userId, referenceId] = state.split(':');
+
+  try {
+    // Manual token submission required
+    res.send('Wallet connected! Return to Telegram, send /token <your-access-token>, then press "Connected".');
+  } catch (error) {
+    logger.error('Privy callback failed:', error.message);
+    res.status(400).send('Error connecting wallet. Try again.');
+  }
+});
+
+app.get('/approve', async (req, res) => {
+  const { ref } = req.query;
+  const txDoc = await db.collection('transactions').doc(ref).get();
+  if (!txDoc.exists) return res.status(404).send('Transaction not found');
+
+  const { userAddress, chainId, originCurrency, recipient, amountInWei, quote } = txDoc.data();
+
+  res.send(`
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <title>Approve Transaction</title>
+      <script src="https://cdn.ethers.io/lib/ethers-5.7.umd.min.js"></script>
+    </head>
+    <body>
+      <h1>Approve USDC Transaction</h1>
+      <p>Connect your wallet and approve the transaction.</p>
+      <button onclick="approveTransaction()">Approve</button>
+      <p id="status"></p>
+
+      <script>
+        async function approveTransaction() {
+          if (!window.ethereum) {
+            alert('Please install MetaMask or another wallet!');
+            return;
+          }
+
+          const provider = new ethers.providers.Web3Provider(window.ethereum);
+          await provider.send('eth_requestAccounts', []);
+          const signer = provider.getSigner();
+          const userAddress = await signer.getAddress();
+
+          if (userAddress.toLowerCase() !== '${userAddress.toLowerCase()}') {
+            alert('Connected wallet does not match the one used to log in!');
+            return;
+          }
+
+          const usdcContract = new ethers.Contract(
+            '${originCurrency}',
+            ['function approve(address spender, uint256 amount) public returns (bool)'],
+            signer
+          );
+
+          try {
+            document.getElementById('status').innerText = 'Approving...';
+            const tx = await usdcContract.approve('${recipient}', '${amountInWei}');
+            await tx.wait();
+            document.getElementById('status').innerText = 'Approval successful! Depositing...';
+
+            const response = await fetch('/deposit', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ref: '${ref}' })
+            });
+            const result = await response.json();
+            document.getElementById('status').innerText = result.message;
+          } catch (error) {
+            document.getElementById('status').innerText = 'Error: ' + error.message;
+          }
+        }
+      </script>
+    </body>
+    </html>
+  `);
+});
+
+app.post('/deposit', async (req, res) => {
+  const { ref } = req.body;
+  const txDoc = await db.collection('transactions').doc(ref).get();
+  if (!txDoc.exists) return res.status(404).json({ message: 'Transaction not found' });
+
+  const { quote, userAddress } = txDoc.data();
+
+  try {
+    await relayClient.actions.execute({
+      quote,
+      wallet: { address: userAddress },
+      onProgress: async (steps) => {
+        const depositStep = steps.find(s => s.id === 'deposit');
+        if (depositStep && depositStep.items[0].status === 'complete') {
+          await db.collection('transactions').doc(ref).update({
+            status: 'Processing',
+            txHash: depositStep.items[0].txHash,
+          });
+        }
+      },
+    });
+    res.json({ message: 'Deposit successful! Return to Telegram.' });
+  } catch (error) {
+    logger.error('Deposit failed:', error.message);
+    res.status(500).json({ message: 'Deposit failed: ' + error.message });
+  }
+});
+
+// Token submission command
+bot.command('token', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const token = ctx.message.text.split(' ')[1];
+  if (!token) {
+    await ctx.reply('Please provide your Privy access token: /token <your-access-token>');
+    return;
+  }
+
+  try {
+    const { walletAddress } = await privyManager.verifyUserToken(token);
+    const txDoc = await db.collection('transactions')
+      .where('userId', '==', userId)
+      .where('status', '==', 'pending')
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .get();
+
+    if (txDoc.empty) {
+      await ctx.reply('No pending transaction found.');
+      return;
+    }
+
+    const ref = txDoc.docs[0].id;
+    await db.collection('transactions').doc(ref).update({
+      walletAddress,
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    });
+    await ctx.reply('Wallet connected successfully! Return to the sell flow and press "Connected".');
+  } catch (error) {
+    logger.error('Token verification failed:', error.message);
+    await ctx.reply('Error verifying token. Try again.');
+  }
+});
 
 // =================== Define Scenes ===================
 const bankLinkingScene = new Scenes.WizardScene(
