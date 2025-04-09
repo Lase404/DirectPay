@@ -55,17 +55,7 @@ const db = admin.firestore();
 
 
 ///////////////////////////
-app.post('/webhook/deposit-signed', async (req, res) => {
-  const { userId, txHash } = req.body;
-  await db.collection('transactions').doc(txHash).set({
-    userId,
-    txHash,
-    status: 'pending',
-    createdAt: admin.firestore.FieldValue.serverTimestamp()
-  });
-  await bot.telegram.sendMessage(userId, `Deposit confirmed: ${txHash}. Processing...`);
-  res.sendStatus(200);
-});
+
 // =================== Environment Variables ===================
 const {
   BOT_TOKEN: TELEGRAM_BOT_TOKEN,
@@ -1155,6 +1145,18 @@ async function fetchExchangeRates() {
 
 fetchExchangeRates();
 setInterval(fetchExchangeRates, 300000); // 5 minutes
+
+app.post('/webhook/deposit-signed', async (req, res) => {
+  const { userId, txHash } = req.body;
+  await db.collection('transactions').doc(txHash).set({
+    userId,
+    txHash,
+    status: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  await bot.telegram.sendMessage(userId, `Deposit confirmed: ${txHash}. Processing...`);
+  res.sendStatus(200);
+});
 
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
