@@ -14,7 +14,6 @@ const logger = winston.createLogger({
   ],
 });
 
-
 class WalletConnectManager {
   constructor(projectId) {
     this.projectId = projectId || '04c09c92b20bcfac0b83ee76fde1d782';
@@ -22,7 +21,6 @@ class WalletConnectManager {
     this.session = null;
   }
 
-  // Initialize the Sign Client
   async initialize() {
     try {
       this.client = await SignClient.init({
@@ -43,8 +41,7 @@ class WalletConnectManager {
     }
   }
 
-  // Connect to a wallet and return URI for QR code
-  async connect(chainId) {
+  async connect(chainId, timeoutMs = 60000) { // 60-second timeout
     if (!this.client) await this.initialize();
 
     try {
@@ -62,14 +59,18 @@ class WalletConnectManager {
 
       if (!uri) throw new Error('Failed to generate WalletConnect URI');
 
-      logger.info('WalletConnect connection initiated', { uri });
+      logger.info('WalletConnect connection initiated', { uri, chainId });
       await this.logToBackend('WalletConnect Connect Initiated', { uri, chainId });
 
-      // Wait for session approval
-      this.session = await approval();
+      // Add timeout to approval promise
+      const approvalPromise = approval();
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error('Wallet connection timed out')), timeoutMs)
+      );
+      this.session = await Promise.race([approvalPromise, timeoutPromise]);
+
       const userAddress = this.session.namespaces.eip155.accounts[0].split(':')[2];
-      
-      logger.info('WalletConnect session approved', { userAddress });
+      logger.info('WalletConnect session approved', { userAddress, sessionTopic: this.session.topic });
       await this.logToBackend('WalletConnect Session Approved', {
         userAddress,
         sessionTopic: this.session.topic,
@@ -84,7 +85,6 @@ class WalletConnectManager {
     }
   }
 
-  // Approve a transaction (deposit) using eth_sendTransaction
   async sendTransaction({ chainId, from, to, value, data }) {
     if (!this.session) throw new Error('No active WalletConnect session');
 
@@ -125,7 +125,6 @@ class WalletConnectManager {
     }
   }
 
-  // Disconnect the session
   async disconnect() {
     if (!this.session) return;
 
@@ -143,7 +142,6 @@ class WalletConnectManager {
     }
   }
 
-  // Log activity to Firestore backend
   async logToBackend(event, data) {
     try {
       await admin.firestore().collection('walletconnect_logs').add({
@@ -156,7 +154,6 @@ class WalletConnectManager {
     }
   }
 
-  // Get current user address
   getUserAddress() {
     if (!this.session) throw new Error('No active WalletConnect session');
     return this.session.namespaces.eip155.accounts[0].split(':')[2];
