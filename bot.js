@@ -17,6 +17,7 @@ const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
 const { createClient } = require('@reservoir0x/relay-sdk'); // New: Relay SDK
 const QRCode = require('qrcode'); // New: For QR code generation
+const { PrivyClient } = require('@privy-io/server-auth');
 const relayClient = createClient({
   baseUrl: 'https://api.relay.link', // Adjust as per Relay SDK docs
   source: 'DirectPayBot', // Optional identifier
