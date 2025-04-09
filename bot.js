@@ -175,349 +175,218 @@ const chainMapping = {
   'bnb chain': 'BNB Smart Chain',
   'bnb': 'BNB Smart Chain',
 };
-const bankLinkingSceneTemp = new Scenes.WizardScene(
-  'bank_linking_scene_temp',
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-    const prompt = userState.usePidgin
-      ? '🏦 Enter your bank name for this sell (e.g., GTBank, Access):'
-      : '🏦 Please enter your bank name for this sell (e.g., GTBank, Access):';
-    await ctx.replyWithMarkdown(prompt);
-    ctx.wizard.state.data = { userId };
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    const bankName = ctx.message.text.trim();
-    const userState = await getUserState(ctx.wizard.state.data.userId);
-    const { bank, distance } = findClosestBank(bankName, bankList);
+// Privy setup
+const privy = new PrivyClient(process.env.PRIVY_APP_ID, process.env.PRIVY_APP_SECRET);
 
-    if (!bank || distance > 3) {
-      const errorMsg = userState.usePidgin
-        ? '❌ Bank name no match o. Try again or type "exit" to stop:'
-        : '❌ No matching bank found. Try again or type "exit" to cancel:';
-      await ctx.replyWithMarkdown(errorMsg);
-      return;
-    }
-
-    ctx.wizard.state.data.bankName = bank.name;
-    const prompt = userState.usePidgin
-      ? '🔢 Enter your 10-digit account number:'
-      : '🔢 Please enter your 10-digit account number:';
-    await ctx.replyWithMarkdown(prompt);
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    const accountNumber = ctx.message.text.trim();
-    const userState = await getUserState(ctx.wizard.state.data.userId);
-    if (accountNumber.toLowerCase() === 'exit') {
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Cancelled.' : '❌ Cancelled.');
-      return ctx.scene.leave();
-    }
-
-    if (!/^\d{10}$/.test(accountNumber)) {
-      const errorMsg = userState.usePidgin
-        ? '❌ Account number no correct. Enter valid 10-digit number:'
-        : '❌ Invalid account number. Enter a valid 10-digit number:';
-      await ctx.replyWithMarkdown(errorMsg);
-      return;
-    }
-
-    try {
-      const bankCode = bankList.find(b => b.name === ctx.wizard.state.data.bankName).code;
-      const verificationResult = await verifyBankAccount(accountNumber, bankCode);
-      const relayAddress = await generateWallet('Base'); // Generate wallet for Relay destination
-      ctx.wizard.state.data.bankDetails = {
-        bankName: ctx.wizard.state.data.bankName,
-        accountNumber,
-        accountName: verificationResult.data.account_name,
-        relayAddress,
-      };
-      const confirmMsg = userState.usePidgin
-        ? `✅ Bank linked for this sell:\n- *Bank:* ${ctx.wizard.state.data.bankName}\n- *Account:* \`${accountNumber}\`\n- *Name:* ${verificationResult.data.account_name}`
-        : `✅ Bank linked for this sell:\n- *Bank:* ${ctx.wizard.state.data.bankName}\n- *Account:* \`${accountNumber}\`\n- *Name:* ${verificationResult.data.account_name}`;
-      await ctx.replyWithMarkdown(confirmMsg);
-      return ctx.scene.leave();
-    } catch (error) {
-      logger.error(`Error verifying bank account for user ${ctx.wizard.state.data.userId}: ${error.message}`);
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Bank verification fail. Try again.' : '❌ Bank verification failed. Try again.');
-      return;
-    }
-  }
-);
-
-
-
-const privyManager = require('./privyManager');
-const sellScene = new Scenes.WizardScene(
-  'sell_scene',
-  async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const userState = await getUserState(userId);
-    const [_, amountStr, caOrTerm, network] = ctx.message.text.split(' ');
-    const amount = parseFloat(amountStr);
-
-    if (!amount || isNaN(amount) || !caOrTerm || !network) {
-      const usage = userState.usePidgin
-        ? 'Usage: /sell <amount> <currency or address> <network>\nE.g., /sell 10 USDC base'
-        : 'Usage: /sell <amount> <currency or address> <network>\nExample: /sell 10 USDC base';
-      await ctx.replyWithMarkdown(usage);
-      return ctx.scene.leave();
-    }
-
-    const chainId = networkMap[network.toLowerCase()];
-    if (!chainId || !Object.values(chains).some(c => c.chainId === chainId)) {
-      const error = userState.usePidgin
-        ? 'Network no dey o. We support: base, polygon, bnb'
-        : 'Invalid network. Supported: base, polygon, bnb';
-      await ctx.replyWithMarkdown(error);
-      return ctx.scene.leave();
-    }
-
-    const isAddress = /^0x[a-fA-F0-9]{40}$/.test(caOrTerm);
-    const payload = isAddress
-      ? { chainIds: [chainId], address: caOrTerm.toLowerCase(), verified: true, limit: 123, includeAllChains: true, useExternalSearch: true, depositAddressOnly: true }
-      : { chainIds: [chainId], term: caOrTerm.toLowerCase(), verified: true, limit: 123, includeAllChains: true, useExternalSearch: true, depositAddressOnly: true };
-
-    let currencyRes;
-    try {
-      currencyRes = await axios.post('https://api.relay.link/currencies/v1', payload);
-      await privyManager.logToBackend('Relay Currency Validation', { request: payload, response: currencyRes.data });
-    } catch (err) {
-      logger.error(`Relay currency validation failed for ${caOrTerm} on ${network}: ${err.message}`);
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Currency or address check fail. Try again.' : '❌ Error validating currency or address. Please try again.');
-      return ctx.scene.leave();
-    }
-
-    if (!currencyRes.data[0]?.length || currencyRes.data[0][0].chainId !== chainId) {
-      const error = userState.usePidgin
-        ? `❌ ${caOrTerm} no dey for ${network}. Check am well o.`
-        : `❌ ${caOrTerm} not found or invalid on ${network}. Please check your input.`;
-      await ctx.replyWithMarkdown(error);
-      return ctx.scene.leave();
-    }
-
-    const currencyData = currencyRes.data[0][0];
-    const decimals = currencyData.decimals;
-    const amountInWei = (amount * Math.pow(10, decimals)).toString();
-    ctx.wizard.state.data = {
-      userId,
-      amount,
-      amountInWei,
-      ca: currencyData.symbol,
-      chainId,
-      originCurrency: currencyData.address,
-      decimals,
+// Validate token with Relay
+async function validateToken(amount, contractAddress, network) {
+  try {
+    const response = await axios.post('https://api.relay.link/currencies/v1', {
+      defaultList: true,
+      chainIds: [Number(network)],
+      address: contractAddress,
+      verified: true,
+      limit: 1
+    }, {
+      headers: { 'Content-Type': 'application/json' }
+    });
+    const token = response.data[0]?.[0];
+    if (!token) throw new Error('Token not found or invalid');
+    return {
+      chainId: token.chainId,
+      address: token.address,
+      symbol: token.symbol,
+      name: token.name,
+      decimals: token.decimals
     };
-
-    const confirm = userState.usePidgin
-      ? `You wan sell ${amount} ${currencyData.symbol} on ${network}?\nPress "Yes" to go ahead, "No" to stop.`
-      : `Sell ${amount} ${currencyData.symbol} on ${network}?\nReply "Yes" to confirm, "No" to cancel.`;
-    await ctx.replyWithMarkdown(confirm, Markup.inlineKeyboard([
-      Markup.button.callback('✅ Yes', 'yes'),
-      Markup.button.callback('❌ No', 'no'),
-    ]));
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    const action = ctx.callbackQuery?.data;
-    if (!action) return;
-
-    const userState = await getUserState(ctx.wizard.state.data.userId);
-    if (action === 'no') {
-      await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel. Need help? Chat us or try /sell again.' : 'Sell cancelled. Need help? Contact us or retry with /sell.', { parse_mode: 'Markdown' });
-      return ctx.scene.leave();
-    }
-
-    const userWallets = userState.wallets || [];
-    const linkedBank = userWallets.find(w => w.bank)?.bank;
-
-    const prompt = linkedBank
-      ? userState.usePidgin
-        ? `Use your bank wey dey already (${linkedBank.bankName} - ****${linkedBank.accountNumber.slice(-4)}) or add new one?`
-        : `Use existing bank (${linkedBank.bankName} - ****${linkedBank.accountNumber.slice(-4)}) or link a new one?`
-      : userState.usePidgin
-        ? 'No bank dey o. Add one for this sell?'
-        : 'No bank linked. Link a new one for this sell?';
-
-    await ctx.editMessageText(prompt, {
-      parse_mode: 'Markdown',
-      reply_markup: Markup.inlineKeyboard([
-        linkedBank ? Markup.button.callback('✅ Use Existing', 'use_existing') : null,
-        Markup.button.callback('🏦 Link New', 'link_new'),
-      ].filter(Boolean)).reply_markup,
-    });
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    const action = ctx.callbackQuery?.data;
-    if (!action) return;
-
-    const { userId } = ctx.wizard.state.data;
-    const userState = await getUserState(userId);
-    let blockradarAddress;
-
-    if (action === 'use_existing') {
-      const wallet = userState.wallets.find(w => w.bank);
-      if (wallet) {
-        ctx.wizard.state.data.bankDetails = wallet.bank;
-        blockradarAddress = wallet.address;
-      }
-    } else if (action === 'link_new') {
-      await ctx.scene.enter('bank_linking_scene_temp');
-      ctx.wizard.state.tempBank = true;
-      return;
-    }
-
-    if (ctx.wizard.state.tempBank && ctx.scene.session.bankDetails) {
-      ctx.wizard.state.data.bankDetails = ctx.scene.session.bankDetails;
-      blockradarAddress = ctx.scene.session.bankDetails.relayAddress;
-      delete ctx.scene.session.bankDetails;
-    }
-
-    if (!blockradarAddress) {
-      await ctx.replyWithMarkdown(userState.usePidgin ? 'Bank no set o. Try again.' : 'Bank selection incomplete. Please retry.');
-      return ctx.scene.leave();
-    }
-
-    ctx.wizard.state.data.recipient = blockradarAddress;
-
-    const referenceId = uuidv4();
-    await db.collection('transactions').doc(referenceId).set({
-      userId,
-      bankDetails: ctx.wizard.state.data.bankDetails,
-      blockradarAddress,
-      status: 'pending',
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      amount: ctx.wizard.state.data.amount,
-      asset: ctx.wizard.state.data.ca,
-      chain: Object.keys(chains).find(key => chains[key].chainId === ctx.wizard.state.data.chainId),
-      referenceId,
-    });
-
-    const state = `${userId}:${referenceId}`;
-    const loginUrl = `https://auth.privy.io/login?app_id=${process.env.PRIVY_APP_ID}&redirect_uri=${encodeURIComponent(`${process.env.BOT_SERVER_URL}/privy-callback`)}&state=${encodeURIComponent(state)}&wallet_chain_type=ethereum-only`;
-    const qrCodeBuffer = await QRCode.toBuffer(loginUrl, { width: 200 });
-    const connectMsg = userState.usePidgin
-      ? `Connect your wallet (MetaMask, Trust, etc.) to sell:\n\n1. Open your wallet app\n2. Scan this QR code or click link\n3. Sign the message to connect\n\n[Connect Wallet](${loginUrl})`
-      : `Connect your wallet (MetaMask, Trust, etc.) to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or click the link\n3. Sign the message to connect\n\n[Connect Wallet](${loginUrl})`;
-
-    await ctx.editMessageMedia(
-      { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
-      { reply_markup: Markup.inlineKeyboard([
-        Markup.button.url('MetaMask', `https://metamask.app.link/dapp/auth.privy.io/login?app_id=${process.env.PRIVY_APP_ID}&redirect_uri=${encodeURIComponent(`${process.env.BOT_SERVER_URL}/privy-callback`)}&state=${encodeURIComponent(state)}`),
-        Markup.button.url('Trust Wallet', `https://link.trustwallet.com/open_url?url=${encodeURIComponent(loginUrl)}`),
-        Markup.button.callback('✅ Connected', 'wallet_connected'),
-      ]).reply_markup },
-    );
-
-    ctx.wizard.state.data.referenceId = referenceId;
-    return ctx.wizard.next();
-  },
-  async (ctx) => {
-    const action = ctx.callbackQuery?.data;
-    if (!action || action !== 'wallet_connected') return;
-
-    const userState = await getUserState(ctx.wizard.state.data.userId);
-    const { referenceId } = ctx.wizard.state.data;
-
-    const txDoc = await db.collection('transactions').doc(referenceId).get();
-    const walletAddress = txDoc.exists && txDoc.data().walletAddress;
-
-    if (!walletAddress) {
-      await ctx.editMessageText(userState.usePidgin
-        ? '❌ Wallet no connect yet o. Scan the QR code or click link again.'
-        : '❌ Wallet not connected yet. Please scan the QR code or click the link again.',
-        { parse_mode: 'Markdown' });
-      return ctx.wizard.selectStep(ctx.wizard.cursor - 1);
-    }
-
-    ctx.wizard.state.data.userAddress = walletAddress;
-
-    const { userAddress, chainId, originCurrency, recipient, amountInWei } = ctx.wizard.state.data;
-
-    try {
-      const quote = await relayClient.actions.getQuote({
-        user: userAddress,
-        originChainId: chainId,
-        originCurrency,
-        destinationChainId: 8453,
-        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-        tradeType: 'EXACT_INPUT',
-        recipient,
-        amount: amountInWei,
-        refundTo: userAddress,
-      });
-      await privyManager.logToBackend('Relay Quote Fetched', { quote });
-
-      const details = quote.details;
-      const quoteMsg = userState.usePidgin
-        ? `Sell Details:\n` +
-          `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-          `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-          `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-          `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-          `You wan approve this?`
-        : `Sell Details:\n` +
-          `From: ${details.currencyIn.currency.name} (${details.currencyIn.currency.symbol}) - $${details.currencyIn.amountUsd}\n` +
-          `To: ${details.currencyOut.currency.name} (${details.currencyOut.currency.symbol}) - $${details.currencyOut.amountUsd}\n` +
-          `Total Impact: ${details.totalImpact.usd} (${details.totalImpact.percent}%)\n` +
-          `Swap Impact: ${details.swapImpact.usd} (${details.swapImpact.percent}%)\n\n` +
-          `Approve this transaction?`;
-
-      const approveUrl = `${process.env.BOT_SERVER_URL}/approve?ref=${referenceId}`;
-      await ctx.editMessageText(quoteMsg + `\n\n[Approve in Wallet](${approveUrl})`, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([
-          Markup.button.url('Approve', approveUrl),
-          Markup.button.callback('❌ Cancel', 'cancel'),
-        ]).reply_markup,
-      });
-
-      ctx.wizard.state.data.quote = quote;
-      return ctx.wizard.next();
-    } catch (error) {
-      logger.error(`Relay quote error for ${userId}: ${error.message}`);
-      await ctx.editMessageText(userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error fetching quote. Please try again.', { parse_mode: 'Markdown' });
-      return ctx.scene.leave();
-    }
-  },
-  async (ctx) => {
-    const action = ctx.callbackQuery?.data;
-    if (!action) return;
-
-    const userState = await getUserState(ctx.wizard.state.data.userId);
-    const { referenceId } = ctx.wizard.state.data;
-
-    if (action === 'cancel') {
-      await ctx.editMessageText(userState.usePidgin ? 'Transaction don cancel.' : 'Transaction cancelled.', { parse_mode: 'Markdown' });
-      return ctx.scene.leave();
-    }
-
-    const txDoc = await db.collection('transactions').doc(referenceId).get();
-    const status = txDoc.exists && txDoc.data().status;
-
-    if (status === 'Processing') {
-      const amountFormatted = ctx.wizard.state.data.amount;
-      const chainName = Object.keys(chains).find(key => chains[key].chainId === ctx.wizard.state.data.chainId);
-      const success = userState.usePidgin
-        ? `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} don land! Payout dey process.`
-        : `✅ Deposit of ${amountFormatted} ${ctx.wizard.state.data.ca} on ${chainName} succeeded! Payout is being processed.`;
-      await ctx.editMessageText(success, { parse_mode: 'Markdown' });
-      return ctx.scene.leave();
-    }
-
-    await ctx.editMessageText(userState.usePidgin
-      ? '❌ You never approve yet o. Click the link above to approve for your wallet.'
-      : '❌ Approval not completed yet. Please click the link above to approve in your wallet.',
-      { parse_mode: 'Markdown' });
-    return ctx.wizard.selectStep(ctx.wizard.cursor);
+  } catch (error) {
+    console.error('Token Validation Error:', error.message);
+    throw error;
   }
-);
+}
 
-stage.register(bankLinkingSceneTemp, sellScene);
+// Generate Relay quote
+async function getRelayQuote(userWallet, token, amount, blockradarWallet) {
+  const amountInWei = (BigInt(amount) * BigInt(10 ** token.decimals)).toString();
+  const quoteReq = {
+    user: userWallet,
+    originChainId: token.chainId,
+    originCurrency: token.address,
+    destinationChainId: 8453, // Base
+    destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+    tradeType: 'EXACT_INPUT',
+    recipient: blockradarWallet,
+    amount: amountInWei,
+    refundTo: userWallet
+  };
+  try {
+    const response = await axios.post('https://api.relay.link/quote/v1', quoteReq, {
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${process.env.RELAY_API_KEY}` // Add Relay API key if required
+      }
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Relay Quote Error:', error.message);
+    throw error;
+  }
+}
 
-bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
+// Create Blockradar wallet (hidden from user)
+async function createBlockradarWallet(userId, bankDetails) {
+  try {
+    const response = await axios.post('https://api.blockradar.co/wallets', {
+      chain: 'base', // Assuming Base network for USDC
+      externalId: `${userId}-${Date.now()}` // Unique identifier
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.BLOCKRADAR_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+    const wallet = response.data;
+    await db.collection('wallets').doc(wallet.id).set({
+      userId,
+      bankDetails,
+      address: wallet.address,
+      createdAt: admin.firestore.FieldValue.serverTimestamp()
+    });
+    return wallet.address;
+  } catch (error) {
+    console.error('Blockradar Wallet Creation Error:', error.message);
+    throw error;
+  }
+}
+
+// Sell command handler
+bot.command('sell', async (ctx) => {
+  const [_, amount, contractAddress, network] = ctx.message.text.split(' ');
+  if (!amount || !contractAddress || !network || isNaN(amount) || isNaN(network)) {
+    return ctx.reply('Usage: /sell <amount> <contract_address> <network>\nExample: /sell 100 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 1');
+  }
+
+  try {
+    const token = await validateToken(amount, contractAddress, network);
+    ctx.session = { amount, token, sellMessageId: ctx.message.message_id };
+
+    // Placeholder quote until wallet is connected
+    const quote = await getRelayQuote('0x0000000000000000000000000000000000000000', token, amount, '0x0000000000000000000000000000000000000000');
+    const { currencyIn, currencyOut, totalImpact } = quote.details;
+
+    const message = `
+      **Sell Quote**
+      - **Selling**: ${currencyIn.amountFormatted} ${currencyIn.currency.name} (${currencyIn.currency.symbol}) ≈ $${currencyIn.amountUsd}
+      - **Receiving**: ${currencyOut.amountFormatted} ${currencyOut.currency.name} (${currencyOut.currency.symbol}) ≈ $${currencyOut.amountUsd}
+      - **Total Impact**: ${totalImpact.usd} USD (${totalImpact.percent}%)
+      - **Swap Impact**: ${quote.details.swapImpact.usd} USD (${quote.details.swapImpact.percent}%)
+      Do you want to proceed?
+    `;
+    const sentMessage = await ctx.reply(message, Markup.inlineKeyboard([
+      Markup.button.callback('Yes', 'confirm_sell'),
+      Markup.button.callback('No', 'cancel_sell')
+    ]));
+    ctx.session.sellMessageId = sentMessage.message_id;
+  } catch (error) {
+    ctx.reply('❌ Invalid token or network. Please check your input and try again.');
+  }
+});
+
+// Confirm sell action
+bot.action('confirm_sell', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userDoc = await db.collection('users').doc(userId).get();
+  const linkedBank = userDoc.exists ? userDoc.data().bankDetails : null;
+
+  await ctx.editMessageText(
+    linkedBank
+      ? 'Do you want to use your linked bank account or a new one?'
+      : 'Please link a bank account to proceed.',
+    {
+      message_id: ctx.session.sellMessageId,
+      reply_markup: {
+        inline_keyboard: linkedBank
+          ? [
+              Markup.button.callback('Use Linked Bank', 'use_linked_bank'),
+              Markup.button.callback('Link New Bank', 'link_new_bank')
+            ]
+          : [Markup.button.callback('Link New Bank', 'link_new_bank')]
+      }
+    }
+  );
+});
+
+// Handle bank selection
+bot.action('use_linked_bank', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userDoc = await db.collection('users').doc(userId).get();
+  const bankDetails = userDoc.data().bankDetails;
+  await proceedWithSell(ctx, userId, bankDetails);
+});
+
+bot.action('link_new_bank', async (ctx) => {
+  ctx.session.bankLinking = true;
+  await ctx.editMessageText(
+    'Please enter your bank details (e.g., "Account Name, Account Number, Bank Name"):',
+    { message_id: ctx.session.sellMessageId }
+  );
+});
+
+// Handle new bank input
+bot.on('text', async (ctx) => {
+  if (ctx.session?.bankLinking) {
+    const [accountName, accountNumber, bankName] = ctx.message.text.split(', ').map(s => s.trim());
+    if (!accountName || !accountNumber || !bankName) {
+      return ctx.reply('Invalid format. Use: "Account Name, Account Number, Bank Name"');
+    }
+    const bankDetails = { accountName, accountNumber, bankName };
+    ctx.session.bankLinking = false;
+    await proceedWithSell(ctx, ctx.from.id.toString(), bankDetails);
+  }
+});
+
+// Proceed with sell after bank selection
+async function proceedWithSell(ctx, userId, bankDetails) {
+  try {
+    const blockradarWallet = await createBlockradarWallet(userId, bankDetails);
+    ctx.session.blockradarWallet = blockradarWallet;
+
+    const connectUrl = `${process.env.WEBAPP_URL}/connect?userId=${userId}&session=${Date.now()}`;
+    const qrBuffer = await QRCode.toBuffer(connectUrl, { width: 300 });
+
+    await ctx.editMessageText(
+      'Please connect your wallet to approve and deposit the tokens:',
+      {
+        message_id: ctx.session.sellMessageId,
+        reply_markup: {
+          inline_keyboard: [[Markup.button.url('Connect Wallet', connectUrl)]]
+        }
+      }
+    );
+    await ctx.replyWithPhoto({ source: qrBuffer });
+  } catch (error) {
+    console.error('Proceed With Sell Error:', error.message);
+    await ctx.editMessageText('❌ Error setting up wallet connection. Please try again.');
+  }
+}
+
+// Cancel sell action
+bot.action('cancel_sell', async (ctx) => {
+  await ctx.editMessageText(
+    'Sell cancelled. How can I assist you further?',
+    {
+      message_id: ctx.session.sellMessageId,
+      reply_markup: {
+        inline_keyboard: [Markup.button.callback('Retry', 'retry_sell')]
+      }
+    }
+  );
+});
+
+bot.action('retry_sell', (ctx) => {
+  ctx.reply('Please use /sell <amount> <ca> <network> to try again.');
+});
+
 
 function mapToPaycrest(asset, chainName) {
   if (!['USDC', 'USDT'].includes(asset)) return null;
