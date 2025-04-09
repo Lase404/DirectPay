@@ -321,7 +321,6 @@ const chains = {
   }
 };
 
-const walletConnectManager = require('./walletConnectManager');
 // =================== Chain Mapping ===================
 const chainMapping = {
   'base': 'Base',
