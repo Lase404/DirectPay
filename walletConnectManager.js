@@ -25,6 +25,7 @@ class WalletConnectManager {
     try {
       this.client = await SignClient.init({
         projectId: this.projectId,
+        relayUrl: 'wss://relay.walletconnect.com', // Explicitly set default relay
         metadata: {
           name: 'DirectPay',
           description: 'Sell crypto seamlessly',
@@ -41,7 +42,7 @@ class WalletConnectManager {
     }
   }
 
-  async connect(chainId, timeoutMs = 60000) { // 60-second timeout
+  async connect(chainId, timeoutMs = 60000) {
     if (!this.client) await this.initialize();
 
     try {
@@ -53,16 +54,19 @@ class WalletConnectManager {
         },
       };
 
-      const { uri, approval } = await this.client.connect({
+      logger.info('Attempting WalletConnect connection', { chainId, requiredNamespaces });
+      const connectResponse = await this.client.connect({
         requiredNamespaces,
       });
 
-      if (!uri) throw new Error('Failed to generate WalletConnect URI');
+      const { uri, approval } = connectResponse || {};
+      if (!uri) {
+        throw new Error('No URI returned from WalletConnect connect');
+      }
 
-      logger.info('WalletConnect connection initiated', { uri, chainId });
+      logger.info('WalletConnect URI generated', { uri, chainId });
       await this.logToBackend('WalletConnect Connect Initiated', { uri, chainId });
 
-      // Add timeout to approval promise
       const approvalPromise = approval();
       const timeoutPromise = new Promise((_, reject) =>
         setTimeout(() => reject(new Error('Wallet connection timed out')), timeoutMs)
@@ -79,7 +83,7 @@ class WalletConnectManager {
 
       return { uri, userAddress };
     } catch (error) {
-      logger.error('WalletConnect connection failed:', error.message);
+      logger.error('WalletConnect connection failed:', error.message, error.stack);
       await this.logToBackend('WalletConnect Connection Failed', { status: 'error', error: error.message });
       throw error;
     }
