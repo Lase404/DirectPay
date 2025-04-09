@@ -1,6 +1,7 @@
 const { SignClient } = require('@walletconnect/sign-client');
 const { getSdkError } = require('@walletconnect/utils');
 const admin = require('firebase-admin');
+const winston = require('winston');
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
