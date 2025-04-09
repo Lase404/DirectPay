@@ -222,8 +222,7 @@ async function getRelayQuote(userWallet, token, amount, blockradarWallet) {
   try {
     const response = await axios.post('https://api.relay.link/quote/v1', quoteReq, {
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.RELAY_API_KEY}` // Add Relay API key if required
+        'Content-Type': 'application/json'
       }
     });
     return response.data;
