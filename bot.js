@@ -176,23 +176,18 @@ const chainMapping = {
   'bnb chain': 'BNB Smart Chain',
   'bnb': 'BNB Smart Chain',
 };
-// Privy setup
-const privy = new PrivyClient(process.env.PRIVY_APP_ID, process.env.PRIVY_APP_SECRET);
-
 // Validate token with Relay
-async function validateToken(amount, contractAddress, network) {
+async function validateToken(symbol, network) {
   try {
     const response = await axios.post('https://api.relay.link/currencies/v1', {
       defaultList: true,
       chainIds: [Number(network)],
-      address: contractAddress,
+      term: symbol.toUpperCase(),
       verified: true,
       limit: 1
-    }, {
-      headers: { 'Content-Type': 'application/json' }
     });
     const token = response.data[0]?.[0];
-    if (!token) throw new Error('Token not found or invalid');
+    if (!token) throw new Error('Token not found');
     return {
       chainId: token.chainId,
       address: token.address,
@@ -201,86 +196,30 @@ async function validateToken(amount, contractAddress, network) {
       decimals: token.decimals
     };
   } catch (error) {
-    console.error('Token Validation Error:', error.message);
-    throw error;
-  }
-}
-
-// Generate Relay quote
-async function getRelayQuote(userWallet, token, amount, blockradarWallet) {
-  const amountInWei = (BigInt(amount) * BigInt(10 ** token.decimals)).toString();
-  const quoteReq = {
-    user: userWallet,
-    originChainId: token.chainId,
-    originCurrency: token.address,
-    destinationChainId: 8453, // Base
-    destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
-    tradeType: 'EXACT_INPUT',
-    recipient: blockradarWallet,
-    amount: amountInWei,
-    refundTo: userWallet
-  };
-  try {
-    const response = await axios.post('https://api.relay.link/quote/v1', quoteReq, {
-      headers: {
-        'Content-Type': 'application/json'
-      }
-    });
-    return response.data;
-  } catch (error) {
-    console.error('Relay Quote Error:', error.message);
-    throw error;
-  }
-}
-
-// Create Blockradar wallet (hidden from user)
-async function createBlockradarWallet(userId, bankDetails) {
-  try {
-    const response = await axios.post('https://api.blockradar.co/wallets', {
-      chain: 'base', // Assuming Base network for USDC
-      externalId: `${userId}-${Date.now()}` // Unique identifier
-    }, {
-      headers: {
-        'Authorization': `Bearer ${process.env.BLOCKRADAR_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
-    const wallet = response.data;
-    await db.collection('wallets').doc(wallet.id).set({
-      userId,
-      bankDetails,
-      address: wallet.address,
-      createdAt: admin.firestore.FieldValue.serverTimestamp()
-    });
-    return wallet.address;
-  } catch (error) {
-    console.error('Blockradar Wallet Creation Error:', error.message);
+    console.error('Validation Error:', error.message);
     throw error;
   }
 }
 
 // Sell command handler
 bot.command('sell', async (ctx) => {
-  const [_, amount, contractAddress, network] = ctx.message.text.split(' ');
-  if (!amount || !contractAddress || !network || isNaN(amount) || isNaN(network)) {
-    return ctx.reply('Usage: /sell <amount> <contract_address> <network>\nExample: /sell 100 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 1');
+  const [_, amount, symbol, networkName] = ctx.message.text.toLowerCase().split(' ');
+  if (!amount || !symbol || !networkName || isNaN(amount)) {
+    return ctx.reply('Usage: /sell <amount> <symbol> <network>\nExample: /sell 10 usdc base');
   }
 
-  try {
-    const token = await validateToken(amount, contractAddress, network);
-    ctx.session = { amount, token, sellMessageId: ctx.message.message_id };
+  const networkMap = { base: 8453 }; // Add more networks as needed
+  const network = networkMap[networkName];
+  if (!network) return ctx.reply('Unsupported network. Use "base" for now.');
 
-    // Placeholder quote until wallet is connected
-    const quote = await getRelayQuote('0x0000000000000000000000000000000000000000', token, amount, '0x0000000000000000000000000000000000000000');
-    const { currencyIn, currencyOut, totalImpact } = quote.details;
+  try {
+    const token = await validateToken(symbol, network);
+    ctx.session = { amount, token };
 
     const message = `
-      **Sell Quote**
-      - **Selling**: ${currencyIn.amountFormatted} ${currencyIn.currency.name} (${currencyIn.currency.symbol}) ≈ $${currencyIn.amountUsd}
-      - **Receiving**: ${currencyOut.amountFormatted} ${currencyOut.currency.name} (${currencyOut.currency.symbol}) ≈ $${currencyOut.amountUsd}
-      - **Total Impact**: ${totalImpact.usd} USD (${totalImpact.percent}%)
-      - **Swap Impact**: ${quote.details.swapImpact.usd} USD (${quote.details.swapImpact.percent}%)
-      Do you want to proceed?
+      **Sell Confirmation**
+      You want to sell ${amount} ${token.symbol} on ${networkName.toUpperCase()}.
+      Proceed?
     `;
     const sentMessage = await ctx.reply(message, Markup.inlineKeyboard([
       Markup.button.callback('Yes', 'confirm_sell'),
@@ -288,11 +227,11 @@ bot.command('sell', async (ctx) => {
     ]));
     ctx.session.sellMessageId = sentMessage.message_id;
   } catch (error) {
-    ctx.reply('❌ Invalid token or network. Please check your input and try again.');
+    ctx.reply('❌ Token not found on this network. Try again.');
   }
 });
 
-// Confirm sell action
+// Confirm sell
 bot.action('confirm_sell', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userDoc = await db.collection('users').doc(userId).get();
@@ -300,34 +239,35 @@ bot.action('confirm_sell', async (ctx) => {
 
   await ctx.editMessageText(
     linkedBank
-      ? 'Do you want to use your linked bank account or a new one?'
-      : 'Please link a bank account to proceed.',
+      ? 'Use your linked bank or a new one?'
+      : 'Link a bank account to proceed.',
     {
       message_id: ctx.session.sellMessageId,
       reply_markup: {
         inline_keyboard: linkedBank
           ? [
-              Markup.button.callback('Use Linked Bank', 'use_linked_bank'),
-              Markup.button.callback('Link New Bank', 'link_new_bank')
+              Markup.button.callback('Linked Bank', 'use_linked_bank'),
+              Markup.button.callback('New Bank', 'link_new_bank')
             ]
-          : [Markup.button.callback('Link New Bank', 'link_new_bank')]
+          : [Markup.button.callback('New Bank', 'link_new_bank')]
       }
     }
   );
 });
 
-// Handle bank selection
+// Use linked bank
 bot.action('use_linked_bank', async (ctx) => {
   const userId = ctx.from.id.toString();
   const userDoc = await db.collection('users').doc(userId).get();
   const bankDetails = userDoc.data().bankDetails;
-  await proceedWithSell(ctx, userId, bankDetails);
+  await connectWallet(ctx, userId, bankDetails);
 });
 
+// Link new bank
 bot.action('link_new_bank', async (ctx) => {
   ctx.session.bankLinking = true;
   await ctx.editMessageText(
-    'Please enter your bank details (e.g., "Account Name, Account Number, Bank Name"):',
+    'Enter bank details (e.g., "Name, Number, Bank"):',
     { message_id: ctx.session.sellMessageId }
   );
 });
@@ -335,18 +275,18 @@ bot.action('link_new_bank', async (ctx) => {
 // Handle new bank input
 bot.on('text', async (ctx) => {
   if (ctx.session?.bankLinking) {
-    const [accountName, accountNumber, bankName] = ctx.message.text.split(', ').map(s => s.trim());
-    if (!accountName || !accountNumber || !bankName) {
-      return ctx.reply('Invalid format. Use: "Account Name, Account Number, Bank Name"');
+    const [name, number, bank] = ctx.message.text.split(', ').map(s => s.trim());
+    if (!name || !number || !bank) {
+      return ctx.reply('Invalid format. Use: "Name, Number, Bank"');
     }
-    const bankDetails = { accountName, accountNumber, bankName };
+    const bankDetails = { accountName: name, accountNumber: number, bankName: bank };
     ctx.session.bankLinking = false;
-    await proceedWithSell(ctx, ctx.from.id.toString(), bankDetails);
+    await connectWallet(ctx, ctx.from.id.toString(), bankDetails);
   }
 });
 
-// Proceed with sell after bank selection
-async function proceedWithSell(ctx, userId, bankDetails) {
+// Connect wallet
+async function connectWallet(ctx, userId, bankDetails) {
   try {
     const blockradarWallet = await createBlockradarWallet(userId, bankDetails);
     ctx.session.blockradarWallet = blockradarWallet;
@@ -355,37 +295,52 @@ async function proceedWithSell(ctx, userId, bankDetails) {
     const qrBuffer = await QRCode.toBuffer(connectUrl, { width: 300 });
 
     await ctx.editMessageText(
-      'Please connect your wallet to approve and deposit the tokens:',
+      'Connect your wallet to approve and deposit:',
       {
         message_id: ctx.session.sellMessageId,
-        reply_markup: {
-          inline_keyboard: [[Markup.button.url('Connect Wallet', connectUrl)]]
-        }
+        reply_markup: { inline_keyboard: [[Markup.button.url('Connect', connectUrl)]] }
       }
     );
     await ctx.replyWithPhoto({ source: qrBuffer });
   } catch (error) {
-    console.error('Proceed With Sell Error:', error.message);
-    await ctx.editMessageText('❌ Error setting up wallet connection. Please try again.');
+    console.error('Connect Error:', error.message);
+    await ctx.editMessageText('❌ Error. Try again.');
   }
 }
 
-// Cancel sell action
+// Create Blockradar wallet
+async function createBlockradarWallet(userId, bankDetails) {
+  const response = await axios.post('https://api.blockradar.co/wallets', {
+    chain: 'base',
+    externalId: `${userId}-${Date.now()}`
+  }, {
+    headers: {
+      'Authorization': `Bearer ${process.env.BLOCKRADAR_API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
+  const wallet = response.data;
+  await db.collection('wallets').doc(wallet.id).set({
+    userId,
+    bankDetails,
+    address: wallet.address,
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  return wallet.address;
+}
+
+// Cancel sell
 bot.action('cancel_sell', async (ctx) => {
   await ctx.editMessageText(
-    'Sell cancelled. How can I assist you further?',
+    'Cancelled. Retry?',
     {
       message_id: ctx.session.sellMessageId,
-      reply_markup: {
-        inline_keyboard: [Markup.button.callback('Retry', 'retry_sell')]
-      }
+      reply_markup: { inline_keyboard: [Markup.button.callback('Retry', 'retry_sell')] }
     }
   );
 });
 
-bot.action('retry_sell', (ctx) => {
-  ctx.reply('Please use /sell <amount> <ca> <network> to try again.');
-});
+bot.action('retry_sell', (ctx) => ctx.reply('Use /sell <amount> <symbol> <network>'));
 
 
 function mapToPaycrest(asset, chainName) {
