@@ -107,11 +107,12 @@ const ERROR_IMAGE = './error.png';
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
-const stage = new Scenes.Stage();
+
 bot.use(session());
 bot.use(stage.middleware());
 const sellSceneModule = require('./sellScene');
 sellSceneModule(bot, db);
+const bankLinkingSceneTemp = require('./bankLinkingSceneTemp');
 
 // =================== Define Supported Banks ===================
 const bankList = [
@@ -1772,7 +1773,8 @@ bot.hears('📈 View Current Rates', async (ctx) => {
     : '\nThese rates apply to your deposits and payouts.';
   await ctx.replyWithMarkdown(ratesMessage);
 });
-
+// Define commands
+bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
 // =================== Settings Handler ===================
 bot.action('settings_set_refund_address', async (ctx) => {
   const userId = ctx.from.id.toString();
@@ -3236,6 +3238,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     });
   }
 });
+
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 
