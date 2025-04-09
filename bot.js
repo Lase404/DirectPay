@@ -402,6 +402,7 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
   }
 );
 
+
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   async (ctx) => {
@@ -555,18 +556,20 @@ const sellScene = new Scenes.WizardScene(
       const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
       const encodedUri = encodeURIComponent(uri);
       const walletOptions = [
+        Markup.button.callback('🔄 Retry', 'retry_connect'), // Add retry option
         Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
         Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
       ];
 
       const connectMsg = userState.usePidgin
-        ? `Connect your wallet to sell:\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\``
-        : `Connect your wallet to proceed with the sell:\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\``;
+        ? `Connect your wallet to sell (60 secs):\n\n1. Open wallet app\n2. Scan this QR code or use link\n3. Approve connection\n\n*Other Wallet URI:* \`${uri}\`\n\nNo connect? Press "Retry".`
+        : `Connect your wallet to proceed with the sell (60 secs):\n\n1. Open your wallet app\n2. Scan this QR code or use a link\n3. Approve the connection\n\n*Other Wallet URI:* \`${uri}\`\n\nNot connecting? Press "Retry".`;
       await ctx.editMessageMedia(
         { type: 'photo', media: { source: qrCodeBuffer }, caption: connectMsg, parse_mode: 'Markdown' },
         { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
       );
 
+      // Fetch quote after wallet connection
       const quote = await relayClient.actions.getQuote({
         user: userAddress,
         originChainId: ctx.wizard.state.data.chainId,
@@ -605,8 +608,16 @@ const sellScene = new Scenes.WizardScene(
       ctx.wizard.state.data.quote = quote;
     } catch (error) {
       logger.error(`WalletConnect or Relay error for ${userId}: ${error.message}`);
-      await ctx.editMessageText(userState.usePidgin ? '❌ Wahala dey o. Try again.' : '❌ Error occurred. Try again.', { parse_mode: 'Markdown' });
-      return ctx.scene.leave();
+      const errorMsg = userState.usePidgin
+        ? `❌ Wahala dey o: ${error.message}. Try again or press "Retry".`
+        : `❌ Error: ${error.message}. Try again or press "Retry".`;
+      await ctx.editMessageText(errorMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          Markup.button.callback('🔄 Retry', 'retry_connect'),
+        ]).reply_markup,
+      });
+      return; // Stay in this step to allow retry
     }
 
     return ctx.wizard.next();
@@ -616,6 +627,12 @@ const sellScene = new Scenes.WizardScene(
     if (!action) return;
 
     const userState = await getUserState(ctx.wizard.state.data.userId);
+
+    if (action === 'retry_connect') {
+      // Retry connection by re-entering this step
+      return ctx.wizard.selectStep(ctx.wizard.cursor);
+    }
+
     if (action === 'cancel') {
       await walletConnectManager.disconnect();
       await ctx.editMessageText(userState.usePidgin ? 'Transaction don cancel.' : 'Transaction cancelled.', { parse_mode: 'Markdown' });
@@ -629,9 +646,9 @@ const sellScene = new Scenes.WizardScene(
         const txHash = await walletConnectManager.sendTransaction({
           chainId,
           from: userAddress,
-          to: originCurrency, // Assuming token transfer to itself for approval
+          to: originCurrency, // Placeholder; needs ERC-20 approval/transfer
           value: '0x0',
-          data: '0x', // Simplified; real implementation needs token approval/transfer data
+          data: '0x',
         });
 
         await relayClient.actions.execute({
