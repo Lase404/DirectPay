@@ -3426,7 +3426,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     });
   }
 });
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, sellScene);
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
 
 // =================== Server Startup ===================
 app.listen(PORT, () => {
