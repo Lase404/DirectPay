@@ -10,11 +10,10 @@ class PrivyManager {
     );
   }
 
-  // Verify a user's access token and return their wallet address
   async verifyUserToken(token) {
     try {
       const verifiedClaims = await this.client.verifyAuthToken(token);
-      const userId = verifiedClaims.userId; // Privy DID
+      const userId = verifiedClaims.userId;
       const walletAddress = verifiedClaims.linkedAccounts?.find(acc => acc.type === 'wallet')?.address;
 
       if (!walletAddress) {
