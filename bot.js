@@ -403,6 +403,7 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
 );
 
 
+
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   async (ctx) => {
@@ -549,14 +550,29 @@ const sellScene = new Scenes.WizardScene(
       referenceId,
     });
 
+    let uri, userAddress;
     try {
-      const { uri, userAddress } = await walletConnectManager.connect(ctx.wizard.state.data.chainId);
+      ({ uri, userAddress } = await walletConnectManager.connect(ctx.wizard.state.data.chainId));
       ctx.wizard.state.data.userAddress = userAddress;
+    } catch (error) {
+      logger.error(`WalletConnect connection error for ${userId}: ${error.message}`);
+      const errorMsg = userState.usePidgin
+        ? `❌ Wahala dey o: ${error.message}. Press "Retry" to try again.`
+        : `❌ Error: ${error.message}. Press "Retry" to try again.`;
+      await ctx.editMessageText(errorMsg, {
+        parse_mode: 'Markdown',
+        reply_markup: Markup.inlineKeyboard([
+          Markup.button.callback('🔄 Retry', 'retry_connect'),
+        ]).reply_markup,
+      });
+      return;
+    }
 
+    try {
       const qrCodeBuffer = await QRCode.toBuffer(uri, { width: 200 });
       const encodedUri = encodeURIComponent(uri);
       const walletOptions = [
-        Markup.button.callback('🔄 Retry', 'retry_connect'), // Add retry option
+        Markup.button.callback('🔄 Retry', 'retry_connect'),
         Markup.button.url('MetaMask', `https://metamask.app.link/wc?uri=${encodedUri}`),
         Markup.button.url('Trust Wallet', `https://link.trustwallet.com/wc?uri=${encodedUri}`),
       ];
@@ -569,7 +585,6 @@ const sellScene = new Scenes.WizardScene(
         { reply_markup: Markup.inlineKeyboard(walletOptions).reply_markup },
       );
 
-      // Fetch quote after wallet connection
       const quote = await relayClient.actions.getQuote({
         user: userAddress,
         originChainId: ctx.wizard.state.data.chainId,
@@ -606,21 +621,20 @@ const sellScene = new Scenes.WizardScene(
       });
 
       ctx.wizard.state.data.quote = quote;
+      return ctx.wizard.next();
     } catch (error) {
-      logger.error(`WalletConnect or Relay error for ${userId}: ${error.message}`);
+      logger.error(`Post-connection error for ${userId}: ${error.message}`);
       const errorMsg = userState.usePidgin
-        ? `❌ Wahala dey o: ${error.message}. Try again or press "Retry".`
-        : `❌ Error: ${error.message}. Try again or press "Retry".`;
+        ? `❌ Wahala dey o: ${error.message}. Press "Retry" to try again.`
+        : `❌ Error: ${error.message}. Press "Retry" to try again.`;
       await ctx.editMessageText(errorMsg, {
         parse_mode: 'Markdown',
         reply_markup: Markup.inlineKeyboard([
           Markup.button.callback('🔄 Retry', 'retry_connect'),
         ]).reply_markup,
       });
-      return; // Stay in this step to allow retry
+      return;
     }
-
-    return ctx.wizard.next();
   },
   async (ctx) => {
     const action = ctx.callbackQuery?.data;
@@ -629,7 +643,6 @@ const sellScene = new Scenes.WizardScene(
     const userState = await getUserState(ctx.wizard.state.data.userId);
 
     if (action === 'retry_connect') {
-      // Retry connection by re-entering this step
       return ctx.wizard.selectStep(ctx.wizard.cursor);
     }
 
@@ -646,7 +659,7 @@ const sellScene = new Scenes.WizardScene(
         const txHash = await walletConnectManager.sendTransaction({
           chainId,
           from: userAddress,
-          to: originCurrency, // Placeholder; needs ERC-20 approval/transfer
+          to: originCurrency,
           value: '0x0',
           data: '0x',
         });
@@ -694,7 +707,6 @@ const sellScene = new Scenes.WizardScene(
 stage.register(bankLinkingSceneTemp, sellScene);
 
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
-
 // =================== Command Handler ===================
 bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));// =================== Helper Functions ===================
 
