@@ -107,10 +107,11 @@ const ERROR_IMAGE = './error.png';
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
+const sellScene = './sellScene';
 const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
 bot.use(session());
 bot.use(stage.middleware());
-const sellScene = './sellScene';
+
 sellSceneModule(bot, db);
 
 // =================== Define Supported Banks ===================
