@@ -3,12 +3,13 @@ import ReactDOM from 'react-dom/client';
 import { PrivyProvider } from '@privy-io/react-auth';
 import ConnectWalletApp from './ConnectWalletApp';
 
-// Use environment variable or fallback (should match Render env)
-const PRIVY_APP_ID = process.env.PRIVY_APP_ID || '';
+if (!process.env.REACT_APP_PRIVY_APP_ID) {
+  console.error('REACT_APP_PRIVY_APP_ID is not set in environment');
+}
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(
-  <PrivyProvider appId={PRIVY_APP_ID}>
+  <PrivyProvider appId={process.env.REACT_APP_PRIVY_APP_ID}>
     <ConnectWalletApp />
   </PrivyProvider>
 );
