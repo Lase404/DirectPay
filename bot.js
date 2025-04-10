@@ -3402,7 +3402,13 @@ app.get('/api/session', async (req, res) => {
     blockradarWallet: session.walletAddress
   });
 });
+// Serve React frontend static files
+app.use(express.static(path.join(__dirname, 'client', 'build')));
+
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
+});
 
 
 // =================== Server Startup ===================
