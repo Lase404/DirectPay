@@ -3405,14 +3405,6 @@ app.get('/api/session', async (req, res) => {
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 
-/// Serve React build files
-app.use(express.static(path.join(__dirname, 'client/build')));
-// Serve index.html for all other routes
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
-});
-
-
 // =================== Server Startup ===================
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
