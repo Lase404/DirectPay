@@ -1,56 +1,116 @@
 import React, { useEffect, useState } from 'react';
 import { usePrivy, useWallets } from '@privy-io/react-auth';
 import axios from 'axios';
+import { RelayClient } from '@reservoir0x/relay-sdk';
 
 function ConnectWalletApp() {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
+  const [status, setStatus] = useState('');
   const [error, setError] = useState(null);
 
-  // Extract query params
+  const relayClient = new RelayClient({
+    baseUrl: 'https://api.relay.link',
+  });
+
+  // Extract params from URL
   const urlParams = new URLSearchParams(window.location.search);
   const userId = urlParams.get('userId');
   const session = urlParams.get('session');
 
-  // Debugging logs
   useEffect(() => {
-    console.log('Privy ready:', ready);
-    console.log('Authenticated:', authenticated);
-    console.log('Wallets:', wallets);
-    if (ready && authenticated && wallets.length > 0) {
-      handleWalletConnect();
+    if (ready && authenticated && wallets.length > 0 && !status) {
+      initiateApprovalAndDeposit();
     }
   }, [ready, authenticated, wallets]);
 
-  const handleWalletConnect = async () => {
+  const initiateApprovalAndDeposit = async () => {
     try {
       const wallet = wallets[0];
       const walletAddress = wallet.address;
-      console.log('Connecting wallet:', walletAddress);
 
+      // Notify backend of wallet connection
       await axios.post(`${process.env.WEBAPP_URL || 'https://directpay.onrender.com'}/webhook/wallet-connected`, {
         userId,
         walletAddress,
       });
-      console.log('Wallet connected successfully');
+
+      // Fetch sell details from backend (assumes session links to sellScene data)
+      setStatus('Fetching transaction details...');
+      const { data } = await axios.get(`${process.env.WEBAPP_URL || 'https://directpay.onrender.com'}/api/session`, {
+        params: { userId, session },
+      });
+      const { amount, asset, chainId } = data; // Expecting amount (wei), asset (token address), chainId
+
+      // Step 1: Approve token
+      setStatus('Requesting approval...');
+      const approvalTx = await relayClient.actions.approve({
+        chainId,
+        walletAddress,
+        currency: asset,
+        amount,
+        walletClient: wallet,
+      });
+      setStatus('Waiting for approval...');
+      const approvalReceipt = await approvalTx.wait();
+
+      // Notify backend of approval
+      await axios.post(`${process.env.WEBAPP_URL || 'https://directpay.onrender.com'}/webhook/approval-confirmed`, {
+        userId,
+        walletAddress,
+        txHash: approvalReceipt.transactionHash,
+      });
+
+      // Step 2: Deposit (swap to USDC on Base)
+      setStatus('Initiating deposit...');
+      const depositTx = await relayClient.actions.deposit({
+        chainId,
+        toChainId: 8453, // Base
+        walletAddress,
+        currency: asset,
+        toCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+        amount,
+        walletClient: wallet,
+      });
+      setStatus('Waiting for deposit...');
+      const depositReceipt = await depositTx.wait();
+
+      // Notify backend of deposit completion
+      await axios.post(`${process.env.WEBAPP_URL || 'https://directpay.onrender.com'}/webhook/deposit-confirmed`, {
+        userId,
+        walletAddress,
+        txHash: depositReceipt.transactionHash,
+        amount,
+        chainId,
+      });
+
+      setStatus('Deposit complete!');
     } catch (err) {
-      setError('Failed to connect wallet. Try again.');
-      console.error('Wallet connect error:', err);
+      setError(`Error: ${err.message}`);
+      console.error('Transaction error:', err);
+      await axios.post(`${process.env.REACT_WEBAPP_URL || 'https://directpay.onrender.com'}/webhook/error`, {
+        userId,
+        error: err.message,
+      });
     }
   };
 
-  // Render loading state
   if (!ready) {
-    return <div>Loading Privy...</div>;
+    return (
+      <div style={{ padding: '20px', textAlign: 'center' }}>
+        <h1>Loading...</h1>
+      </div>
+    );
   }
 
-  // Render based on authentication state
   return (
     <div style={{ padding: '20px', textAlign: 'center' }}>
-      <h1>Connect Your Wallet</h1>
+      <h1>DirectPay Wallet</h1>
       {authenticated ? (
         <>
-          <p>Connected: {wallets[0]?.address}</p>
+          <p>Wallet: {wallets[0]?.address}</p>
+          <p>Status: {status || 'Connected'}</p>
+          {error && <p style={{ color: 'red' }}>{error}</p>}
           <button onClick={logout} style={{ padding: '10px', margin: '5px' }}>
             Disconnect
           </button>
@@ -60,9 +120,6 @@ function ConnectWalletApp() {
           Connect Wallet
         </button>
       )}
-      {error && <p style={{ color: 'red' }}>{error}</p>}
-      <p>User ID: {userId || 'Not provided'}</p> {/* Debugging */}
-      <p>Session: {session || 'Not provided'}</p> {/* Debugging */}
     </div>
   );
 }
