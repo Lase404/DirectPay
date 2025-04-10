@@ -6,7 +6,7 @@ import { useSearchParams } from 'react-router-dom';
 
 function ConnectWalletApp() {
   return (
-    <PrivyProvider appId={process.env.PRIVY_APP_ID}>
+    <PrivyProvider appId={process.env.REACT_APP_PRIVY_APP_ID}>
       <ConnectWallet />
     </PrivyProvider>
   );
@@ -30,16 +30,13 @@ function ConnectWallet() {
 
   const handleWalletConnected = async () => {
     const accessToken = await getAccessToken();
-    const walletAddress = wallets[0].address; // Use Privy's wallet address instead of window.ethereum
+    const walletAddress = wallets[0].address;
     try {
-      // Notify backend of wallet connection
-      await axios.post('https://yourdomain.com/webhook/wallet-connected', {
+      await axios.post('https://directpay.onrender.com/webhook/wallet-connected', {
         userId,
         walletAddress,
         accessToken
       });
-
-      // Proceed to approval and deposit
       await approveAndSign();
     } catch (error) {
       console.error('Wallet Connection Error:', error);
@@ -54,50 +51,46 @@ function ConnectWallet() {
     const ethersProvider = new ethers.providers.Web3Provider(provider);
     const signer = ethersProvider.getSigner();
 
-    // Fetch session data from backend
     const { data: session } = await axios.get(`https://directpay.onrender.com/api/session?userId=${userId}`);
     const { amount, token, blockradarWallet } = session;
 
-    // Get Relay quote
     const quote = await axios.post('https://api.relay.link/quote/v1', {
       user: wallet.address,
       originChainId: token.chainId,
       originCurrency: token.address,
       destinationChainId: 8453,
-      destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+      destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
       tradeType: 'EXACT_INPUT',
       recipient: blockradarWallet,
-      amount: ethers.utils.parseUnits(amount.toString(), token.decimals).toString(),
+      amount: amount,
       refundTo: wallet.address
     }).then(res => res.data);
 
     const depositStep = quote.steps.find(step => step.id === 'deposit');
     const txData = depositStep.items[0].data;
 
-    // Approve token (if not native)
     if (token.address !== '0x0000000000000000000000000000000000000000') {
       const tokenContract = new ethers.Contract(
         token.address,
         ['function approve(address spender, uint256 amount) returns (bool)'],
         signer
       );
-      await tokenContract.approve(txData.to, ethers.utils.parseUnits(amount.toString(), token.decimals));
+      const approveTx = await tokenContract.approve(txData.to, amount);
+      await approveTx.wait();
     }
 
-    // Sign and send deposit transaction
     const txResponse = await signer.sendTransaction({
       from: wallet.address,
       to: txData.to,
       data: txData.data,
-      value: txData.value,
+      value: txData.value ? ethers.BigNumber.from(txData.value) : undefined,
       chainId: txData.chainId,
-      gasLimit: txData.gas,
-      maxFeePerGas: txData.maxFeePerGas,
-      maxPriorityFeePerGas: txData.maxPriorityFeePerGas
+      gasLimit: txData.gas ? ethers.BigNumber.from(txData.gas) : undefined,
+      maxFeePerGas: txData.maxFeePerGas ? ethers.BigNumber.from(txData.maxFeePerGas) : undefined,
+      maxPriorityFeePerGas: txData.maxPriorityFeePerGas ? ethers.BigNumber.from(txData.maxPriorityFeePerGas) : undefined
     });
     await txResponse.wait();
 
-    // Notify backend of deposit
     await axios.post('https://directpay.onrender.com/webhook/deposit-signed', {
       userId,
       txHash: txResponse.hash
