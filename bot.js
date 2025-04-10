@@ -3375,6 +3375,33 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     });
   }
 });
+app.post('/webhook/wallet-connected', async (req, res) => {
+  const { userId, walletAddress, accessToken } = req.body;
+  logger.info(`Wallet connected for user ${userId}: ${walletAddress}`);
+  await bot.telegram.sendMessage(userId, `✅ Wallet connected: \`${walletAddress}\`. Approving and depositing...`, { parse_mode: 'Markdown' });
+  res.status(200).send('OK');
+});
+
+app.get('/api/session', async (req, res) => {
+  const { userId } = req.query;
+  const sessionSnapshot = await db.collection('sessions')
+    .where('userId', '==', userId)
+    .where('status', '==', 'pending')
+    .orderBy('createdAt', 'desc')
+    .limit(1)
+    .get();
+
+  if (sessionSnapshot.empty) {
+    return res.status(404).json({ error: 'No pending session found' });
+  }
+
+  const session = sessionSnapshot.docs[0].data();
+  res.json({
+    amount: session.amountInWei,
+    token: session.token,
+    blockradarWallet: session.walletAddress
+  });
+});
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 
