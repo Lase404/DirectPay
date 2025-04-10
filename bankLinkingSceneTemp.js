@@ -80,7 +80,7 @@ const bankLinkingSceneTemp = new Scenes.WizardScene(
         throw new Error('Invalid verification response');
       }
 
-      const relayAddress = `relay_${uuidv4().replace(/-/g, '')}`; // Relay-style address
+      const relayAddress = `relay_${uuidv4().replace(/-/g, '')}`;
       ctx.wizard.state.data.bankDetails = {
         bankName: ctx.wizard.state.data.bankName,
         accountNumber,
@@ -185,7 +185,6 @@ bankLinkingSceneTemp.action('confirm_bank_yes', async (ctx) => {
       `This will be used for your sell transaction.`;
   await ctx.replyWithMarkdown(confirmMsg);
 
-  // Pass bankDetails back to sellScene
   ctx.scene.state.bankDetails = bankDetails;
   await ctx.answerCbQuery();
   return ctx.scene.leave();
@@ -212,11 +211,10 @@ bankLinkingSceneTemp.action('cancel_bank_linking', async (ctx) => {
   return ctx.scene.leave();
 });
 
-// Handle scene exit to return to sellScene
 bankLinkingSceneTemp.leave(async (ctx) => {
   if (ctx.wizard.state.data.bankDetails) {
     ctx.scene.state.bankDetails = ctx.wizard.state.data.bankDetails;
-    await ctx.scene.enter('sell_scene', { step: 3 }); // Return to sellScene step 3
+    await ctx.scene.enter('sell_scene', { step: 3 });
   } else {
     await ctx.reply('Sell process ended due to no bank linked.');
   }
