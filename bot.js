@@ -110,7 +110,7 @@ const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 const sellScene = './sellScene';
 
 bot.use(session());
-bot.use(stage.middleware());
+
 
 sellSceneModule(bot, db);
 
@@ -1055,6 +1055,7 @@ const stage = new Scenes.Stage([
   bankLinkingSceneTemp,
   sellScene
 ]);
+bot.use(stage.middleware());
 
 // =================== Apply Telegraf Webhook Middleware ===================
 if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
