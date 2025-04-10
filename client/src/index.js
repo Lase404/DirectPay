@@ -1,11 +1,11 @@
 import React from 'react';
-import ReactDOM from 'react-dom';
-import { BrowserRouter } from 'react-router-dom';
-import ConnectWalletApp from './ConnectWallet';
+import ReactDOM from 'react-dom/client';
+import { PrivyProvider } from '@privy-io/react-auth';
+import ConnectWalletApp from './ConnectWalletApp';
 
-ReactDOM.render(
-  <BrowserRouter>
+const root = ReactDOM.createRoot(document.getElementById('root'));
+root.render(
+  <PrivyProvider appId={process.env.PRIVY_APP_ID}>
     <ConnectWalletApp />
-  </BrowserRouter>,
-  document.getElementById('root')
+  </PrivyProvider>
 );
