@@ -4,12 +4,13 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 import { useSearchParams } from 'react-router-dom';
 
+// Main app component with PrivyProvider
 function ConnectWalletApp() {
   return (
     <PrivyProvider
-      appId={process.env.PRIVY_APP_ID} // Set this in your .env
+      appId={process.env.PRIVY_APP_ID} // Ensure this is in your .env
       config={{
-        loginMethods: ['wallet', 'email', 'sms'],
+        loginMethods: ['wallet'], // Focus on wallet login
         appearance: {
           theme: 'light',
           accentColor: '#5288F0',
