@@ -108,10 +108,7 @@ const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
 const sellScene = './sellScene';
-const stage = new Scenes.Stage([
-  bankLinkingSceneTemp,
-  sellScene
-]);
+
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -1054,6 +1051,10 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
+const stage = new Scenes.Stage([
+  bankLinkingSceneTemp,
+  sellScene
+]);
 
 // =================== Apply Telegraf Webhook Middleware ===================
 if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
