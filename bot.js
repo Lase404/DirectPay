@@ -110,7 +110,7 @@ const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
 bot.use(session());
 bot.use(stage.middleware());
-const sellSceneModule = require('./sellScene');
+const sellScene = './sellScene';
 sellSceneModule(bot, db);
 
 // =================== Define Supported Banks ===================
