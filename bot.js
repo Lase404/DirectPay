@@ -107,7 +107,7 @@ const ERROR_IMAGE = './error.png';
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
-const stage = new Scenes.Stage();
+const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
 bot.use(session());
 bot.use(stage.middleware());
 const sellSceneModule = require('./sellScene');
