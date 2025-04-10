@@ -107,7 +107,7 @@ const ERROR_IMAGE = './error.png';
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
-const sellScene = './sellScene';
+
 
 bot.use(session());
 
@@ -1048,10 +1048,19 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
+// Import sellScene
+const sellSceneModule = require('./sellScene');
+const sellScene = sellSceneModule.sellScene;
+
+// Register all scenes
 const stage = new Scenes.Stage([
+  bankLinkingScene,
+  sendMessageScene,
+  receiptGenerationScene,
   bankLinkingSceneTemp,
   sellScene
 ]);
+
 bot.use(stage.middleware());
 
 // =================== Apply Telegraf Webhook Middleware ===================
