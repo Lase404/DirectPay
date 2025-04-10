@@ -24,7 +24,7 @@ function ConnectWalletApp() {
       const walletAddress = wallet.address;
 
       // Notify backend of wallet connection
-      await axios.post(`${process.env.REACT_APP_WEBAPP_URL}/webhook/wallet-connected`, {
+      await axios.post(`${process.env.WEBAPP_URL}/webhook/wallet-connected`, {
         userId,
         walletAddress,
       });
