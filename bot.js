@@ -24,7 +24,6 @@ const relayClient = createClient({
 });
 require('dotenv').config();
 
-
 ///////////////
 
 
@@ -108,12 +107,11 @@ const ERROR_IMAGE = './error.png';
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
-
+const stage = new Scenes.Stage();
 bot.use(session());
-const sellScene = require('./sellScene');
-const bankLinkingSceneTemp = require('./bankLinkingSceneTemp');
-const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
 bot.use(stage.middleware());
+const sellSceneModule = require('./sellScene');
+sellSceneModule(bot, db);
 
 // =================== Define Supported Banks ===================
 const bankList = [
@@ -984,7 +982,17 @@ async function fetchExchangeRates() {
 fetchExchangeRates();
 setInterval(fetchExchangeRates, 300000); // 5 minutes
 
-
+app.post('/webhook/deposit-signed', async (req, res) => {
+  const { userId, txHash } = req.body;
+  await db.collection('transactions').doc(txHash).set({
+    userId,
+    txHash,
+    status: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  await bot.telegram.sendMessage(userId, `Deposit confirmed: ${txHash}. Processing...`);
+  res.sendStatus(200);
+});
 
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
@@ -1764,8 +1772,6 @@ bot.hears('📈 View Current Rates', async (ctx) => {
     : '\nThese rates apply to your deposits and payouts.';
   await ctx.replyWithMarkdown(ratesMessage);
 });
-// Define commands
-bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
 
 // =================== Settings Handler ===================
 bot.action('settings_set_refund_address', async (ctx) => {
@@ -3230,7 +3236,6 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     });
   }
 });
-
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 
