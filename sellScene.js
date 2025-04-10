@@ -3,8 +3,8 @@ const axios = require('axios');
 const { createClient } = require('@reservoir0x/relay-sdk');
 const { v4: uuidv4 } = require('uuid');
 
-// Relay SDK setup
-const relayClient = createClient({ adapters: [] }); // Add adapters if needed (e.g., solanaAdapter)
+// Relay SDK setup (assuming this is globally configured elsewhere or passed in)
+const relayClient = createClient({ adapters: [] }); // Add adapters if needed
 
 // Supported networks mapping
 const networkMap = {
@@ -14,6 +14,9 @@ const networkMap = {
   polygon: 137,  // Polygon
   bnb: 56        // BNB Smart Chain
 };
+
+// Placeholder for getUserState and db (to be passed from bot.js)
+let db, logger, getUserState;
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
@@ -137,11 +140,11 @@ const sellScene = new Scenes.WizardScene(
     }
 
     const { userId, amount, asset, chainId, token, amountInWei } = ctx.wizard.state.data;
-    const bankDetails = ctx.wizard.state.data.bankDetails; // Set from linkedBank or bankLinkingSceneTemp
+    const bankDetails = ctx.wizard.state.data.bankDetails;
 
     // Fetch Relay quote
     const quote = await relayClient.actions.getQuote({
-      chainId, // Origin chain
+      chainId,
       toChainId: 8453, // Base as destination
       amount: amountInWei,
       currency: token.address,
@@ -210,8 +213,13 @@ sellScene.on('enter', async (ctx) => {
   }
 });
 
-module.exports = (bot, db) => {
-  const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
-  bot.use(stage.middleware());
-  bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
+// Export the scene and a setup function
+module.exports = {
+  sellScene,
+  setup: (botInstance, dbInstance, loggerInstance, getUserStateFn) => {
+    db = dbInstance;
+    logger = loggerInstance;
+    getUserState = getUserStateFn;
+    botInstance.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
+  }
 };
