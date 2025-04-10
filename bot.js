@@ -3405,6 +3405,11 @@ app.get('/api/session', async (req, res) => {
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 
 
+// Catch-all for client-side routing
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client/build', 'index.html'));
+});
+
 // =================== Server Startup ===================
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
