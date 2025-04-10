@@ -5,13 +5,14 @@ import axios from 'axios';
 import { ethers } from 'ethers';
 
 function ConnectWalletApp() {
-  const [searchParams] = new URLSearchParams(window.location.search);
+  // Get query params directly from window.location.search
+  const [searchParams] = [new URLSearchParams(window.location.search)];
   const userId = searchParams.get('userId');
-  const session = searchParams.get('session'); // Optional
+  const session = searchParams.get('session');
 
   return (
     <PrivyProvider
-      appId={process.env.REACT_APP_PRIVY_APP_ID} // In .env
+      appId={process.env.PRIVY_APP_ID} // In .env
       config={{
         loginMethods: ['wallet'],
         appearance: {
