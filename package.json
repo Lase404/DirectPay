@@ -9,7 +9,8 @@
     "dev": "nodemon bot.js",
     "test": "echo \"Error: no test specified\" && exit 1",
     "lint": "eslint .",
-    "deploy": "node bot.js"
+    "deploy": "node bot.js",
+    "build-client": "cd client && npm install && npm run build"
   },
   "keywords": [
     "telegram",
