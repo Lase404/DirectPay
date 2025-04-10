@@ -66,6 +66,7 @@ const sellScene = new Scenes.WizardScene(
     const userRef = db.collection('users').doc(userId);
     const userDoc = await userRef.get();
 
+    // Validate token with Relay
     const currencyRes = await axios.post('https://api.relay.link/currencies/v1', {
       defaultList: true,
       chainIds: [chainId],
@@ -136,10 +137,11 @@ const sellScene = new Scenes.WizardScene(
     }
 
     const { userId, amount, asset, chainId, token, amountInWei } = ctx.wizard.state.data;
-    const bankDetails = ctx.wizard.state.data.bankDetails;
+    const bankDetails = ctx.wizard.state.data.bankDetails; // Set from linkedBank or bankLinkingSceneTemp
 
+    // Fetch Relay quote
     const quote = await relayClient.actions.getQuote({
-      chainId,
+      chainId, // Origin chain
       toChainId: 8453, // Base as destination
       amount: amountInWei,
       currency: token.address,
@@ -163,6 +165,7 @@ const sellScene = new Scenes.WizardScene(
       }
     });
 
+    // Store session data for frontend
     const referenceId = `SELL-${uuidv4().replace(/-/g, '')}`;
     await db.collection('sessions').doc(referenceId).set({
       userId,
@@ -199,6 +202,7 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
+// Handle bank linking scene exit
 sellScene.on('enter', async (ctx) => {
   if (ctx.scene.state.bankDetails) {
     ctx.wizard.state.data.bankDetails = ctx.scene.state.bankDetails;
@@ -206,4 +210,8 @@ sellScene.on('enter', async (ctx) => {
   }
 });
 
-module.exports = sellScene;
+module.exports = (bot, db) => {
+  const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
+  bot.use(stage.middleware());
+  bot.command('sell', (ctx) => ctx.scene.enter('sell_scene'));
+};
