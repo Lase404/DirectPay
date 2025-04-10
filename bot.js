@@ -109,9 +109,6 @@ const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
 const sellScene = './sellScene';
 const stage = new Scenes.Stage([
-  bankLinkingScene,
-  sendMessageScene,
-  receiptGenerationScene,
   bankLinkingSceneTemp,
   sellScene
 ]);
