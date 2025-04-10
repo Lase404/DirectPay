@@ -111,9 +111,6 @@ const sellScene = './sellScene';
 
 bot.use(session());
 
-
-sellSceneModule(bot, db);
-
 // =================== Define Supported Banks ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ACCESSNGLA' },
