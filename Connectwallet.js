@@ -6,7 +6,7 @@ import { useSearchParams } from 'react-router-dom';
 
 function ConnectWalletApp() {
   return (
-    <PrivyProvider appId={process.env.REACT_APP_PRIVY_APP_ID}>
+    <PrivyProvider appId={process.env.PRIVY_APP_ID}>
       <ConnectWallet />
     </PrivyProvider>
   );
