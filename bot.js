@@ -108,7 +108,13 @@ const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
 const sellScene = './sellScene';
-const stage = new Scenes.Stage([sellScene, bankLinkingSceneTemp]);
+const stage = new Scenes.Stage([
+  bankLinkingScene,
+  sendMessageScene,
+  receiptGenerationScene,
+  bankLinkingSceneTemp,
+  sellScene
+]);
 bot.use(session());
 bot.use(stage.middleware());
 
@@ -433,6 +439,132 @@ function findClosestBank(input, bankList) {
 //////////////////////////////////////////////////////
 
 // =================== Define Scenes ===================
+const bankLinkingSceneTemp = new Scenes.WizardScene(
+  'bank_linking_scene_temp',
+  async (ctx) => {
+    const userId = ctx.from.id.toString();
+    const userState = await getUserState(userId);
+    const prompt = userState.usePidgin
+      ? '🏦 Enter your bank name for this sell (e.g., GTBank, Access):'
+      : '🏦 Please enter your bank name for this sell (e.g., GTBank, Access):';
+    await ctx.replyWithMarkdown(prompt);
+    ctx.wizard.state.data = { userId };
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const bankNameInput = ctx.message.text.trim();
+    const userState = await getUserState(ctx.wizard.state.data.userId);
+    const { bank, distance } = findClosestBank(bankNameInput, bankList);
+
+    if (!bank || distance > 3) {
+      const errorMsg = userState.usePidgin
+        ? `❌ Bank no match o. Check am or try:\n\n${bankList.map(b => `• ${b.name}`).join('\n')}`
+        : `❌ No matching bank found. Check your input or try:\n\n${bankList.map(b => `• ${b.name}`).join('\n')}`;
+      await ctx.replyWithMarkdown(errorMsg);
+      return;
+    }
+
+    ctx.wizard.state.data.bankName = bank.name;
+    ctx.wizard.state.data.bankCode = bank.code; // Store bank code for Paystack verification
+    const prompt = userState.usePidgin
+      ? '🔢 Enter your 10-digit account number:'
+      : '🔢 Please enter your 10-digit account number:';
+    await ctx.replyWithMarkdown(prompt);
+    return ctx.wizard.next();
+  },
+  async (ctx) => {
+    const accountNumber = ctx.message.text.trim();
+    const userState = await getUserState(ctx.wizard.state.data.userId);
+
+    if (!/^\d{10}$/.test(accountNumber)) {
+      const errorMsg = userState.usePidgin
+        ? '❌ Number no correct o. Must be 10 digits:'
+        : '❌ Invalid account number. Must be 10 digits:';
+      await ctx.replyWithMarkdown(errorMsg);
+      return;
+    }
+
+    ctx.wizard.state.data.accountNumber = accountNumber;
+
+    const verifyingMsg = userState.usePidgin
+      ? '🔄 Checking your bank details with Paystack...'
+      : '🔄 Verifying your bank details with Paystack...';
+    await ctx.replyWithMarkdown(verifyingMsg);
+
+    try {
+      // Use Paystack verification
+      const verificationResult = await verifyBankAccount(accountNumber, ctx.wizard.state.data.bankCode);
+
+      if (!verificationResult || !verificationResult.data || !verificationResult.data.account_name) {
+        throw new Error('Invalid verification response from Paystack.');
+      }
+
+      const accountName = verificationResult.data.account_name;
+      ctx.wizard.state.data.accountName = accountName;
+
+      const relayAddress = `relay_${uuidv4().replace(/-/g, '')}`;
+      ctx.wizard.state.data.bankDetails = {
+        bankName: ctx.wizard.state.data.bankName,
+        bankCode: ctx.wizard.state.data.bankCode,
+        accountNumber,
+        accountName,
+        relayAddress
+      };
+
+      const confirmMsg = userState.usePidgin
+        ? `🏦 *Bank Details*\n` +
+          `- *Bank:* ${ctx.wizard.state.data.bankName}\n` +
+          `- *Number:* \`${accountNumber}\`\n` +
+          `- *Name:* ${accountName}\n\n` +
+          `E correct?`
+        : `🏦 *Bank Details*\n` +
+          `- *Bank:* ${ctx.wizard.state.data.bankName}\n` +
+          `- *Account Number:* \`${accountNumber}\`\n` +
+          `- *Account Name:* ${accountName}\n\n` +
+          `Is this correct?`;
+      await ctx.replyWithMarkdown(confirmMsg, Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes', 'confirm_bank_temp')],
+        [Markup.button.callback('❌ No', 'retry_bank_temp')]
+      ]));
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Paystack verification failed for user ${userId}: ${error.message}`);
+      const errorMsg = userState.usePidgin
+        ? '❌ E no work o. Check your details or try again.'
+        : '❌ Verification failed. Check your details and try again.';
+      await ctx.replyWithMarkdown(errorMsg);
+      return;
+    }
+  },
+  async (ctx) => {
+    const callbackData = ctx.callbackQuery?.data;
+    const userState = await getUserState(ctx.wizard.state.data.userId);
+
+    if (!callbackData) return;
+
+    if (callbackData === 'retry_bank_temp') {
+      const prompt = userState.usePidgin
+        ? '🏦 Enter bank name again:'
+        : '🏦 Enter your bank name again:';
+      await ctx.replyWithMarkdown(prompt);
+      return ctx.wizard.selectStep(1);
+    } else if (callbackData === 'confirm_bank_temp') {
+      ctx.scene.state.bankDetails = ctx.wizard.state.data.bankDetails;
+      const successMsg = userState.usePidgin
+        ? `✅ Bank linked for this sell:\n` +
+          `- *Bank:* ${ctx.wizard.state.data.bankDetails.bankName}\n` +
+          `- *Number:* ${ctx.wizard.state.data.bankDetails.accountNumber}\n` +
+          `- *Name:* ${ctx.wizard.state.data.bankDetails.accountName}`
+        : `✅ Bank linked for this sell:\n` +
+          `- *Bank:* ${ctx.wizard.state.data.bankDetails.bankName}\n` +
+          `- *Account Number:* ${ctx.wizard.state.data.bankDetails.accountNumber}\n` +
+          `- *Account Name:* ${ctx.wizard.state.data.bankDetails.accountName}`;
+      await ctx.replyWithMarkdown(successMsg);
+      await ctx.answerCbQuery();
+      return ctx.scene.leave();
+    }
+  }
+);
 const bankLinkingScene = new Scenes.WizardScene(
   'bank_linking_scene',
   async (ctx) => {
