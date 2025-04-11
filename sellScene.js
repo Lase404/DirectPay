@@ -1,10 +1,10 @@
 const { Scenes, Markup } = require('telegraf');
 const axios = require('axios');
 const admin = require('firebase-admin');
-const { ethers } = require('ethers'); // NEW: Added for precise amount conversions
+const { ethers } = require('ethers');
 const winston = require('winston');
 
-// Initialize Firebase (assuming bot.js sets this up globally)
+// Initialize Firebase
 const db = admin.firestore();
 
 // Logger setup
@@ -62,8 +62,14 @@ const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // Step 1: Validate /sell input and token
   async (ctx) => {
+    // CHANGED: Safely access userId
+    if (!ctx.from || !ctx.from.id) {
+      logger.error(`ctx.from is undefined in step 1: ${JSON.stringify(ctx)}`);
+      await ctx.reply('Error: Unable to identify user. Please try again.');
+      return ctx.scene.leave();
+    }
     const userId = ctx.from.id.toString();
-    const command = ctx.message.text.trim(); // CHANGED: Normalize input
+    const command = ctx.message?.text?.trim() || '';
     logger.info(`User ${userId} entered sell_scene with: ${command}`);
 
     if (!command.startsWith('/sell ')) {
@@ -71,7 +77,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    const args = command.slice(6).split(/\s+/).filter(Boolean); // CHANGED: Robust arg parsing
+    const args = command.slice(6).split(/\s+/).filter(Boolean);
     if (args.length !== 3) {
       const userState = await getUserState(userId);
       const usage = userState.usePidgin
@@ -114,7 +120,6 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // CHANGED: Validate API response
     if (!currencyRes.data?.[0]?.length || currencyRes.data[0][0].chainId !== chainId || !currencyRes.data[0][0].decimals) {
       const error = userState.usePidgin
         ? `❌ ${caOrTerm} no dey for ${network}. Check am well o.`
@@ -127,7 +132,6 @@ const sellScene = new Scenes.WizardScene(
     const decimals = currencyData.decimals;
     let amountInWei;
     try {
-      // CHANGED: Use ethers.js for precise conversion
       amountInWei = ethers.utils.parseUnits(amount.toString(), decimals).toString();
     } catch (error) {
       logger.error(`Amount conversion failed for ${userId}: ${error.message}`);
@@ -151,7 +155,6 @@ const sellScene = new Scenes.WizardScene(
       ? `You wan sell ${amount} ${currencyData.symbol} on ${network}?\n*Click* "Yes" to go ahead or "No" to stop.`
       : `Sell ${amount} ${currencyData.symbol} on ${network}?\n*Click* "Yes" to confirm or "No" to cancel.`;
     try {
-      // CHANGED: Remove keyboard to discourage typing
       await ctx.replyWithMarkdown(confirm, {
         ...Markup.inlineKeyboard([
           Markup.button.callback('✅ Yes', 'yes'),
@@ -169,28 +172,30 @@ const sellScene = new Scenes.WizardScene(
   },
   // Step 2: Bank Selection
   async (ctx) => {
+    if (!ctx.from || !ctx.from.id) {
+      logger.error(`ctx.from is undefined in step 2: ${JSON.stringify(ctx)}`);
+      await ctx.reply('Error: Unable to identify user. Please try again.');
+      return ctx.scene.leave();
+    }
     const userId = ctx.from.id.toString();
     logger.info(`User ${userId} at step 2, wizard state: ${JSON.stringify(ctx.wizard.state)}`);
     logger.info(`Current wizard step: ${ctx.wizard.cursor}`);
 
-    // CHANGED: Validate wizard state
     if (!ctx.wizard.state.userId || !ctx.wizard.state.amount || !ctx.wizard.state.ca) {
       logger.error(`Invalid wizard state for user ${userId}: ${JSON.stringify(ctx.wizard.state)}`);
       await ctx.reply('Session expired or invalid. Please start over with /sell.');
       return ctx.scene.leave();
     }
 
-    // CHANGED: Handle typed inputs (e.g., "yes")
     if (!ctx.callbackQuery && ctx.message?.text) {
       const userState = await getUserState(userId);
       const msg = userState.usePidgin
         ? 'Oga, *click* di "Yes" or "No" button wey I send o!'
         : 'Please *click* the "Yes" or "No" button I sent!';
       await ctx.replyWithMarkdown(msg, Markup.removeKeyboard());
-      return; // Stay in step 2
+      return;
     }
 
-    // Expect callback query
     if (!ctx.callbackQuery) {
       logger.warn(`No callbackQuery for user ${userId} in step 2`);
       await ctx.reply('Please confirm or cancel the token selection.');
@@ -245,11 +250,15 @@ const sellScene = new Scenes.WizardScene(
   },
   // Step 3: Wallet Connection
   async (ctx) => {
+    if (!ctx.from || !ctx.from.id) {
+      logger.error(`ctx.from is undefined in step 3: ${JSON.stringify(ctx)}`);
+      await ctx.reply('Error: Unable to identify user. Please try again.');
+      return ctx.scene.leave();
+    }
     const userId = ctx.from.id.toString();
     logger.info(`User ${userId} at step 3, wizard state: ${JSON.stringify(ctx.wizard.state)}`);
     logger.info(`Current wizard step: ${ctx.wizard.cursor}`);
 
-    // CHANGED: Validate wizard state
     if (!ctx.wizard.state.userId || !ctx.wizard.state.amount || !ctx.wizard.state.ca) {
       logger.error(`Invalid wizard state for user ${userId}: ${JSON.stringify(ctx.wizard.state)}`);
       await ctx.reply('Session expired or invalid. Please start over with /sell.');
@@ -309,7 +318,7 @@ const sellScene = new Scenes.WizardScene(
         decimals: ctx.wizard.state.decimals,
         network: ctx.wizard.state.network,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        expiresAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 3600000)), // CHANGED: Add 1-hour TTL
+        expiresAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 3600000)),
       });
       logger.info(`Session saved for user ${userId}: ${sessionId}`);
     } catch (error) {
@@ -339,81 +348,100 @@ const sellScene = new Scenes.WizardScene(
 
 // Handle return from bank linking
 sellScene.enter(async (ctx) => {
-  if (ctx.scene.state.sellData && ctx.scene.state.bankDetails) {
+  try {
+    // CHANGED: Safely access userId and log context
+    logger.info(`Entering sell_scene, ctx.from: ${JSON.stringify(ctx.from)}, scene state: ${JSON.stringify(ctx.scene.state)}`);
+    if (!ctx.from || !ctx.from.id) {
+      logger.error(`ctx.from is undefined in sellScene.enter: ${JSON.stringify(ctx)}`);
+      await ctx.reply('Error: Unable to identify user. Please try again.');
+      return ctx.scene.leave();
+    }
     const userId = ctx.from.id.toString();
-    logger.info(`User ${userId} returned from bank linking`);
 
-    ctx.wizard.state = { ...ctx.scene.state.sellData, bankDetails: ctx.scene.state.bankDetails };
-    logger.info(`Restored wizard state for user ${userId}: ${JSON.stringify(ctx.wizard.state)}`);
+    if (ctx.scene.state.sellData && ctx.scene.state.bankDetails) {
+      logger.info(`User ${userId} returned from bank linking`);
 
-    const sessionId = `${userId}-${Date.now()}`;
-    let blockradarAddress;
-    try {
-      blockradarAddress = await generateBlockradarAddress();
-      if (!blockradarAddress || blockradarAddress === '0xFallbackBlockradarAddress') {
-        throw new Error('Invalid Blockradar address');
+      ctx.wizard.state = { ...ctx.scene.state.sellData, bankDetails: ctx.scene.state.bankDetails };
+      logger.info(`Restored wizard state for user ${userId}: ${JSON.stringify(ctx.wizard.state)}`);
+
+      const sessionId = `${userId}-${Date.now()}`;
+      let blockradarAddress;
+      try {
+        blockradarAddress = await generateBlockradarAddress();
+        if (!blockradarAddress || blockradarAddress === '0xFallbackBlockradarAddress') {
+          throw new Error('Invalid Blockradar address');
+        }
+      } catch (error) {
+        logger.error(`Failed to generate Blockradar address for ${userId}: ${error.message}`);
+        await ctx.reply('Error generating wallet address. Please try again.');
+        return ctx.scene.leave();
       }
-    } catch (error) {
-      logger.error(`Failed to generate Blockradar address for ${userId}: ${error.message}`);
-      await ctx.reply('Error generating wallet address. Please try again.');
-      return ctx.scene.leave();
-    }
-    ctx.wizard.state.blockradarAddress = blockradarAddress;
+      ctx.wizard.state.blockradarAddress = blockradarAddress;
 
-    try {
-      await db.collection('sessions').doc(sessionId).set({
-        userId,
-        amount: ctx.wizard.state.amount,
-        amountInWei: ctx.wizard.state.amountInWei,
-        tokenAddress: ctx.wizard.state.originCurrency,
-        chainId: ctx.wizard.state.chainId,
-        bankDetails: ctx.wizard.state.bankDetails,
-        blockradarAddress,
-        status: 'pending',
-        symbol: ctx.wizard.state.ca,
-        decimals: ctx.wizard.state.decimals,
-        network: ctx.wizard.state.network,
-        createdAt: admin.firestore.FieldValue.serverTimestamp(),
-        expiresAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 3600000)), // CHANGED: Add TTL
-      });
-      logger.info(`Session saved after bank linking for user ${userId}: ${sessionId}`);
-    } catch (error) {
-      logger.error(`Failed to save session after bank linking for user ${userId}: ${error.message}`);
-      await ctx.reply('Error saving session. Try again.');
-      return ctx.scene.leave();
-    }
+      try {
+        await db.collection('sessions').doc(sessionId).set({
+          userId,
+          amount: ctx.wizard.state.amount,
+          amountInWei: ctx.wizard.state.amountInWei,
+          tokenAddress: ctx.wizard.state.originCurrency,
+          chainId: ctx.wizard.state.chainId,
+          bankDetails: ctx.wizard.state.bankDetails,
+          blockradarAddress,
+          status: 'pending',
+          symbol: ctx.wizard.state.ca,
+          decimals: ctx.wizard.state.decimals,
+          network: ctx.wizard.state.network,
+          createdAt: admin.firestore.FieldValue.serverTimestamp(),
+          expiresAt: admin.firestore.Timestamp.fromDate(new Date(Date.now() + 3600000)),
+        });
+        logger.info(`Session saved after bank linking for user ${userId}: ${sessionId}`);
+      } catch (error) {
+        logger.error(`Failed to save session after bank linking for user ${userId}: ${error.message}`);
+        await ctx.reply('Error saving session. Try again.');
+        return ctx.scene.leave();
+      }
 
-    const userState = await getUserState(userId);
-    const msg = userState.usePidgin
-      ? 'Step 3/3: *Click* di button to connect your wallet o.'
-      : 'Step 3/3: *Click* the button to connect your wallet.';
-    try {
-      await ctx.reply(msg, Markup.inlineKeyboard([
-        [Markup.button.url('Connect Wallet', `${process.env.WEBAPP_URL}/connect?userId=${userId}&session=${sessionId}`)],
-        [Markup.button.callback('❌ Cancel', 'cancel_sell')],
-      ]));
-      logger.info(`User ${userId} prompted to connect wallet after bank linking, session: ${sessionId}`);
-      return ctx.scene.leave();
-    } catch (error) {
-      logger.error(`Failed to prompt wallet connect after bank linking for user ${userId}: ${error.message}`);
-      await ctx.reply('Error connecting wallet. Try again.');
+      const userState = await getUserState(userId);
+      const msg = userState.usePidgin
+        ? 'Step 3/3: *Click* di button to connect your wallet o.'
+        : 'Step 3/3: *Click* the button to connect your wallet.';
+      try {
+        await ctx.reply(msg, Markup.inlineKeyboard([
+          [Markup.button.url('Connect Wallet', `${process.env.WEBAPP_URL}/connect?userId=${userId}&session=${sessionId}`)],
+          [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+        ]));
+        logger.info(`User ${userId} prompted to connect wallet after bank linking, session: ${sessionId}`);
+        return ctx.scene.leave();
+      } catch (error) {
+        logger.error(`Failed to prompt wallet connect after bank linking for user ${userId}: ${error.message}`);
+        await ctx.reply('Error connecting wallet. Try again.');
+        return ctx.scene.leave();
+      }
+    } else {
+      logger.warn(`Invalid scene state for user ${userId}: ${JSON.stringify(ctx.scene.state)}`);
+      await ctx.reply('Invalid session. Please start over with /sell.');
       return ctx.scene.leave();
     }
-  } else {
-    logger.warn(`Invalid scene state for user ${userId}: ${JSON.stringify(ctx.scene.state)}`);
-    await ctx.reply('Invalid session. Please start over with /sell.');
+  } catch (error) {
+    // CHANGED: Catch all errors in enter handler
+    logger.error(`Error entering sell_scene: ${error.message}`);
+    await ctx.reply('Error entering sell process. Please try again.');
     return ctx.scene.leave();
   }
 });
 
 // Action Handlers
 sellScene.action('yes', async (ctx) => {
+  if (!ctx.from || !ctx.from.id) {
+    logger.error(`ctx.from is undefined in yes action: ${JSON.stringify(ctx)}`);
+    await ctx.reply('Error: Unable to identify user. Please try again.');
+    return ctx.scene.leave();
+  }
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} confirmed token`);
   try {
     await ctx.answerCbQuery();
     logger.info(`User ${userId} confirmed, proceeding to bank selection`);
-    // CHANGED: Removed ctx.wizard.next() to avoid double advancement
   } catch (error) {
     logger.error(`Error in yes action for user ${userId}: ${error.message}`);
     await ctx.reply('Error confirming token. Try again.');
@@ -422,6 +450,11 @@ sellScene.action('yes', async (ctx) => {
 });
 
 sellScene.action('no', async (ctx) => {
+  if (!ctx.from || !ctx.from.id) {
+    logger.error(`ctx.from is undefined in no action: ${JSON.stringify(ctx)}`);
+    await ctx.reply('Error: Unable to identify user. Please try again.');
+    return ctx.scene.leave();
+  }
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} cancelled sell`);
   await ctx.reply('Sell cancelled.');
@@ -430,6 +463,11 @@ sellScene.action('no', async (ctx) => {
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
+  if (!ctx.from || !ctx.from.id) {
+    logger.error(`ctx.from is undefined in cancel_sell action: ${JSON.stringify(ctx)}`);
+    await ctx.reply('Error: Unable to identify user. Please try again.');
+    return ctx.scene.leave();
+  }
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} cancelled sell`);
   await ctx.reply('Sell cancelled.');
@@ -438,6 +476,11 @@ sellScene.action('cancel_sell', async (ctx) => {
 });
 
 sellScene.action('use_bank', async (ctx) => {
+  if (!ctx.from || !ctx.from.id) {
+    logger.error(`ctx.from is undefined in use_bank action: ${JSON.stringify(ctx)}`);
+    await ctx.reply('Error: Unable to identify user. Please try again.');
+    return ctx.scene.leave();
+  }
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} selected existing bank`);
   await ctx.answerCbQuery();
@@ -445,13 +488,18 @@ sellScene.action('use_bank', async (ctx) => {
 });
 
 sellScene.action('new_bank', async (ctx) => {
+  if (!ctx.from || !ctx.from.id) {
+    logger.error(`ctx.from is undefined in new_bank action: ${JSON.stringify(ctx)}`);
+    await ctx.reply('Error: Unable to identify user. Please try again.');
+    return ctx.scene.leave();
+  }
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} chose new bank`);
   await ctx.answerCbQuery();
   return ctx.scene.enter('bank_linking_scene_temp', { sellData: ctx.wizard.state });
 });
 
-// Simplified Blockradar wallet generation (unchanged, but added validation)
+// Simplified Blockradar wallet generation (unchanged)
 async function generateBlockradarAddress() {
   try {
     const response = await axios.post(
@@ -467,7 +515,7 @@ async function generateBlockradarAddress() {
     return address;
   } catch (error) {
     logger.error(`Failed to generate Blockradar address: ${error.message}`);
-    return '0xFallbackBlockradarAddress'; // Note: Handled in calling code
+    return '0xFallbackBlockradarAddress';
   }
 }
 
