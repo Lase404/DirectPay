@@ -5,7 +5,7 @@ const admin = require('firebase-admin');
 // Firebase Firestore (from bot.js)
 const db = admin.firestore();
 
-// Logger (from bot.js)
+// Logger (from bot.js, corrected with 'new' for transports)
 const logger = require('winston').createLogger({
   level: 'info',
   format: require('winston').format.combine(
@@ -13,8 +13,8 @@ const logger = require('winston').createLogger({
     require('winston').format.printf(({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`)
   ),
   transports: [
-    new require('winston').transports.Console(),
-    new require('winston').transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 }),
+    new (require('winston').transports.Console)(), // Fixed: Added 'new'
+    new (require('winston').transports.File)({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 }) // Fixed: Added 'new'
   ],
 });
 
@@ -31,7 +31,7 @@ async function getUserState(userId) {
         awaitingBroadcastMessage: false,
         usePidgin: false,
         refundAddress: null,
-        bankDetails: null, // Added to match expected structure
+        bankDetails: null,
       };
       await db.collection('users').doc(userId).set(defaultState);
       logger.info(`Initialized default user state for ${userId}`);
@@ -46,7 +46,7 @@ async function getUserState(userId) {
       awaitingBroadcastMessage: data.awaitingBroadcastMessage || false,
       usePidgin: data.usePidgin || false,
       refundAddress: data.refundAddress || null,
-      bankDetails: data.bankDetails || null, // Ensure bankDetails is included
+      bankDetails: data.bankDetails || null,
     };
   } catch (error) {
     logger.error(`Error fetching user state for ${userId}: ${error.message}`);
@@ -113,7 +113,7 @@ const sellScene = new Scenes.WizardScene(
       const token = currencies[0];
       ctx.wizard.state.data = {
         userId: ctx.from.id.toString(),
-        amount: (amount * 10 ** token.decimals).toString(), // Convert to wei/gwei based on decimals
+        amount: (amount * 10 ** token.decimals).toString(),
         asset: token.address,
         chainId,
         networkName: network.charAt(0).toUpperCase() + network.slice(1).toLowerCase(),
@@ -304,5 +304,6 @@ async function generateBlockradarAddress(bankDetails) {
 module.exports = {
   sellScene,
   setup: (bot, dbInstance, loggerInstance, getUserStateFunc) => {
+    // No additional handlers needed; all are within the scene or reused from bot.js
   },
 };
