@@ -41,6 +41,18 @@ async function getUserState(userId) {
   }
 }
 
+const networkMap = {
+  'base': 8453,
+  'polygon': 137,
+  'bnb': 56,
+};
+
+const chains = {
+  base: { chainId: 8453, name: 'Base' },
+  polygon: { chainId: 137, name: 'Polygon' },
+  bnb: { chainId: 56, name: 'BNB Chain' },
+};
+
 // Sell Scene
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
@@ -50,80 +62,82 @@ const sellScene = new Scenes.WizardScene(
     logger.info(`User ${userId} entered sell_scene with: ${ctx.message.text}`);
 
     if (!ctx.message.text.startsWith('/sell')) {
-      await ctx.reply('Use: /sell <amount> <contract_address> <network>');
+      await ctx.reply('Use: /sell <amount> <currency or address> <network>');
       return ctx.scene.leave();
     }
 
     const args = ctx.message.text.split(' ').filter(arg => arg.trim() !== '');
     if (args.length !== 4) {
-      await ctx.reply('Invalid format. Use: /sell <amount> <contract_address> <network>\nExample: /sell 10 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 Ethereum');
+      const userState = await getUserState(userId);
+      const usage = userState.usePidgin
+        ? 'Usage: /sell <amount> <currency or address> <network>\nE.g., /sell 10 USDC base or /sell 10 0x833589f... base'
+        : 'Usage: /sell <amount> <currency or address> <network>\nExample: /sell 10 USDC base or /sell 10 0x833589f... base';
+      await ctx.replyWithMarkdown(usage);
       return ctx.scene.leave();
     }
 
-    const [, amountStr, contractAddress, network] = args;
+    const [, amountStr, caOrTerm, network] = args;
     const amount = parseFloat(amountStr);
+    const userState = await getUserState(userId);
 
-    if (isNaN(amount) || amount <= 0) {
-      await ctx.reply('Invalid amount. Please provide a positive number.');
+    if (!amount || isNaN(amount) || amount <= 0) {
+      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Amount no correct. Use number wey big pass 0.' : '❌ Invalid amount. Please use a positive number.');
       return ctx.scene.leave();
     }
 
-    if (!contractAddress.startsWith('0x') || contractAddress.length !== 42) {
-      await ctx.reply('Invalid contract address. It should start with 0x and be 42 characters long.');
+    const chainId = networkMap[network.toLowerCase()];
+    if (!chainId || !Object.values(chains).some(c => c.chainId === chainId)) {
+      const error = userState.usePidgin
+        ? 'Network no dey o. We support: base, polygon, bnb'
+        : 'Invalid network. Supported: base, polygon, bnb';
+      await ctx.replyWithMarkdown(error);
       return ctx.scene.leave();
     }
 
-    const chainIdMap = { 'ethereum': 1, 'base': 8453, 'solana': 101 };
-    const normalizedNetwork = network.toLowerCase();
-    const chainId = chainIdMap[normalizedNetwork];
-    if (!chainId) {
-      await ctx.reply('Supported networks: Ethereum, Base, Solana (case-insensitive).');
-      return ctx.scene.leave();
-    }
+    const isAddress = /^0x[a-fA-F0-9]{40}$/.test(caOrTerm);
+    const payload = isAddress
+      ? { chainIds: [chainId], address: caOrTerm.toLowerCase(), verified: true, limit: 123, includeAllChains: true, useExternalSearch: true, depositAddressOnly: true }
+      : { chainIds: [chainId], term: caOrTerm.toLowerCase(), verified: true, limit: 123, includeAllChains: true, useExternalSearch: true, depositAddressOnly: true };
 
-    let token;
+    let currencyRes;
     try {
-      const response = await axios.post(
-        'https://api.relay.link/currencies/v1',
-        { chainIds: [chainId], address: contractAddress, defaultList: true, verified: true },
-        { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
-      );
-      logger.info(`Relay API response for user ${userId}: ${JSON.stringify(response.data)}`);
-      const currencies = response.data[0];
-      token = currencies && currencies.length > 0 ? currencies[0] : null;
-    } catch (error) {
-      logger.error(`Relay API error for user ${userId}: ${error.message}`);
-      if (contractAddress.toLowerCase() === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' && chainId === 1) {
-        token = { symbol: 'USDC', decimals: 6, name: 'USD Coin', address: contractAddress };
-      } else {
-        await ctx.reply('Failed to validate token. Try again later.');
-        return ctx.scene.leave();
-      }
-    }
-
-    if (!token) {
-      await ctx.reply('Token not supported on this network.');
+      currencyRes = await axios.post('https://api.relay.link/currencies/v1', payload, { timeout: 5000 });
+      logger.info(`Relay API response for user ${userId}: ${JSON.stringify(currencyRes.data)}`);
+    } catch (err) {
+      logger.error(`Relay currency validation failed for ${caOrTerm} on ${network}: ${err.message}`);
+      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Currency or address check fail. Try again.' : '❌ Error validating currency or address. Please try again.');
       return ctx.scene.leave();
     }
 
+    if (!currencyRes.data[0]?.length || currencyRes.data[0][0].chainId !== chainId) {
+      const error = userState.usePidgin
+        ? `❌ ${caOrTerm} no dey for ${network}. Check am well o.`
+        : `❌ ${caOrTerm} not found or invalid on ${network}. Please check your input.`;
+      await ctx.replyWithMarkdown(error);
+      return ctx.scene.leave();
+    }
+
+    const currencyData = currencyRes.data[0][0];
+    const decimals = currencyData.decimals;
+    const amountInWei = (amount * Math.pow(10, decimals)).toString();
     ctx.wizard.state = {
       userId,
-      amount: (amount * 10 ** token.decimals).toString(),
-      tokenAddress: token.address,
+      amount,
+      amountInWei,
+      ca: currencyData.symbol,
       chainId,
-      network: normalizedNetwork.charAt(0).toUpperCase() + normalizedNetwork.slice(1),
-      symbol: token.symbol,
-      decimals: token.decimals,
+      originCurrency: currencyData.address,
+      decimals,
+      network: network.toLowerCase(),
     };
 
-    const userState = await getUserState(userId);
-    const msg = userState.usePidgin
-      ? `Step 1/3: You wan sell ${amount} ${token.symbol} (${ctx.wizard.state.network}). Correct?`
-      : `Step 1/3: Sell ${amount} ${token.symbol} (${ctx.wizard.state.network}). Confirm?`;
+    const confirm = userState.usePidgin
+      ? `You wan sell ${amount} ${currencyData.symbol} on ${network}?\nPress "Yes" to go ahead, "No" to stop.`
+      : `Sell ${amount} ${currencyData.symbol} on ${network}?\nReply "Yes" to confirm, "No" to cancel.`;
     try {
-      await ctx.reply(msg, Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Yes', 'confirm_token')],
-        [Markup.button.callback('❌ No', 'cancel_sell')],
+      await ctx.replyWithMarkdown(confirm, Markup.inlineKeyboard([
+        Markup.button.callback('✅ Yes', 'yes'),
+        Markup.button.callback('❌ No', 'no'),
       ]));
       logger.info(`User ${userId} prompted for confirmation`);
       return ctx.wizard.next();
@@ -150,27 +164,35 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    if (ctx.callbackQuery.data === 'cancel_sell') {
-      await ctx.reply('Sell cancelled.');
+    const action = ctx.callbackQuery.data;
+    const userState = await getUserState(userId);
+
+    if (action === 'no') {
+      await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel. Need help? Chat us or try /sell again.' : 'Sell cancelled. Need help? Contact us or retry with /sell.', { parse_mode: 'Markdown' });
       await ctx.answerCbQuery();
       return ctx.scene.leave();
     }
 
-    if (ctx.callbackQuery.data !== 'confirm_token') {
-      logger.warn(`Unexpected callback ${ctx.callbackQuery.data} for user ${userId}`);
+    if (action !== 'yes') {
+      logger.warn(`Unexpected callback ${action} for user ${userId}`);
       await ctx.reply('Unexpected action. Use /sell to start over.');
       await ctx.answerCbQuery();
       return ctx.scene.leave();
     }
 
-    const userState = await getUserState(userId);
-    const bankDetails = userState.bankDetails;
-    const msg = userState.usePidgin
-      ? 'Step 2/3: Which bank you wan use?'
-      : 'Step 2/3: Select a bank for payout:';
-    const buttons = bankDetails
+    const userWallets = userState.wallets;
+    const linkedBank = userState.bankDetails; // Adjusted to match previous structure
+    const prompt = linkedBank
+      ? (userState.usePidgin
+          ? `Step 2/3: Use your linked bank (${linkedBank.bankName} - ****${linkedBank.accountNumber.slice(-4)}) or add new one?`
+          : `Step 2/3: Use your linked bank (${linkedBank.bankName} - ****${linkedBank.accountNumber.slice(-4)}) or add a new one?`)
+      : (userState.usePidgin
+          ? 'Step 2/3: You no get bank linked o. Add one now?'
+          : 'Step 2/3: No linked bank found. Add one now?');
+
+    const buttons = linkedBank
       ? [
-          [Markup.button.callback(`✅ ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})`, 'use_bank')],
+          [Markup.button.callback(`✅ Use ${linkedBank.bankName}`, 'use_bank')],
           [Markup.button.callback('🏦 Add New Bank', 'new_bank')],
           [Markup.button.callback('❌ Cancel', 'cancel_sell')],
         ]
@@ -180,8 +202,7 @@ const sellScene = new Scenes.WizardScene(
         ];
 
     try {
-      // Fallback to reply if editMessageText fails
-      await ctx.editMessageText(msg, {
+      await ctx.editMessageText(prompt, {
         reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
         parse_mode: 'Markdown',
       });
@@ -191,7 +212,7 @@ const sellScene = new Scenes.WizardScene(
     } catch (error) {
       logger.error(`Failed to edit message for user ${userId}: ${error.message}`);
       try {
-        await ctx.reply(msg, Markup.inlineKeyboard(buttons));
+        await ctx.reply(prompt, Markup.inlineKeyboard(buttons));
         await ctx.answerCbQuery();
         logger.info(`User ${userId} shown bank options via reply (fallback)`);
         return ctx.wizard.next();
@@ -248,12 +269,13 @@ const sellScene = new Scenes.WizardScene(
       await db.collection('sessions').doc(sessionId).set({
         userId,
         amount: ctx.wizard.state.amount,
-        tokenAddress: ctx.wizard.state.tokenAddress,
+        amountInWei: ctx.wizard.state.amountInWei,
+        tokenAddress: ctx.wizard.state.originCurrency,
         chainId: ctx.wizard.state.chainId,
         bankDetails,
         blockradarAddress,
         status: 'pending',
-        symbol: ctx.wizard.state.symbol,
+        symbol: ctx.wizard.state.ca,
         decimals: ctx.wizard.state.decimals,
         network: ctx.wizard.state.network,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -301,12 +323,13 @@ sellScene.enter(async (ctx) => {
       await db.collection('sessions').doc(sessionId).set({
         userId,
         amount: ctx.wizard.state.amount,
-        tokenAddress: ctx.wizard.state.tokenAddress,
+        amountInWei: ctx.wizard.state.amountInWei,
+        tokenAddress: ctx.wizard.state.originCurrency,
         chainId: ctx.wizard.state.chainId,
         bankDetails: ctx.wizard.state.bankDetails,
         blockradarAddress,
         status: 'pending',
-        symbol: ctx.wizard.state.symbol,
+        symbol: ctx.wizard.state.ca,
         decimals: ctx.wizard.state.decimals,
         network: ctx.wizard.state.network,
         createdAt: admin.firestore.FieldValue.serverTimestamp(),
@@ -331,17 +354,25 @@ sellScene.enter(async (ctx) => {
 });
 
 // Action Handlers
-sellScene.action('confirm_token', async (ctx) => {
+sellScene.action('yes', async (ctx) => {
   logger.info(`User ${ctx.from.id} confirmed token`);
   try {
     await ctx.answerCbQuery();
     logger.info(`User ${ctx.from.id} advancing to step 2`);
     return ctx.wizard.next();
   } catch (error) {
-    logger.error(`Error in confirm_token action for user ${ctx.from.id}: ${error.message}`);
+    logger.error(`Error in yes action for user ${ctx.from.id}: ${error.message}`);
     await ctx.reply('Error confirming token. Try again.');
     return ctx.scene.leave();
   }
+});
+
+sellScene.action('no', async (ctx) => {
+  logger.info(`User ${ctx.from.id} cancelled sell`);
+  const userState = await getUserState(ctx.from.id);
+  await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel. Need help? Chat us or try /sell again.' : 'Sell cancelled. Need help? Contact us or retry with /sell.', { parse_mode: 'Markdown' });
+  await ctx.answerCbQuery();
+  return ctx.scene.leave();
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
