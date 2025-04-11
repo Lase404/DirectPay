@@ -1,35 +1,17 @@
-.connect-wallet-container {
-  max-width: 600px;
-  margin: 50px auto;
-  padding: 20px;
+.connect-wallet-app {
   text-align: center;
+  padding: 20px;
   font-family: Arial, sans-serif;
-}
-
-h1 {
-  font-size: 24px;
-  margin-bottom: 20px;
 }
 
 button {
   padding: 10px 20px;
+  margin: 5px;
   font-size: 16px;
-  background-color: #5288F9;
-  color: white;
-  border: none;
-  border-radius: 5px;
   cursor: pointer;
-}
-
-button:hover {
-  background-color: #3b6cd8;
 }
 
 .error {
   color: red;
   margin-top: 10px;
-}
-
-p {
-  margin: 10px 0;
 }
