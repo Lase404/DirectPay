@@ -1,95 +1,121 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
-import { ethers } from 'ethers';
+import axios from 'axios';
 import './ConnectWalletApp.css';
 
-const App = () => {
-  const urlParams = new URLSearchParams(window.location.search);
-  const userId = urlParams.get('userId');
-  const quoteId = urlParams.get('quoteId');
-  const isExecution = !!quoteId;
-
-  return (
-    <PrivyProvider appId={process.env.REACT_APP_PRIVY_APP_ID}>
-      {isExecution ? <ExecuteComponent userId={userId} quoteId={quoteId} /> : <ConnectWalletComponent userId={userId} />}
-    </PrivyProvider>
-  );
-};
-
-const ConnectWalletComponent = ({ userId }) => {
-  const { login, authenticated, ready } = usePrivy();
+const ConnectWalletApp = () => {
+  const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
+  const [session, setSession] = useState(null);
+  const [quote, setQuote] = useState(null);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
-    if (ready && authenticated && wallets.length > 0) {
-      const walletAddress = wallets[0].address;
-      fetch('/webhook/wallet-connected', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId, walletAddress }),
-      }).then(() => window.close());
+    const fetchSession = async () => {
+      const urlParams = new URLSearchParams(window.location.search);
+      const userId = urlParams.get('userId');
+      const sessionId = urlParams.get('sessionId');
+
+      if (!userId || !sessionId) {
+        setError('Missing userId or sessionId');
+        return;
+      }
+
+      try {
+        const response = await axios.get(`/api/session?userId=${userId}&sessionId=${sessionId}`);
+        setSession(response.data);
+      } catch (err) {
+        setError('Failed to fetch session');
+      }
+    };
+
+    if (ready && authenticated) {
+      fetchSession();
     }
-  }, [ready, authenticated, wallets, userId]);
+  }, [ready, authenticated]);
 
-  if (!ready) return <div>Loading...</div>;
+  const handleSell = async () => {
+    if (!wallets.length || !session) return;
 
-  return (
-    <div className="connect-wallet">
-      <h1>Connect Your Wallet</h1>
-      {!authenticated && <button onClick={login}>Connect Wallet</button>}
-      {authenticated && <p>Connecting...</p>}
-    </div>
-  );
-};
+    const wallet = wallets[0];
+    const provider = await wallet.getEthersProvider();
+    const signer = provider.getSigner();
 
-const ExecuteComponent = ({ userId, quoteId }) => {
-  const { ready, authenticated } = usePrivy();
-  const { wallets } = useWallets();
-
-  useEffect(() => {
-    if (ready && authenticated && wallets.length > 0) {
-      executeTransaction(wallets[0], quoteId, userId);
-    }
-  }, [ready, authenticated, wallets, quoteId, userId]);
-
-  const executeTransaction = async (wallet, quoteId, userId) => {
     try {
-      const provider = await wallet.getEthersProvider();
-      const signer = provider.getSigner();
-      const quoteResponse = await fetch(`https://api.relay.link/quote/${quoteId}`);
-      const quote = await quoteResponse.json();
+      // Fetch quote with user's wallet address
+      const quoteResponse = await axios.post('https://api.relay.link/quote', {
+        user: wallet.address,
+        originChainId: session.chainId,
+        originCurrency: session.token,
+        destinationChainId: 8453,
+        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+        tradeType: 'EXACT_INPUT',
+        recipient: session.blockradarWallet,
+        amount: session.amountInWei,
+        refundTo: wallet.address
+      });
+      setQuote(quoteResponse.data);
 
-      const { originCurrency, amount } = quote[0];
-      if (originCurrency !== '0x0000000000000000000000000000000000000000') { // ERC-20
+      // Approve token if not native
+      if (session.token !== '0x0000000000000000000000000000000000000000') {
         const erc20Abi = ['function approve(address spender, uint256 amount) public returns (bool)'];
-        const tokenContract = new ethers.Contract(originCurrency, erc20Abi, signer);
-        const tx = await tokenContract.approve(quote[0].spender, amount);
+        const tokenContract = new ethers.Contract(session.token, erc20Abi, signer);
+        const tx = await tokenContract.approve(quoteResponse.data.approvalAddress, session.amountInWei);
         await tx.wait();
       }
 
+      // Execute transaction
       const txResponse = await signer.sendTransaction({
-        to: quote[0].to,
-        data: quote[0].data,
-        value: originCurrency === '0x0000000000000000000000000000000000000000' ? amount : 0,
+        to: quoteResponse.data.to,
+        data: quoteResponse.data.data,
+        value: quoteResponse.data.value ? ethers.BigNumber.from(quoteResponse.data.value) : 0
       });
       await txResponse.wait();
 
-      alert('Transaction executed successfully!');
-      window.close();
-    } catch (error) {
-      console.error('Execution failed:', error);
-      alert('Transaction failed. Please try again.');
+      // Notify server of success
+      await axios.post('/webhook/sell-completed', {
+        userId: new URLSearchParams(window.location.search).get('userId'),
+        sessionId: new URLSearchParams(window.location.search).get('sessionId'),
+        txHash: txResponse.hash
+      });
+
+      setError('Sell completed successfully!');
+    } catch (err) {
+      setError(`Error during sell: ${err.message}`);
     }
   };
 
   if (!ready) return <div>Loading...</div>;
 
   return (
-    <div className="connect-wallet">
-      <h1>Approve & Execute Sell</h1>
-      <p>Processing your transaction...</p>
+    <div className="connect-wallet-app">
+      <h1>Sell Your Crypto</h1>
+      {!authenticated ? (
+        <button onClick={login}>Connect Wallet</button>
+      ) : (
+        <>
+          <p>Connected: {wallets[0]?.address}</p>
+          {session ? (
+            <>
+              <p>Amount: {ethers.utils.formatUnits(session.amountInWei, 6)} {session.token === '0x0000000000000000000000000000000000000000' ? 'ETH' : 'Token'}</p>
+              <p>To: {session.blockradarWallet}</p>
+              <button onClick={handleSell}>Execute Sell</button>
+            </>
+          ) : (
+            <p>Fetching session...</p>
+          )}
+          <button onClick={logout}>Disconnect</button>
+        </>
+      )}
+      {error && <p className="error">{error}</p>}
     </div>
   );
 };
+
+const App = () => (
+  <PrivyProvider appId={process.env.REACT_APP_PRIVY_APP_ID} config={{}}>
+    <ConnectWalletApp />
+  </PrivyProvider>
+);
 
 export default App;
