@@ -6,16 +6,17 @@ const { v4: uuidv4 } = require('uuid');
 // Firebase Firestore (from bot.js)
 const db = admin.firestore();
 
-// Logger (from bot.js)
-const logger = require('winston').createLogger({
+// Logger (corrected from bot.js)
+const winston = require('winston');
+const logger = winston.createLogger({
   level: 'info',
-  format: require('winston').format.combine(
-    require('winston').format.timestamp(),
-    require('winston').format.printf(({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`)
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`)
   ),
   transports: [
-    new require('winston').transports.Console(),
-    new require('winston').transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 }),
+    new winston.transports.Console(), // Corrected: Ensure 'new' is used
+    new winston.transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 }),
   ],
 });
 
@@ -142,7 +143,8 @@ const sellScene = new Scenes.WizardScene(
         },
         {
           headers: {
-            'Content-Type': 'application/json'
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.RELAY_API_KEY,
           },
         }
       )
