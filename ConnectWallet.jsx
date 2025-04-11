@@ -1,170 +1,95 @@
-import React, { useEffect, useState } from 'react';
-import { usePrivy, useWallets } from '@privy-io/react-auth';
-import axios from 'axios';
-import { RelayClient } from '@reservoir0x/relay-sdk';
+import React, { useEffect } from 'react';
+import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
 import { ethers } from 'ethers';
+import './ConnectWalletApp.css';
 
-const ERC20_ABI = [
-  'function approve(address spender, uint256 amount) public returns (bool)',
-  'function allowance(address owner, address spender) public view returns (uint256)',
-];
-
-function ConnectWalletApp() {
-  const { ready, authenticated, login, logout } = usePrivy();
-  const { wallets } = useWallets();
-  const [status, setStatus] = useState('');
-  const [error, setError] = useState(null);
-  const [quote, setQuote] = useState(null);
-  const [isConfirmed, setIsConfirmed] = useState(false);
-
-  const relayClient = new RelayClient({
-    apiKey: process.env.REACT_APP_RELAY_API_KEY,
-    baseUrl: 'https://api.relay.link',
-  });
-
+const App = () => {
   const urlParams = new URLSearchParams(window.location.search);
   const userId = urlParams.get('userId');
-  const session = urlParams.get('session');
-  const baseUrl = process.env.REACT_APP_WEBAPP_URL || 'https://directpay.onrender.com';
-  const blockradarAddress = '0xa5f565650890fba1824ee0f21ebbbf660a179934';
-
-  useEffect(() => {
-    if (ready && authenticated && wallets.length > 0 && !status) {
-      fetchTransactionDetailsAndQuote();
-    }
-  }, [ready, authenticated, wallets]);
-
-  const fetchTransactionDetailsAndQuote = async () => {
-    try {
-      const wallet = wallets[0];
-      const walletAddress = wallet.address;
-      setStatus('Connecting wallet...');
-      await axios.post(`${baseUrl}/webhook/wallet-connected`, { userId, walletAddress });
-
-      setStatus('Fetching session...');
-      const { data } = await axios.get(`${baseUrl}/api/session`, { params: { userId, session } });
-      const { amount, asset, chainId } = data;
-
-      setStatus('Fetching quote...');
-      const quoteResponse = await relayClient.actions.getQuote({
-        user: walletAddress,
-        originChainId: chainId,
-        originCurrency: asset,
-        destinationChainId: 8453,
-        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
-        tradeType: 'EXACT_INPUT',
-        recipient: blockradarAddress,
-        amount,
-        refundTo: walletAddress,
-      });
-      setQuote(quoteResponse);
-      setStatus('Review the quote and confirm.');
-    } catch (err) {
-      setError(`Error: ${err.message}`);
-      await axios.post(`${baseUrl}/webhook/error`, { userId, error: err.message });
-    }
-  };
-
-  const handleConfirm = async () => {
-    setIsConfirmed(true);
-    await executeTransactions();
-  };
-
-  const executeTransactions = async () => {
-    try {
-      const wallet = wallets[0];
-      const walletAddress = wallet.address;
-      const provider = new ethers.providers.Web3Provider(wallet.provider);
-      const signer = provider.getSigner();
-
-      if (wallet.chainId !== `eip155:${quote.steps[0].items[0].data.chainId}`) {
-        await wallet.switchChain(quote.steps[0].items[0].data.chainId);
-      }
-
-      // Approval (for ERC20 only)
-      if (quote.details.currencyIn.currency.address !== '0x0000000000000000000000000000000000000000') {
-        setStatus('Requesting approval...');
-        const tokenContract = new ethers.Contract(quote.details.currencyIn.currency.address, ERC20_ABI, signer);
-        const spender = quote.steps[0].items[0].data.to;
-        const amount = quote.details.currencyIn.amount;
-
-        const allowance = await tokenContract.allowance(walletAddress, spender);
-        if (ethers.BigNumber.from(allowance).lt(amount)) {
-          const approvalTx = await tokenContract.approve(spender, amount);
-          setStatus('Waiting for approval...');
-          const approvalReceipt = await approvalTx.wait();
-          await axios.post(`${baseUrl}/webhook/approval-confirmed`, {
-            userId,
-            walletAddress,
-            txHash: approvalReceipt.transactionHash,
-          });
-        }
-      }
-
-      // Deposit
-      setStatus('Initiating deposit...');
-      const txData = quote.steps[0].items[0].data;
-      const transaction = {
-        to: txData.to,
-        data: txData.data,
-        value: ethers.BigNumber.from(txData.value),
-        gasLimit: ethers.BigNumber.from(txData.gas),
-        maxFeePerGas: ethers.BigNumber.from(txData.maxFeePerGas),
-        maxPriorityFeePerGas: ethers.BigNumber.from(txData.maxPriorityFeePerGas),
-      };
-
-      const txResponse = await signer.sendTransaction(transaction);
-      setStatus('Waiting for deposit...');
-      const depositReceipt = await txResponse.wait();
-
-      await axios.post(`${baseUrl}/webhook/deposit-confirmed`, {
-        userId,
-        walletAddress,
-        txHash: depositReceipt.transactionHash,
-        amount: quote.details.currencyIn.amount,
-        chainId: quote.details.currencyIn.currency.chainId,
-      });
-
-      setStatus('Deposit complete!');
-    } catch (err) {
-      setError(`Error: ${err.message}`);
-      await axios.post(`${baseUrl}/webhook/error`, { userId, error: err.message });
-    }
-  };
+  const quoteId = urlParams.get('quoteId');
+  const isExecution = !!quoteId;
 
   return (
-    <div style={{ padding: '20px', textAlign: 'center', fontFamily: 'Arial, sans-serif' }}>
-      <h1>DirectPay Wallet</h1>
-      {authenticated ? (
-        <>
-          <p>Wallet: {wallets[0]?.address}</p>
-          {quote && (
-            <div style={{ margin: '20px 0', textAlign: 'left', maxWidth: '400px', marginLeft: 'auto', marginRight: 'auto' }}>
-              <h3>Transaction Quote</h3>
-              <p><strong>Selling:</strong> {quote.details.currencyIn.amountFormatted} {quote.details.currencyIn.currency.symbol} ({quote.details.currencyIn.currency.name}) - ${quote.details.currencyIn.amountUsd}</p>
-              <p><strong>Receiving:</strong> {quote.details.currencyOut.amountFormatted} {quote.details.currencyOut.currency.symbol} ({quote.details.currencyOut.currency.name}) - ${quote.details.currencyOut.amountUsd}</p>
-              <p><strong>Total Impact:</strong> {quote.details.totalImpact.usd} USD ({quote.details.totalImpact.percent}%)</p>
-              <p><strong>Swap Impact:</strong> {quote.details.swapImpact.usd} USD ({quote.details.swapImpact.percent}%)</p>
-            </div>
-          )}
-          <p>Status: {status}</p>
-          {error && <p style={{ color: 'red' }}>{error}</p>}
-          {!isConfirmed && quote && (
-            <button onClick={handleConfirm} style={{ padding: '10px 20px', backgroundColor: '#4CAF50', color: 'white', border: 'none', borderRadius: '5px' }}>
-              Confirm Transaction
-            </button>
-          )}
-          <button onClick={logout} style={{ padding: '10px 20px', marginLeft: '10px', backgroundColor: '#f44336', color: 'white', border: 'none', borderRadius: '5px' }}>
-            Disconnect
-          </button>
-        </>
-      ) : (
-        <button onClick={login} style={{ padding: '10px 20px', backgroundColor: '#2196F3', color: 'white', border: 'none', borderRadius: '5px' }}>
-          Connect Wallet
-        </button>
-      )}
+    <PrivyProvider appId={process.env.REACT_APP_PRIVY_APP_ID}>
+      {isExecution ? <ExecuteComponent userId={userId} quoteId={quoteId} /> : <ConnectWalletComponent userId={userId} />}
+    </PrivyProvider>
+  );
+};
+
+const ConnectWalletComponent = ({ userId }) => {
+  const { login, authenticated, ready } = usePrivy();
+  const { wallets } = useWallets();
+
+  useEffect(() => {
+    if (ready && authenticated && wallets.length > 0) {
+      const walletAddress = wallets[0].address;
+      fetch('/webhook/wallet-connected', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId, walletAddress }),
+      }).then(() => window.close());
+    }
+  }, [ready, authenticated, wallets, userId]);
+
+  if (!ready) return <div>Loading...</div>;
+
+  return (
+    <div className="connect-wallet">
+      <h1>Connect Your Wallet</h1>
+      {!authenticated && <button onClick={login}>Connect Wallet</button>}
+      {authenticated && <p>Connecting...</p>}
     </div>
   );
-}
+};
 
-export default ConnectWalletApp;
+const ExecuteComponent = ({ userId, quoteId }) => {
+  const { ready, authenticated } = usePrivy();
+  const { wallets } = useWallets();
+
+  useEffect(() => {
+    if (ready && authenticated && wallets.length > 0) {
+      executeTransaction(wallets[0], quoteId, userId);
+    }
+  }, [ready, authenticated, wallets, quoteId, userId]);
+
+  const executeTransaction = async (wallet, quoteId, userId) => {
+    try {
+      const provider = await wallet.getEthersProvider();
+      const signer = provider.getSigner();
+      const quoteResponse = await fetch(`https://api.relay.link/quote/${quoteId}`);
+      const quote = await quoteResponse.json();
+
+      const { originCurrency, amount } = quote[0];
+      if (originCurrency !== '0x0000000000000000000000000000000000000000') { // ERC-20
+        const erc20Abi = ['function approve(address spender, uint256 amount) public returns (bool)'];
+        const tokenContract = new ethers.Contract(originCurrency, erc20Abi, signer);
+        const tx = await tokenContract.approve(quote[0].spender, amount);
+        await tx.wait();
+      }
+
+      const txResponse = await signer.sendTransaction({
+        to: quote[0].to,
+        data: quote[0].data,
+        value: originCurrency === '0x0000000000000000000000000000000000000000' ? amount : 0,
+      });
+      await txResponse.wait();
+
+      alert('Transaction executed successfully!');
+      window.close();
+    } catch (error) {
+      console.error('Execution failed:', error);
+      alert('Transaction failed. Please try again.');
+    }
+  };
+
+  if (!ready) return <div>Loading...</div>;
+
+  return (
+    <div className="connect-wallet">
+      <h1>Approve & Execute Sell</h1>
+      <p>Processing your transaction...</p>
+    </div>
+  );
+};
+
+export default App;
