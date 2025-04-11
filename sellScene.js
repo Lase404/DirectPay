@@ -55,7 +55,7 @@ const chains = {
   ethereum: { chainId: 1, name: 'Ethereum' },
 };
 
-// Sell Scene (Simplified)
+// Sell Scene
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // Step 1: Validate /sell input and token
@@ -63,7 +63,8 @@ const sellScene = new Scenes.WizardScene(
     const userId = ctx.from.id.toString();
     logger.info(`User ${userId} entered sell_scene with: ${ctx.message.text}`);
 
-    if (!ctx.message.text.startsWith('/sell')) {
+    // Stricter command check to avoid misinterpreting "Yes" as a command
+    if (!ctx.message.text.startsWith('/sell ')) {
       await ctx.reply('Use: /sell <amount> <currency or address> <network>');
       return ctx.scene.leave();
     }
@@ -132,6 +133,7 @@ const sellScene = new Scenes.WizardScene(
       decimals,
       network: network.toLowerCase(),
     };
+    logger.info(`User ${userId} set wizard state: ${JSON.stringify(ctx.wizard.state)}`);
 
     const confirm = userState.usePidgin
       ? `You wan sell ${amount} ${currencyData.symbol} on ${network}?\nPress "Yes" to go ahead, "No" to stop.`
@@ -150,20 +152,13 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
-  // Step 2: Minimal Bank Selection (Simplified for Debugging)
+  // Step 2: Bank Selection
   async (ctx) => {
-    const userId = ctx.wizard.state?.userId;
-    if (!userId) {
-      logger.error(`User ID missing in wizard state at step 2`);
-      await ctx.reply('Session error. Please start over with /sell.');
-      return ctx.scene.leave();
-    }
-
-    logger.info(`User ${userId} at step 2, callback: ${JSON.stringify(ctx.callbackQuery)}`);
+    logger.info(`User ${ctx.from.id} at step 2, wizard state: ${JSON.stringify(ctx.wizard.state)}`);
     logger.info(`Current wizard step: ${ctx.wizard.cursor}`);
 
     if (!ctx.callbackQuery) {
-      logger.warn(`No callbackQuery for user ${userId} in step 2`);
+      logger.warn(`No callbackQuery for user ${ctx.from.id} in step 2`);
       await ctx.reply('Please confirm or cancel the token selection.');
       return ctx.scene.leave();
     }
@@ -176,43 +171,58 @@ const sellScene = new Scenes.WizardScene(
     }
 
     if (action !== 'yes') {
-      logger.warn(`Unexpected callback ${action} for user ${userId}`);
+      logger.warn(`Unexpected callback ${action} for user ${ctx.from.id}`);
       await ctx.reply('Unexpected action. Use /sell to start over.');
       await ctx.answerCbQuery();
       return ctx.scene.leave();
     }
 
-    // Simplified Step 2: Just show a message to confirm we reached this step
+    const userId = ctx.wizard.state.userId;
+    const userState = await getUserState(userId);
+    const linkedBank = userState.bankDetails;
+    const prompt = linkedBank
+      ? (userState.usePidgin
+          ? `Step 2/3: Use your linked bank (${linkedBank.bankName} - ****${linkedBank.accountNumber.slice(-4)}) or add new one?`
+          : `Step 2/3: Use your linked bank (${linkedBank.bankName} - ****${linkedBank.accountNumber.slice(-4)}) or add a new one?`)
+      : (userState.usePidgin
+          ? 'Step 2/3: You no get bank linked o. Add one now?'
+          : 'Step 2/3: No linked bank found. Add one now?');
+
+    const buttons = linkedBank
+      ? [
+          [Markup.button.callback(`✅ Use ${linkedBank.bankName}`, 'use_bank')],
+          [Markup.button.callback('🏦 Add New Bank', 'new_bank')],
+          [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+        ]
+      : [
+          [Markup.button.callback('🏦 Add New Bank', 'new_bank')],
+          [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+        ];
+
     try {
-      await ctx.reply('Reached Step 2! Select a bank (simplified for debugging).', Markup.inlineKeyboard([
-        [Markup.button.callback('🏦 Add New Bank', 'new_bank')],
-        [Markup.button.callback('❌ Cancel', 'cancel_sell')],
-      ]));
+      await ctx.reply(prompt, Markup.inlineKeyboard(buttons));
       await ctx.answerCbQuery();
-      logger.info(`User ${userId} successfully reached step 2`);
+      logger.info(`User ${userId} shown bank options`);
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Failed to send Step 2 message for user ${userId}: ${error.message}`);
-      await ctx.reply('Error in Step 2. Try again.');
+      logger.error(`Failed to send bank options for user ${userId}: ${error.message}`);
+      await ctx.reply('Error showing bank options. Try again.');
       return ctx.scene.leave();
     }
   },
-  // Step 3: Minimal Wallet Connection (Simplified for Debugging)
+  // Step 3: Wallet Connection
   async (ctx) => {
-    const userId = ctx.wizard.state?.userId;
-    if (!userId) {
-      logger.error(`User ID missing in wizard state at step 3`);
-      await ctx.reply('Session error. Please start over with /sell.');
-      return ctx.scene.leave();
-    }
-
-    logger.info(`User ${userId} at step 3, callback: ${JSON.stringify(ctx.callbackQuery)}`);
+    logger.info(`User ${ctx.from.id} at step 3, wizard state: ${JSON.stringify(ctx.wizard.state)}`);
+    logger.info(`Current wizard step: ${ctx.wizard.cursor}`);
 
     if (!ctx.callbackQuery) {
-      logger.warn(`No callbackQuery for user ${userId} in step 3`);
-      await ctx.reply('Please select an option.');
+      logger.warn(`No callbackQuery for user ${ctx.from.id} in step 3`);
+      await ctx.reply('Please select a bank option.');
       return ctx.scene.leave();
     }
+
+    const userId = ctx.wizard.state.userId;
+    const userState = await getUserState(userId);
 
     if (ctx.callbackQuery.data === 'cancel_sell') {
       await ctx.reply('Sell cancelled.');
@@ -222,28 +232,101 @@ const sellScene = new Scenes.WizardScene(
       logger.info(`User ${userId} chose new bank`);
       await ctx.answerCbQuery();
       return ctx.scene.enter('bank_linking_scene_temp', { sellData: ctx.wizard.state });
+    } else if (ctx.callbackQuery.data === 'use_bank') {
+      logger.info(`User ${userId} chose existing bank`);
+      ctx.wizard.state.bankDetails = userState.bankDetails;
+    } else {
+      logger.warn(`Unexpected callback ${ctx.callbackQuery.data} for user ${userId}`);
+      await ctx.reply('Unexpected action. Use /sell to start over.');
+      await ctx.answerCbQuery();
+      return ctx.scene.leave();
     }
 
-    // Simplified Step 3: Just confirm we reached this step
+    const sessionId = `${userId}-${Date.now()}`;
+    const blockradarAddress = await generateBlockradarAddress();
+    ctx.wizard.state.blockradarAddress = blockradarAddress;
+
     try {
-      await ctx.reply('Reached Step 3! Connect wallet (simplified for debugging).');
+      await db.collection('sessions').doc(sessionId).set({
+        userId,
+        amount: ctx.wizard.state.amount,
+        amountInWei: ctx.wizard.state.amountInWei,
+        tokenAddress: ctx.wizard.state.originCurrency,
+        chainId: ctx.wizard.state.chainId,
+        bankDetails: ctx.wizard.state.bankDetails,
+        blockradarAddress,
+        status: 'pending',
+        symbol: ctx.wizard.state.ca,
+        decimals: ctx.wizard.state.decimals,
+        network: ctx.wizard.state.network,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      logger.error(`Failed to save session for user ${userId}: ${error.message}`);
+      await ctx.reply('Error saving session. Try again.');
+      return ctx.scene.leave();
+    }
+
+    const msg = userState.usePidgin
+      ? 'Step 3/3: Connect your wallet to finish.'
+      : 'Step 3/3: Connect your wallet to complete the sale.';
+    try {
+      await ctx.reply(msg, Markup.inlineKeyboard([
+        [Markup.button.url('Connect Wallet', `${process.env.WEBAPP_URL}/connect?userId=${userId}&session=${sessionId}`)],
+        [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+      ]));
       await ctx.answerCbQuery();
-      logger.info(`User ${userId} successfully reached step 3`);
+      logger.info(`User ${userId} prompted to connect wallet, session: ${sessionId}`);
       return ctx.scene.leave();
     } catch (error) {
-      logger.error(`Failed to send Step 3 message for user ${userId}: ${error.message}`);
-      await ctx.reply('Error in Step 3. Try again.');
+      logger.error(`Failed to prompt wallet connect for user ${userId}: ${error.message}`);
+      await ctx.reply('Error connecting wallet. Try again.');
       return ctx.scene.leave();
     }
   }
 );
 
-// Handle return from bank linking (simplified)
+// Handle return from bank linking
 sellScene.enter(async (ctx) => {
-  if (ctx.scene.state.sellData) {
+  if (ctx.scene.state.sellData && ctx.scene.state.bankDetails) {
     const userId = ctx.from.id.toString();
     logger.info(`User ${userId} returned from bank linking`);
-    await ctx.reply('Returned from bank linking. Reached Step 3 (simplified for debugging).');
+
+    ctx.wizard.state = { ...ctx.scene.state.sellData, bankDetails: ctx.scene.state.bankDetails };
+    const sessionId = `${userId}-${Date.now()}`;
+    const blockradarAddress = await generateBlockradarAddress();
+    ctx.wizard.state.blockradarAddress = blockradarAddress;
+
+    try {
+      await db.collection('sessions').doc(sessionId).set({
+        userId,
+        amount: ctx.wizard.state.amount,
+        amountInWei: ctx.wizard.state.amountInWei,
+        tokenAddress: ctx.wizard.state.originCurrency,
+        chainId: ctx.wizard.state.chainId,
+        bankDetails: ctx.wizard.state.bankDetails,
+        blockradarAddress,
+        status: 'pending',
+        symbol: ctx.wizard.state.ca,
+        decimals: ctx.wizard.state.decimals,
+        network: ctx.wizard.state.network,
+        createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (error) {
+      logger.error(`Failed to save session after bank linking for user ${userId}: ${error.message}`);
+      await ctx.reply('Error saving session. Try again.');
+      return ctx.scene.leave();
+    }
+
+    const userState = await getUserState(userId);
+    const msg = userState.usePidgin
+      ? 'Step 3/3: Connect your wallet to finish.'
+      : 'Step 3/3: Connect your wallet to complete the sale.';
+    await ctx.reply(msg, Markup.inlineKeyboard([
+      [Markup.button.url('Connect Wallet', `${process.env.WEBAPP_URL}/connect?userId=${userId}&session=${sessionId}`)],
+      [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+    ]));
+    logger.info(`User ${userId} prompted to connect wallet after bank linking, session: ${sessionId}`);
     return ctx.scene.leave();
   }
 });
@@ -279,15 +362,33 @@ sellScene.action('cancel_sell', async (ctx) => {
   return ctx.scene.leave();
 });
 
+sellScene.action('use_bank', async (ctx) => {
+  logger.info(`User ${ctx.from.id} selected existing bank`);
+  await ctx.answerCbQuery();
+  return ctx.wizard.next();
+});
+
 sellScene.action('new_bank', async (ctx) => {
   logger.info(`User ${ctx.from.id} chose new bank`);
   await ctx.answerCbQuery();
   return ctx.scene.enter('bank_linking_scene_temp', { sellData: ctx.wizard.state });
 });
 
-// Simplified Blockradar wallet generation (stubbed for debugging)
+// Simplified Blockradar wallet generation
 async function generateBlockradarAddress() {
-  return '0xDebugBlockradarAddress';
+  try {
+    const response = await axios.post(
+      'https://api.blockradar.co/v1/wallets/e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1/addresses',
+      { name: `DirectPay_Sell_${Date.now()}` },
+      { headers: { 'x-api-key': process.env.BLOCKRADAR_BASE_API_KEY }, timeout: 5000 }
+    );
+    const address = response.data.data.address;
+    logger.info(`Generated Blockradar address: ${address}`);
+    return address;
+  } catch (error) {
+    logger.error(`Failed to generate Blockradar address: ${error.message}`);
+    return '0xFallbackBlockradarAddress';
+  }
 }
 
 // Export
