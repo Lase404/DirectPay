@@ -2,6 +2,10 @@ const { Scenes, Markup } = require('telegraf');
 const axios = require('axios');
 const ethers = require('ethers');
 
+const chainNameToId = {
+  eth: 1, ethereum: 1, polygon: 137, bnb: 56, base: 8453, // Add more as needed
+};
+
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // Step 0: Parse input and validate with Relay.link
@@ -11,19 +15,19 @@ const sellScene = new Scenes.WizardScene(
     const args = ctx.message.text.split(' ').slice(1); // Remove /sell
     if (args.length !== 3) {
       const errorMsg = userState.usePidgin
-        ? '❌ Use: /sell <amount> <term/address> <chain> (e.g., /sell 100 USDC 1)'
-        : '❌ Usage: /sell <amount> <term/address> <chain> (e.g., /sell 100 USDC 1)';
+        ? '❌ Use: /sell <amount> <term/address> <chain> (e.g., /sell 100 USDC eth)'
+        : '❌ Usage: /sell <amount> <term/address> <chain> (e.g., /sell 100 USDC eth)';
       await ctx.replyWithMarkdown(errorMsg);
       return ctx.scene.leave();
     }
 
-    const [amountStr, termOrAddress, chainIdStr] = args;
+    const [amountStr, termOrAddress, chainInput] = args;
     const amount = parseFloat(amountStr);
-    const chainId = parseInt(chainIdStr, 10);
+    const chainId = chainNameToId[chainInput.toLowerCase()] || parseInt(chainInput, 10);
     if (isNaN(amount) || amount <= 0 || isNaN(chainId)) {
       const errorMsg = userState.usePidgin
-        ? '❌ Amount or chain ID no correct. Try again.'
-        : '❌ Invalid amount or chain ID. Please try again.';
+        ? '❌ Amount or chain no correct. Try again.'
+        : '❌ Invalid amount or chain. Please try again.';
       await ctx.replyWithMarkdown(errorMsg);
       return ctx.scene.leave();
     }
@@ -58,8 +62,25 @@ const sellScene = new Scenes.WizardScene(
       }
 
       ctx.wizard.state.sellData.assets = assets;
-      if (assets.length === 1) {
-        ctx.wizard.state.sellData.selectedAsset = assets[0];
+      ctx.wizard.state.sellData.selectedAsset = assets[0]; // Default to first
+      const linkedBank = userState.wallets.find(w => w.bank)?.bank;
+
+      if (assets.length === 1 && linkedBank) {
+        const confirmMsg = userState.usePidgin
+          ? `✅ *Sell Details*\n\n` +
+            `• *Asset:* ${assets[0].symbol} (${assets[0].name}) - \`${assets[0].address.slice(0, 6)}...\` (Chain ${chainId})\n` +
+            `• *Amount:* ${amount}\n` +
+            `• *Bank:* ${linkedBank.bankName} (****${linkedBank.accountNumber.slice(-4)}) - ${linkedBank.accountName}\n\n` +
+            `Everything correct?`
+          : `✅ *Sell Details*\n\n` +
+            `• *Asset:* ${assets[0].symbol} (${assets[0].name}) - \`${assets[0].address.slice(0, 6)}...\` (Chain ${chainId})\n` +
+            `• *Amount:* ${amount}\n` +
+            `• *Bank:* ${linkedBank.bankName} (****${linkedBank.accountNumber.slice(-4)}) - ${linkedBank.accountName}\n\n` +
+            `Everything correct?`;
+        await ctx.replyWithMarkdown(confirmMsg, Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Proceed', 'proceed')],
+          [Markup.button.callback('❌ Edit', 'edit')],
+        ]));
         return ctx.wizard.next();
       }
 
@@ -80,76 +101,51 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
-  // Step 1: Confirm asset selection (if multiple)
-  async (ctx) => {
-    if (!ctx.callbackQuery) return;
-    const userState = await ctx.getUserState(ctx.wizard.state.sellData.userId);
-    const idx = parseInt(ctx.callbackQuery.data.split('_')[2], 10);
-    const selectedAsset = ctx.wizard.state.sellData.assets[idx];
-    ctx.wizard.state.sellData.selectedAsset = selectedAsset;
-
-    const confirmMsg = userState.usePidgin
-      ? `✅ *Asset Selected*\n\n` +
-        `• *Symbol:* ${selectedAsset.symbol}\n` +
-        `• *Name:* ${selectedAsset.name}\n` +
-        `• *Address:* \`${selectedAsset.address}\`\n` +
-        `• *Chain ID:* ${ctx.wizard.state.sellData.chainId}\n` +
-        `• *Amount:* ${ctx.wizard.state.sellData.amount}\n\n` +
-        `Na this one you wan sell?`
-      : `✅ *Asset Selected*\n\n` +
-        `• *Symbol:* ${selectedAsset.symbol}\n` +
-        `• *Name:* ${selectedAsset.name}\n` +
-        `• *Address:* \`${selectedAsset.address}\`\n` +
-        `• *Chain ID:* ${ctx.wizard.state.sellData.chainId}\n` +
-        `• *Amount:* ${ctx.wizard.state.sellData.amount}\n\n` +
-        `Is this the asset you want to sell?`;
-    await ctx.replyWithMarkdown(confirmMsg, Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Yes', 'confirm_asset')],
-      [Markup.button.callback('❌ No', 'retry_asset')],
-    ]));
-    return ctx.wizard.next();
-  },
-  // Step 2: Handle bank selection
+  // Step 1: Handle asset selection or proceed
   async (ctx) => {
     if (!ctx.callbackQuery) return;
     const userId = ctx.wizard.state.sellData.userId;
     const userState = await ctx.getUserState(userId);
 
-    if (ctx.callbackQuery.data === 'retry_asset') {
+    if (ctx.callbackQuery.data === 'edit') {
       await ctx.replyWithMarkdown(userState.usePidgin
         ? '❌ Okay, enter /sell again with correct details.'
         : '❌ Okay, please run /sell again with the correct details.');
       return ctx.scene.leave();
     }
 
-    const walletsWithBank = userState.wallets.filter(w => w.bank);
-    const linkedBank = walletsWithBank[0]?.bank; // Use first linked bank
+    if (ctx.callbackQuery.data === 'proceed') {
+      return ctx.wizard.next();
+    }
 
-    ctx.wizard.state.sellData.bankDetails = linkedBank;
-    const bankMsg = userState.usePidgin
-      ? `🏦 *Your Linked Bank*\n\n` +
-        `• *Bank:* ${linkedBank.bankName}\n` +
-        `• *Number:* ****${linkedBank.accountNumber.slice(-4)}\n` +
-        `• *Name:* ${linkedBank.accountName}\n\n` +
-        `You wan receive funds here or link new bank for this sell?`
-      : `🏦 *Your Linked Bank*\n\n` +
-        `• *Bank:* ${linkedBank.bankName}\n` +
-        `• *Account Number:* ****${linkedBank.accountNumber.slice(-4)}\n` +
-        `• *Account Name:* ${linkedBank.accountName}\n\n` +
-        `Receive funds here or link a new bank for this sell?`;
-    await ctx.replyWithMarkdown(bankMsg, Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Use This Bank', 'use_linked_bank')],
-      [Markup.button.callback('🏦 Link New Bank', 'link_temp_bank')],
+    const idx = parseInt(ctx.callbackQuery.data.split('_')[2], 10);
+    ctx.wizard.state.sellData.selectedAsset = ctx.wizard.state.sellData.assets[idx];
+    const linkedBank = userState.wallets.find(w => w.bank)?.bank;
+
+    const confirmMsg = userState.usePidgin
+      ? `✅ *Sell Details*\n\n` +
+        `• *Asset:* ${ctx.wizard.state.sellData.selectedAsset.symbol} (${ctx.wizard.state.sellData.selectedAsset.name}) - \`${ctx.wizard.state.sellData.selectedAsset.address.slice(0, 6)}...\` (Chain ${ctx.wizard.state.sellData.chainId})\n` +
+        `• *Amount:* ${ctx.wizard.state.sellData.amount}\n` +
+        `• *Bank:* ${linkedBank.bankName} (****${linkedBank.accountNumber.slice(-4)}) - ${linkedBank.accountName}\n\n` +
+        `Everything correct?`
+      : `✅ *Sell Details*\n\n` +
+        `• *Asset:* ${ctx.wizard.state.sellData.selectedAsset.symbol} (${ctx.wizard.state.sellData.selectedAsset.name}) - \`${ctx.wizard.state.sellData.selectedAsset.address.slice(0, 6)}...\` (Chain ${ctx.wizard.state.sellData.chainId})\n` +
+        `• *Amount:* ${ctx.wizard.state.sellData.amount}\n` +
+        `• *Bank:* ${linkedBank.bankName} (****${linkedBank.accountNumber.slice(-4)}) - ${linkedBank.accountName}\n\n` +
+        `Everything correct?`;
+    await ctx.replyWithMarkdown(confirmMsg, Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Proceed', 'proceed')],
+      [Markup.button.callback('❌ Edit', 'edit')],
+      [Markup.button.callback('🏦 Change Bank', 'link_temp_bank')],
     ]));
     return ctx.wizard.next();
   },
-  // Step 3: Connect wallet and fetch quote
+  // Step 2: Connect wallet
   async (ctx) => {
-    if (!ctx.callbackQuery) return;
     const userId = ctx.wizard.state.sellData.userId;
     const userState = await ctx.getUserState(userId);
 
-    if (ctx.callbackQuery.data === 'link_temp_bank') {
+    if (ctx.callbackQuery?.data === 'link_temp_bank') {
       await ctx.scene.enter('bank_linking_scene_temp');
       ctx.wizard.state.awaitingTempBank = true;
       return;
@@ -158,30 +154,44 @@ const sellScene = new Scenes.WizardScene(
     if (ctx.wizard.state.awaitingTempBank && ctx.scene.state.bankDetails) {
       ctx.wizard.state.sellData.bankDetails = ctx.scene.state.bankDetails;
       delete ctx.wizard.state.awaitingTempBank;
+    } else {
+      ctx.wizard.state.sellData.bankDetails = userState.wallets.find(w => w.bank)?.bank;
     }
 
     const connectMsg = userState.usePidgin
-      ? '🔗 *Connect Your Wallet*\n\nClick below to connect your wallet via Privy:'
-      : '🔗 *Connect Your Wallet*\n\nClick below to connect your wallet via Privy:';
-    await ctx.replyWithMarkdown(connectMsg, Markup.inlineKeyboard([
+      ? '🔗 *Connect Your Wallet*\n\nClick below to connect your wallet via Privy:\n\n⏳ Waiting for wallet connection...'
+      : '🔗 *Connect Your Wallet*\n\nClick below to connect your wallet via Privy:\n\n⏳ Waiting for wallet connection...';
+    const waitingMsg = await ctx.replyWithMarkdown(connectMsg, Markup.inlineKeyboard([
       [Markup.button.url('Connect Wallet', `${ctx.webhookDomain}/connect-wallet?userId=${userId}`)],
     ]));
 
     ctx.wizard.state.awaitingWallet = true;
+    setTimeout(async () => {
+      if (ctx.wizard.state.awaitingWallet) {
+        await ctx.telegram.editMessageText(ctx.chat.id, waitingMsg.message_id, null,
+          userState.usePidgin
+            ? '❌ Wallet connection don timeout. Try again with /sell.'
+            : '❌ Wallet connection timed out. Try again with /sell.',
+          { parse_mode: 'Markdown' }
+        );
+        ctx.scene.leave();
+      }
+    }, 120000); // 2 minutes
     return ctx.wizard.next();
   },
-  // Step 4: Fetch quote and execute
+  // Step 3: Fetch quote and execute
   async (ctx) => {
     const userId = ctx.wizard.state.sellData.userId;
     const userState = await ctx.getUserState(userId);
 
     if (!ctx.wizard.state.sellData.userAddress) {
-      // Wallet address will be set via webhook
-      return;
+      return; // Wait for webhook
     }
 
     const { amount, chainId, selectedAsset, userAddress, bankDetails } = ctx.wizard.state.sellData;
     const amountInWei = ethers.utils.parseUnits(amount.toString(), selectedAsset.decimals).toString();
+    const isNative = selectedAsset.metadata.isNative;
+    const originCurrency = isNative ? '0x0000000000000000000000000000000000000000' : selectedAsset.address;
 
     try {
       const quoteResponse = await axios.post(
@@ -189,82 +199,116 @@ const sellScene = new Scenes.WizardScene(
         {
           user: userAddress,
           originChainId: chainId,
-          originCurrency: selectedAsset.address,
+          originCurrency,
           destinationChainId: 8453, // Base chain
-          destinationCurrency: BLOCKRADAR_USDC_ADDRESS,
+          destinationCurrency: ctx.blockradarUsdcAddress,
           tradeType: 'EXACT_INPUT',
-          recipient: BLOCKRADAR_USDC_ADDRESS,
+          recipient: ctx.blockradarUsdcAddress,
           amount: amountInWei,
           refundTo: userAddress,
         },
         { headers: { 'Content-Type': 'application/json' } }
       );
 
-      ctx.wizard.state.sellData.quote = quoteResponse.data[0];
+      const quote = quoteResponse.data[0];
+      ctx.wizard.state.sellData.quote = quote;
+
+      // Calculate detailed quote info
+      const amountIn = parseFloat(ethers.utils.formatUnits(amountInWei, selectedAsset.decimals));
+      const amountOut = parseFloat(ethers.utils.formatUnits(quote.destination.amount, 6)); // USDC has 6 decimals
+      const feeAmount = parseFloat(quote.fee.amount); // Assuming fee is in origin currency units
+      const feeCurrency = quote.fee.currency === originCurrency ? selectedAsset.symbol : 'USDC';
+
+      // Assume 1:1 USD value for simplicity (fetch real prices via API like CoinGecko if needed)
+      const amountInUSD = amountIn * (selectedAsset.symbol === 'USDC' ? 1 : ctx.exchangeRates[selectedAsset.symbol] || 1);
+      const amountOutUSD = amountOut; // USDC on Base is 1:1 with USD
+      const feeUSD = feeAmount * (feeCurrency === 'USDC' ? 1 : ctx.exchangeRates[feeCurrency] || 1);
+
+      // Slippage: Difference between expected and actual output (simplified)
+      const expectedOutUSD = amountInUSD - feeUSD; // Without slippage
+      const slippageUSD = expectedOutUSD - amountOutUSD;
+      const slippagePercent = (slippageUSD / expectedOutUSD * 100).toFixed(2);
+
+      // Naira payout using server's exchange rate
+      const nairaPayout = (amountOut * ctx.exchangeRates.USDC).toFixed(2);
+
       const quoteMsg = userState.usePidgin
         ? `📊 *Sell Quote*\n\n` +
-          `• *From:* ${amount} ${selectedAsset.symbol} (Chain ${chainId})\n` +
-          `• *To:* ${ethers.utils.formatUnits(quoteResponse.data[0].destination.amount, 6)} USDC (Base)\n` +
-          `• *Fee:* ${quoteResponse.data[0].fee.amount} ${quoteResponse.data[0].fee.currency}\n\n` +
+          `• *Amount In:* ${amountIn} ${selectedAsset.symbol} (~$${amountInUSD.toFixed(2)} USD)\n` +
+          `• *Amount Out:* ${amountOut} USDC (~$${amountOutUSD.toFixed(2)} USD)\n` +
+          `• *Naira Payout:* ₦${nairaPayout}\n` +
+          `• *Fees:* ${feeAmount} ${feeCurrency} (~$${feeUSD.toFixed(2)} USD)\n` +
+          `• *Slippage:* $${slippageUSD.toFixed(2)} (${slippagePercent}%)\n\n` +
           `Ready to approve and sell?`
         : `📊 *Sell Quote*\n\n` +
-          `• *From:* ${amount} ${selectedAsset.symbol} (Chain ${chainId})\n` +
-          `• *To:* ${ethers.utils.formatUnits(quoteResponse.data[0].destination.amount, 6)} USDC (Base)\n` +
-          `• *Fee:* ${quoteResponse.data[0].fee.amount} ${quoteResponse.data[0].fee.currency}\n\n` +
+          `• *Amount In:* ${amountIn} ${selectedAsset.symbol} (~$${amountInUSD.toFixed(2)} USD)\n` +
+          `• *Amount Out:* ${amountOut} USDC (~$${amountOutUSD.toFixed(2)} USD)\n` +
+          `• *Naira Payout:* ₦${nairaPayout}\n` +
+          `• *Fees:* ${feeAmount} ${feeCurrency} (~$${feeUSD.toFixed(2)} USD)\n` +
+          `• *Slippage:* $${slippageUSD.toFixed(2)} (${slippagePercent}%)\n\n` +
           `Ready to approve and sell?`;
       await ctx.replyWithMarkdown(quoteMsg, Markup.inlineKeyboard([
-        [Markup.button.url('Approve & Execute', `${ctx.webhookDomain}/execute?userId=${userId}&quoteId=${quoteResponse.data[0].id}`)],
+        [Markup.button.url('Approve & Execute', `${ctx.webhookDomain}/execute?userId=${userId}&quoteId=${quote.id}`)],
       ]));
       return ctx.scene.leave();
     } catch (error) {
       ctx.logger.error(`Error fetching quote for ${userId}: ${error.message}`);
-      await ctx.replyWithMarkdown('❌ Error getting quote. Try again later.');
-      return ctx.scene.leave();
+      const errorMsg = userState.usePidgin
+        ? `❌ Wahala dey: ${error.response?.data?.message || error.message}\n\nTry again?`
+        : `❌ Error: ${error.response?.data?.message || error.message}\n\nRetry?`;
+      await ctx.replyWithMarkdown(errorMsg, Markup.inlineKeyboard([
+        [Markup.button.callback('🔄 Retry', 'retry_quote')],
+        [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+      ]));
     }
   }
 );
 
-function setup(bot, db, logger, getUserState, privy, blockradarUsdcAddress) {
+function setup(bot, app, db, logger, getUserState, privy, blockradarUsdcAddress, exchangeRates) {
   sellScene.getUserState = getUserState;
   sellScene.logger = logger;
   sellScene.webhookDomain = process.env.WEBHOOK_DOMAIN;
+  sellScene.blockradarUsdcAddress = blockradarUsdcAddress;
+  sellScene.exchangeRates = exchangeRates; // Pass exchangeRates from index.js
 
   sellScene.action(/select_asset_(\d+)/, async (ctx) => {
     ctx.wizard.selectStep(1);
     await sellScene.steps[1](ctx);
   });
 
-  sellScene.action('confirm_asset', async (ctx) => {
+  sellScene.action('proceed', async (ctx) => {
     ctx.wizard.selectStep(2);
     await sellScene.steps[2](ctx);
   });
 
-  sellScene.action('use_linked_bank', async (ctx) => {
-    ctx.wizard.selectStep(3);
-    await sellScene.steps[3](ctx);
-  });
-
   sellScene.action('link_temp_bank', async (ctx) => {
+    ctx.wizard.selectStep(2);
+    await sellScene.steps[2](ctx);
+  });
+
+  sellScene.action('retry_quote', async (ctx) => {
     ctx.wizard.selectStep(3);
     await sellScene.steps[3](ctx);
   });
 
-  // Webhook to receive wallet connection
-  bot.app.post('/webhook/wallet-connected', async (req, res) => {
+  sellScene.action('cancel_sell', async (ctx) => ctx.scene.leave());
+
+  // Webhook for wallet connection
+  app.post('/webhook/wallet-connected', async (req, res) => {
     const { userId, walletAddress } = req.body;
     logger.info(`Wallet connected for user ${userId}: ${walletAddress}`);
     const userState = await getUserState(userId);
-    await bot.telegram.sendMessage(userId, 
+    await bot.telegram.sendMessage(userId,
       userState.usePidgin
         ? `✅ Wallet connected: \`${walletAddress}\`. We dey prepare your sell now...`
-        : `✅ Wallet connected: \`${walletAddress}\`. Preparing your sell now...`, 
+        : `✅ Wallet connected: \`${walletAddress}\`. Preparing your sell now...`,
       { parse_mode: 'Markdown' }
     );
-    
-    const session = bot.scene.sessions[userId];
-    if (session && session.sell_scene) {
-      session.sell_scene.sellData.userAddress = walletAddress;
-      bot.scene.enter(userId, 'sell_scene', session.sell_scene, 4);
+
+    const session = bot.scene.session.__scenes[userId];
+    if (session && session.current === 'sell_scene') {
+      session.state.sellData.userAddress = walletAddress;
+      await sellScene.steps[3]({ ...ctx, wizard: { state: session.state }, from: { id: userId } });
     }
     res.status(200).send('OK');
   });
