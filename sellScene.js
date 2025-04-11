@@ -5,7 +5,7 @@ const admin = require('firebase-admin');
 // Initialize Firebase (assuming bot.js sets this up globally)
 const db = admin.firestore();
 
-// Logger setup (standalone, robust)
+// Logger setup
 const winston = require('winston');
 const logger = winston.createLogger({
   level: 'info',
@@ -19,16 +19,12 @@ const logger = winston.createLogger({
   ],
 });
 
-// Simplified getUserState (minimal dependencies)
+// Simplified getUserState
 async function getUserState(userId) {
   try {
     const userDoc = await db.collection('users').doc(userId).get();
     if (!userDoc.exists) {
-      const defaultState = {
-        wallets: [],
-        bankDetails: null,
-        usePidgin: false,
-      };
+      const defaultState = { wallets: [], bankDetails: null, usePidgin: false };
       await db.collection('users').doc(userId).set(defaultState);
       logger.info(`Initialized user state for ${userId}`);
       return defaultState;
@@ -41,7 +37,7 @@ async function getUserState(userId) {
     };
   } catch (error) {
     logger.error(`Failed to fetch user state for ${userId}: ${error.message}`);
-    return { wallets: [], bankDetails: null, usePidgin: false }; // Fallback
+    return { wallets: [], bankDetails: null, usePidgin: false };
   }
 }
 
@@ -58,33 +54,53 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    const [, amountStr, contractAddress, network] = ctx.message.text.split(' ');
-    const amount = parseFloat(amountStr);
-    if (!amount || isNaN(amount) || amount <= 0 || !contractAddress || !network) {
-      await ctx.reply('Invalid format. Use: /sell <amount> <contract_address> <network>');
+    // Split the command and trim whitespace
+    const args = ctx.message.text.split(' ').filter(arg => arg.trim() !== '');
+    if (args.length !== 4) {
+      await ctx.reply('Invalid format. Use: /sell <amount> <contract_address> <network>\nExample: /sell 10 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 Ethereum');
       return ctx.scene.leave();
     }
 
-    const chainIdMap = { Ethereum: 1, Base: 8453, Solana: 101 };
-    const normalizedNetwork = network.charAt(0).toUpperCase() + network.slice(1).toLowerCase();
+    const [, amountStr, contractAddress, network] = args;
+    const amount = parseFloat(amountStr);
+
+    // Validate amount
+    if (isNaN(amount) || amount <= 0) {
+      await ctx.reply('Invalid amount. Please provide a positive number.');
+      return ctx.scene.leave();
+    }
+
+    // Validate contract address (basic check for 0x prefix and length)
+    if (!contractAddress.startsWith('0x') || contractAddress.length !== 42) {
+      await ctx.reply('Invalid contract address. It should start with 0x and be 42 characters long.');
+      return ctx.scene.leave();
+    }
+
+    // Normalize and validate network (case-insensitive)
+    const chainIdMap = {
+      'ethereum': 1,
+      'base': 8453,
+      'solana': 101,
+    };
+    const normalizedNetwork = network.toLowerCase();
     const chainId = chainIdMap[normalizedNetwork];
     if (!chainId) {
-      await ctx.reply('Supported networks: Ethereum, Base, Solana.');
+      await ctx.reply('Supported networks: Ethereum, Base, Solana (case-insensitive).');
       return ctx.scene.leave();
     }
 
+    // Validate token with Relay
     let token;
     try {
       const response = await axios.post(
         'https://api.relay.link/currencies/v1',
         { chainIds: [chainId], address: contractAddress, defaultList: true, verified: true },
-        { headers: { 'Content-Type': 'application/json' }, timeout: 5000 } // 5s timeout
+        { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
       );
       const currencies = response.data[0];
       token = currencies && currencies.length > 0 ? currencies[0] : null;
     } catch (error) {
       logger.error(`Relay API error for user ${userId}: ${error.message}`);
-      // Fallback: Assume USDC if address matches known USDC contract
       if (contractAddress.toLowerCase() === '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48' && chainId === 1) {
         token = { symbol: 'USDC', decimals: 6, name: 'USD Coin', address: contractAddress };
       } else {
@@ -103,15 +119,15 @@ const sellScene = new Scenes.WizardScene(
       amount: (amount * 10 ** token.decimals).toString(),
       tokenAddress: token.address,
       chainId,
-      network: normalizedNetwork,
+      network: normalizedNetwork.charAt(0).toUpperCase() + normalizedNetwork.slice(1),
       symbol: token.symbol,
       decimals: token.decimals,
     };
 
     const userState = await getUserState(userId);
     const msg = userState.usePidgin
-      ? `Step 1/3: You wan sell ${amount} ${token.symbol} (${normalizedNetwork}). Correct?`
-      : `Step 1/3: Sell ${amount} ${token.symbol} (${normalizedNetwork}). Confirm?`;
+      ? `Step 1/3: You wan sell ${amount} ${token.symbol} (${ctx.wizard.state.network}). Correct?`
+      : `Step 1/3: Sell ${amount} ${token.symbol} (${ctx.wizard.state.network}). Confirm?`;
     await ctx.reply(msg, Markup.inlineKeyboard([
       [Markup.button.callback('✅ Yes', 'confirm_token')],
       [Markup.button.callback('❌ No', 'cancel_sell')],
@@ -334,12 +350,12 @@ async function generateBlockradarAddress() {
     return address;
   } catch (error) {
     logger.error(`Failed to generate Blockradar address: ${error.message}`);
-    return '0xFallbackBlockradarAddress'; // Dummy fallback
+    return '0xFallbackBlockradarAddress';
   }
 }
 
 // Export
 module.exports = {
   sellScene,
-  setup: () => {}, // Empty setup as all logic is self-contained
+  setup: () => {},
 };
