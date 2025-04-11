@@ -1,3 +1,65 @@
+const { Scenes, Markup } = require('telegraf');
+const axios = require('axios');
+const admin = require('firebase-admin');
+const winston = require('winston');
+
+// Logger setup (assuming it's global or imported)
+const logger = winston.createLogger({
+  level: 'info',
+  format: winston.format.combine(
+    winston.format.timestamp(),
+    winston.format.printf(({ timestamp, level, message }) => `[${timestamp}] ${level.toUpperCase()}: ${message}`)
+  ),
+  transports: [
+    new winston.transports.Console(),
+    new winston.transports.File({ filename: 'bot.log', maxsize: 5242880, maxFiles: 5 }),
+  ],
+});
+
+// Firebase setup (assuming db is initialized globally)
+const db = admin.firestore();
+
+// External dependencies (assuming these are defined elsewhere)
+const networkMap = {
+  'base': 8453,
+  'polygon': 137,
+  'bnb': 56,
+};
+
+const chains = {
+  base: { chainId: 8453, name: 'Base' },
+  polygon: { chainId: 137, name: 'Polygon' },
+  bnb: { chainId: 56, name: 'BNB Chain' },
+};
+
+// Placeholder for getUserState (assuming it's imported or global)
+async function getUserState(userId) {
+  try {
+    const userDoc = await db.collection('users').doc(userId).get();
+    if (!userDoc.exists) {
+      const defaultState = { wallets: [], bankDetails: null, usePidgin: false };
+      await db.collection('users').doc(userId).set(defaultState);
+      logger.info(`Initialized user state for ${userId}`);
+      return defaultState;
+    }
+    const data = userDoc.data();
+    return {
+      wallets: data.wallets || [],
+      bankDetails: data.bankDetails || null,
+      usePidgin: data.usePidgin || false,
+    };
+  } catch (error) {
+    logger.error(`Failed to fetch user state for ${userId}: ${error.message}`);
+    return { wallets: [], bankDetails: null, usePidgin: false };
+  }
+}
+
+// Placeholder for generateReferenceId
+function generateReferenceId() {
+  return `${Date.now()}-${Math.random().toString(36).slice(2, 11)}`;
+}
+
+// Sell Scene
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // Step 1: Validate /sell input and token
@@ -11,7 +73,11 @@ const sellScene = new Scenes.WizardScene(
       const usage = userState.usePidgin
         ? 'Usage: /sell <amount> <currency or address> <network>\nE.g., /sell 10 USDC base or /sell 10 0x833589f... base'
         : 'Usage: /sell <amount> <currency or address> <network>\nExample: /sell 10 USDC base or /sell 10 0x833589f... base';
-      await ctx.replyWithMarkdown(usage);
+      try {
+        await ctx.replyWithMarkdown(usage);
+      } catch (error) {
+        logger.error(`Failed to send usage message for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -21,7 +87,11 @@ const sellScene = new Scenes.WizardScene(
       const usage = userState.usePidgin
         ? 'Usage: /sell <amount> <currency or address> <network>\nE.g., /sell 10 USDC base or /sell 10 0x833589f... base'
         : 'Usage: /sell <amount> <currency or address> <network>\nExample: /sell 10 USDC base or /sell 10 0x833589f... base';
-      await ctx.replyWithMarkdown(usage);
+      try {
+        await ctx.replyWithMarkdown(usage);
+      } catch (error) {
+        logger.error(`Failed to send usage message for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -32,7 +102,11 @@ const sellScene = new Scenes.WizardScene(
       const error = userState.usePidgin
         ? '❌ Amount, currency, or network no correct o. Try again.'
         : '❌ Invalid amount, currency, or network. Please try again.';
-      await ctx.replyWithMarkdown(error);
+      try {
+        await ctx.replyWithMarkdown(error);
+      } catch (error) {
+        logger.error(`Failed to send error message for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -41,7 +115,11 @@ const sellScene = new Scenes.WizardScene(
       const error = userState.usePidgin
         ? 'Network no dey o. We support: base, polygon, bnb'
         : 'Invalid network. Supported: base, polygon, bnb';
-      await ctx.replyWithMarkdown(error);
+      try {
+        await ctx.replyWithMarkdown(error);
+      } catch (error) {
+        logger.error(`Failed to send network error for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -56,15 +134,26 @@ const sellScene = new Scenes.WizardScene(
       logger.info(`Relay API response for user ${userId}: ${JSON.stringify(currencyRes.data)}`);
     } catch (err) {
       logger.error(`Relay currency validation failed for ${caOrTerm} on ${network}: ${err.message}`);
-      await ctx.replyWithMarkdown(userState.usePidgin ? '❌ Wahala dey o. Currency or address check fail. Try again.' : '❌ Error validating currency or address. Please try again.');
+      const error = userState.usePidgin
+        ? '❌ Wahala dey o. Currency or address check fail. Try again.'
+        : '❌ Error validating currency or address. Please try again.';
+      try {
+        await ctx.replyWithMarkdown(error);
+      } catch (error) {
+        logger.error(`Failed to send Relay error for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
-    if (!currencyRes.data[0]?.length || currencyRes.data[0][0].chainId !== chainId) {
+    if (!currencyRes.data?.[0]?.length || currencyRes.data[0][0].chainId !== chainId) {
       const error = userState.usePidgin
         ? `❌ ${caOrTerm} no dey for ${network}. Check am well o.`
         : `❌ ${caOrTerm} not found or invalid on ${network}. Please check your input.`;
-      await ctx.replyWithMarkdown(error);
+      try {
+        await ctx.replyWithMarkdown(error);
+      } catch (error) {
+        logger.error(`Failed to send token error for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -98,7 +187,11 @@ const sellScene = new Scenes.WizardScene(
       return ctx.wizard.next();
     } catch (error) {
       logger.error(`Failed to send confirmation for user ${userId}: ${error.message}`);
-      await ctx.reply('Error sending confirmation. Try again.');
+      try {
+        await ctx.reply('Error sending confirmation. Try again.');
+      } catch (err) {
+        logger.error(`Failed to send fallback message for user ${userId}: ${err.message}`);
+      }
       return ctx.scene.leave();
     }
   },
@@ -111,7 +204,11 @@ const sellScene = new Scenes.WizardScene(
     // Validate wizard state
     if (!ctx.wizard.state.data?.userId || !ctx.wizard.state.data?.amount || !ctx.wizard.state.data?.ca) {
       logger.error(`Invalid wizard state for user ${userId}: ${JSON.stringify(ctx.wizard.state.data)}`);
-      await ctx.reply('Session expired or invalid. Please start over with /sell.');
+      try {
+        await ctx.reply('Session expired or invalid. Please start over with /sell.');
+      } catch (error) {
+        logger.error(`Failed to send state error for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -121,33 +218,53 @@ const sellScene = new Scenes.WizardScene(
       const msg = userState.usePidgin
         ? 'Oga, *click* di "Yes" or "No" button wey I send o!'
         : 'Please *click* the "Yes" or "No" button I sent!';
-      await ctx.replyWithMarkdown(msg);
+      try {
+        await ctx.replyWithMarkdown(msg);
+      } catch (error) {
+        logger.error(`Failed to send typed input prompt for user ${userId}: ${error.message}`);
+      }
       return; // Stay in step 2
     }
 
     const action = ctx.callbackQuery?.data;
     if (!action) {
       logger.warn(`No callbackQuery for user ${userId} in step 2`);
-      await ctx.reply('Please confirm or cancel the token selection.');
+      try {
+        await ctx.reply('Please confirm or cancel the token selection.');
+      } catch (error) {
+        logger.error(`Failed to send no-callback prompt for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
     const userState = await getUserState(ctx.wizard.state.data.userId);
     if (action === 'no') {
       try {
-        await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel. Need help? Chat us or try /sell again.' : 'Sell cancelled. Need help? Contact us or retry with /sell.', { parse_mode: 'Markdown' });
+        await ctx.editMessageText(
+          userState.usePidgin ? 'Sell don cancel. Need help? Chat us or try /sell again.' : 'Sell cancelled. Need help? Contact us or retry with /sell.',
+          { parse_mode: 'Markdown' }
+        );
         await ctx.answerCbQuery();
+        logger.info(`User ${userId} cancelled sell`);
         return ctx.scene.leave();
       } catch (error) {
-        logger.error(`Failed to edit message for user ${userId}: ${error.message}`);
-        await ctx.reply('Sell cancelled.');
+        logger.error(`Failed to edit cancel message for user ${userId}: ${error.message}`);
+        try {
+          await ctx.reply('Sell cancelled.');
+        } catch (err) {
+          logger.error(`Failed to send fallback cancel message for user ${userId}: ${err.message}`);
+        }
         return ctx.scene.leave();
       }
     }
 
     if (action !== 'yes') {
       logger.warn(`Unexpected callback ${action} for user ${userId}`);
-      await ctx.reply('Unexpected action. Use /sell to start over.');
+      try {
+        await ctx.reply('Unexpected action. Use /sell to start over.');
+      } catch (error) {
+        logger.error(`Failed to send unexpected action message for user ${userId}: ${error.message}`);
+      }
       await ctx.answerCbQuery();
       return ctx.scene.leave();
     }
@@ -175,12 +292,16 @@ const sellScene = new Scenes.WizardScene(
       logger.info(`User ${userId} shown bank options`);
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Failed to edit message for user ${userId}: ${error.message}`);
-      await ctx.reply('Error showing bank options. Try again.');
+      logger.error(`Failed to edit bank prompt for user ${userId}: ${error.message}`);
+      try {
+        await ctx.reply('Error showing bank options. Try again.');
+      } catch (err) {
+        logger.error(`Failed to send fallback bank error for user ${userId}: ${err.message}`);
+      }
       return ctx.scene.leave();
     }
   },
-  // Step 3: Finalize Transaction
+  // Step 3: Finalize Transaction and Privy Wallet Connection
   async (ctx) => {
     const userId = ctx.from?.id.toString() || ctx.wizard.state.data?.userId;
     logger.info(`User ${userId} at step 3, wizard state: ${JSON.stringify(ctx.wizard.state.data)}`);
@@ -189,7 +310,11 @@ const sellScene = new Scenes.WizardScene(
     // Validate wizard state
     if (!ctx.wizard.state.data?.userId || !ctx.wizard.state.data?.amount || !ctx.wizard.state.data?.ca) {
       logger.error(`Invalid wizard state for user ${userId}: ${JSON.stringify(ctx.wizard.state.data)}`);
-      await ctx.reply('Session expired or invalid. Please start over with /sell.');
+      try {
+        await ctx.reply('Session expired or invalid. Please start over with /sell.');
+      } catch (error) {
+        logger.error(`Failed to send state error for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -199,14 +324,22 @@ const sellScene = new Scenes.WizardScene(
       const msg = userState.usePidgin
         ? 'Oga, *click* di "Use Existing" or "Link New" button o!'
         : 'Please *click* the "Use Existing" or "Link New" button!';
-      await ctx.replyWithMarkdown(msg);
+      try {
+        await ctx.replyWithMarkdown(msg);
+      } catch (error) {
+        logger.error(`Failed to send typed input prompt for user ${userId}: ${error.message}`);
+      }
       return; // Stay in step 3
     }
 
     const action = ctx.callbackQuery?.data;
     if (!action) {
       logger.warn(`No callbackQuery for user ${userId} in step 3`);
-      await ctx.reply('Please select a bank option.');
+      try {
+        await ctx.reply('Please select a bank option.');
+      } catch (error) {
+        logger.error(`Failed to send no-callback prompt for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -221,13 +354,25 @@ const sellScene = new Scenes.WizardScene(
       }
     } else if (action === 'link_new') {
       logger.info(`User ${userId} chose to link new bank`);
-      await ctx.answerCbQuery();
+      try {
+        await ctx.answerCbQuery();
+      } catch (error) {
+        logger.error(`Failed to answer callback for user ${userId}: ${error.message}`);
+      }
       ctx.wizard.state.tempBank = true;
       return ctx.scene.enter('bank_linking_scene_temp', { sellData: ctx.wizard.state.data });
     } else {
       logger.warn(`Unexpected callback ${action} for user ${userId}`);
-      await ctx.reply('Unexpected action. Use /sell to start over.');
-      await ctx.answerCbQuery();
+      try {
+        await ctx.reply('Unexpected action. Use /sell to start over.');
+      } catch (error) {
+        logger.error(`Failed to send unexpected action message for user ${userId}: ${error.message}`);
+      }
+      try {
+        await ctx.answerCbQuery();
+      } catch (error) {
+        logger.error(`Failed to answer callback for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -240,7 +385,12 @@ const sellScene = new Scenes.WizardScene(
     }
 
     if (!blockradarAddress) {
-      await ctx.replyWithMarkdown(userState.usePidgin ? 'Bank no set o. Try again.' : 'Bank selection incomplete. Please retry.');
+      const error = userState.usePidgin ? 'Bank no set o. Try again.' : 'Bank selection incomplete. Please retry.';
+      try {
+        await ctx.replyWithMarkdown(error);
+      } catch (error) {
+        logger.error(`Failed to send bank error for user ${userId}: ${error.message}`);
+      }
       return ctx.scene.leave();
     }
 
@@ -262,11 +412,15 @@ const sellScene = new Scenes.WizardScene(
       logger.info(`Transaction created for user ${userId}: ${referenceId}`);
     } catch (error) {
       logger.error(`Failed to save transaction for user ${userId}: ${error.message}`);
-      await ctx.reply('Error saving transaction. Try again.');
+      try {
+        await ctx.reply('Error saving transaction. Try again.');
+      } catch (err) {
+        logger.error(`Failed to send transaction error for user ${userId}: ${err.message}`);
+      }
       return ctx.scene.leave();
     }
 
-    // Assume Privy wallet connection happens here
+    // Privy wallet connection
     const privyConnectUrl = `${process.env.WEBAPP_URL}/connect?userId=${userId}&referenceId=${referenceId}`;
     const msg = userState.usePidgin
       ? `Transaction don set! *Click* di button to connect your wallet with Privy o.`
@@ -284,7 +438,11 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     } catch (error) {
       logger.error(`Failed to prompt Privy connect for user ${userId}: ${error.message}`);
-      await ctx.reply('Error connecting wallet. Try again.');
+      try {
+        await ctx.reply('Error connecting wallet. Try again.');
+      } catch (err) {
+        logger.error(`Failed to send Privy error for user ${userId}: ${err.message}`);
+      }
       return ctx.scene.leave();
     }
   }
@@ -294,30 +452,51 @@ const sellScene = new Scenes.WizardScene(
 sellScene.action('yes', async (ctx) => {
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} confirmed token`);
-  await ctx.answerCbQuery();
-  // No ctx.wizard.next() here; step 1 already advances
+  try {
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Failed to answer yes callback for user ${userId}: ${error.message}`);
+  }
+  // No ctx.wizard.next(); step 1 handles advancement
 });
 
 sellScene.action('no', async (ctx) => {
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} cancelled sell`);
   const userState = await getUserState(userId);
-  await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel.' : 'Sell cancelled.', { parse_mode: 'Markdown' });
-  await ctx.answerCbQuery();
+  try {
+    await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel.' : 'Sell cancelled.', { parse_mode: 'Markdown' });
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Failed to handle no action for user ${userId}: ${error.message}`);
+    try {
+      await ctx.reply('Sell cancelled.');
+    } catch (err) {
+      logger.error(`Failed to send fallback cancel message for user ${userId}: ${err.message}`);
+    }
+  }
   return ctx.scene.leave();
 });
 
 sellScene.action('use_existing', async (ctx) => {
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} selected existing bank`);
-  await ctx.answerCbQuery();
+  try {
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Failed to answer use_existing callback for user ${userId}: ${error.message}`);
+  }
   return ctx.wizard.next();
 });
 
 sellScene.action('link_new', async (ctx) => {
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} chose new bank`);
-  await ctx.answerCbQuery();
+  try {
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Failed to answer link_new callback for user ${userId}: ${error.message}`);
+  }
   return ctx.scene.enter('bank_linking_scene_temp', { sellData: ctx.wizard.state.data });
 });
 
@@ -325,8 +504,17 @@ sellScene.action('cancel', async (ctx) => {
   const userId = ctx.from.id.toString();
   logger.info(`User ${userId} cancelled sell`);
   const userState = await getUserState(userId);
-  await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel.' : 'Sell cancelled.', { parse_mode: 'Markdown' });
-  await ctx.answerCbQuery();
+  try {
+    await ctx.editMessageText(userState.usePidgin ? 'Sell don cancel.' : 'Sell cancelled.', { parse_mode: 'Markdown' });
+    await ctx.answerCbQuery();
+  } catch (error) {
+    logger.error(`Failed to handle cancel action for user ${userId}: ${error.message}`);
+    try {
+      await ctx.reply('Sell cancelled.');
+    } catch (err) {
+      logger.error(`Failed to send fallback cancel message for user ${userId}: ${err.message}`);
+    }
+  }
   return ctx.scene.leave();
 });
 
@@ -338,6 +526,22 @@ sellScene.enter(async (ctx) => {
     ctx.wizard.state.data = ctx.scene.state.sellData;
     ctx.wizard.state.tempBank = true;
     ctx.wizard.cursor = 2; // Resume at step 3
-    return ctx.wizard.steps[ctx.wizard.cursor](ctx);
+    try {
+      return await ctx.wizard.steps[ctx.wizard.cursor](ctx);
+    } catch (error) {
+      logger.error(`Failed to resume sell_scene for user ${userId}: ${error.message}`);
+      try {
+        await ctx.reply('Error resuming transaction. Please start over with /sell.');
+      } catch (err) {
+        logger.error(`Failed to send resume error for user ${userId}: ${err.message}`);
+      }
+      return ctx.scene.leave();
+    }
   }
 });
+
+// Export
+module.exports = {
+  sellScene,
+  setup: () => {},
+};
