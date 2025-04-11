@@ -1,144 +1,203 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
 import axios from 'axios';
 import { ethers } from 'ethers';
-import { useSearchParams } from 'react-router-dom';
+import './ConnectWalletApp.css'; // Optional styling
 
-function ConnectWalletApp() {
+const ERC20_ABI = [
+  'function approve(address spender, uint256 amount) public returns (bool)',
+  'function transfer(address to, uint256 amount) public returns (bool)',
+  'function allowance(address owner, address spender) public view returns (uint256)',
+  'function balanceOf(address account) public view returns (uint256)',
+];
+
+const ConnectWalletApp = () => {
   return (
     <PrivyProvider
-      appId={process.env.REACT_APP_PRIVY_APP_ID} // Use REACT_APP_ prefix
+      appId={process.env.REACT_APP_PRIVY_APP_ID} // Ensure this is in .env
       config={{
-        loginMethods: ['wallet', 'email', 'sms'],
+        loginMethods: ['wallet', 'email'],
         appearance: {
           theme: 'light',
-          accentColor: '#5288F0',
-          logo: 'https://your-logo-url.com/logo.png' // Replace with your logo if desired
-        }
+          accentColor: '#5288F9',
+        },
       }}
     >
-      <ConnectWallet />
+      <WalletConnector />
     </PrivyProvider>
   );
-}
+};
 
-function ConnectWallet() {
+const WalletConnector = () => {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
-  const [searchParams] = useSearchParams();
-  const userId = searchParams.get('userId');
-  const session = searchParams.get('session');
-  const [status, setStatus] = useState('Connecting wallet...');
+  const [session, setSession] = useState(null);
+  const [error, setError] = useState('');
+  const [status, setStatus] = useState('Loading session...');
+  const [userId, setUserId] = useState('');
+  const [sessionId, setSessionId] = useState('');
 
+  // Extract userId and session from URL params
   useEffect(() => {
-    if (ready && !authenticated) {
-      login();
+    const urlParams = new URLSearchParams(window.location.search);
+    const userIdParam = urlParams.get('userId');
+    const sessionParam = urlParams.get('session');
+    if (userIdParam && sessionParam) {
+      setUserId(userIdParam);
+      setSessionId(sessionParam);
+      fetchSession(userIdParam, sessionParam);
+    } else {
+      setError('Missing userId or session in URL');
+      setStatus('');
     }
-  }, [ready, authenticated, login]);
+  }, []);
 
+  // Fetch session data from bot
+  const fetchSession = async (userId, session) => {
+    try {
+      const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/session`, {
+        params: { userId, session },
+      });
+      setSession(response.data);
+      setStatus(authenticated ? 'Wallet connected, awaiting action...' : 'Please connect your wallet');
+    } catch (err) {
+      setError('Failed to fetch session: ' + err.message);
+      setStatus('');
+      notifyError(userId, 'Failed to fetch session data');
+    }
+  };
+
+  // Handle wallet connection and log progress
   useEffect(() => {
-    if (ready && authenticated && wallets.length > 0) {
-      handleWalletConnected();
+    if (ready && authenticated && session && wallets.length > 0) {
+      handleWalletConnection();
     }
-  }, [ready, authenticated, wallets]);
+  }, [ready, authenticated, session, wallets]);
 
-  const handleWalletConnected = async () => {
-    const wallet = wallets[0];
-    const provider = await wallet.getEthereumProvider();
-    const ethersProvider = new ethers.providers.Web3Provider(provider);
-    const signer = ethersProvider.getSigner();
-    const walletAddress = wallet.address;
+  const handleWalletConnection = async () => {
+    const wallet = wallets[0]; // Use the first connected wallet
+    setStatus('Wallet connected: ' + wallet.address);
+    console.log('Wallet connected:', wallet.address); // Debug log
 
     try {
-      setStatus('Wallet connected! Fetching transaction details...');
-
-      await axios.post('https://directpay.onrender.com/webhook/wallet-connected', {
+      // Notify bot of wallet connection
+      await axios.post(`${process.env.REACT_APP_API_URL}/webhook/wallet-connected`, {
         userId,
-        walletAddress
+        walletAddress: wallet.address,
       });
+      setStatus('Wallet connected successfully. Proceed with transaction?');
 
-      const { data: sessionData } = await axios.get(`https://directpay.onrender.com/api/session?userId=${userId}`);
-      if (!sessionData) throw new Error('No session data found');
-      const { amountInWei: amount, token, walletAddress: blockradarWallet } = sessionData;
+      // Pause here for user confirmation before proceeding
+    } catch (err) {
+      setError('Wallet connection failed: ' + err.message);
+      setStatus('');
+      notifyError(userId, 'Wallet connection failed: ' + err.message);
+    }
+  };
 
-      const currentChainId = parseInt(await wallet.getChainId(), 16);
-      if (currentChainId !== token.chainId) {
-        setStatus(`Switching to chain ${token.chainId}...`);
-        await wallet.switchChain(token.chainId);
+  // Separate transaction flow, triggered manually
+  const handleTransactionFlow = async () => {
+    const wallet = wallets[0];
+    setStatus('Starting transaction...');
+    console.log('Starting transaction flow...'); // Debug log
+
+    try {
+      const provider = await wallet.getEthersProvider();
+      const network = await provider.getNetwork();
+      console.log('Current network:', network.chainId); // Debug log
+
+      if (network.chainId !== session.chainId) {
+        setStatus('Switching network...');
+        await wallet.switchChain(session.chainId);
+        setStatus('Network switched, approving token...');
       }
 
-      setStatus('Fetching quote from Relay...');
-      const quoteResponse = await axios.post('https://api.relay.link/quote/v1', {
-        user: walletAddress,
-        originChainId: token.chainId,
-        originCurrency: token.address,
-        destinationChainId: 8453,
-        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
-        tradeType: 'EXACT_INPUT',
-        recipient: blockradarWallet,
-        amount: amount,
-        refundTo: walletAddress
-      });
-      const quote = quoteResponse.data;
+      const signer = provider.getSigner();
+      const tokenContract = new ethers.Contract(session.asset, ERC20_ABI, signer);
+      const allowance = await tokenContract.allowance(wallet.address, session.blockradarAddress);
+      const amountBN = ethers.BigNumber.from(session.amount);
 
-      const depositStep = quote.steps.find(step => step.id === 'deposit');
-      if (!depositStep) throw new Error('No deposit step in quote');
-      const txData = depositStep.items[0].data;
-
-      if (token.address !== '0x0000000000000000000000000000000000000000') {
-        setStatus('Please approve the token spend in your wallet...');
-        const tokenContract = new ethers.Contract(
-          token.address,
-          ['function approve(address spender, uint256 amount) returns (bool)'],
-          signer
-        );
-        const approveTx = await tokenContract.approve(txData.to, amount);
-        setStatus('Waiting for approval confirmation...');
-        const approveReceipt = await approveTx.wait();
-        console.log('Approval successful:', approveReceipt.transactionHash);
+      if (allowance.lt(amountBN)) {
+        setStatus('Approving token...');
+        const approveTx = await tokenContract.approve(session.blockradarAddress, amountBN);
+        await approveTx.wait();
+        await axios.post(`${process.env.REACT_APP_API_URL}/webhook/approval-confirmed`, {
+          userId,
+          walletAddress: wallet.address,
+          txHash: approveTx.hash,
+        });
+        setStatus('Approval confirmed, depositing...');
       } else {
-        setStatus('No approval needed for native token.');
+        setStatus('Allowance sufficient, depositing...');
       }
 
-      setStatus('Please confirm the deposit transaction in your wallet...');
-      const txResponse = await signer.sendTransaction({
-        from: walletAddress,
-        to: txData.to,
-        data: txData.data,
-        value: txData.value ? ethers.BigNumber.from(txData.value) : undefined,
-        chainId: txData.chainId,
-        gasLimit: txData.gas ? ethers.BigNumber.from(txData.gas) : undefined,
-        maxFeePerGas: txData.maxFeePerGas ? ethers.BigNumber.from(txData.maxFeePerGas) : undefined,
-        maxPriorityFeePerGas: txData.maxPriorityFeePerGas ? ethers.BigNumber.from(txData.maxPriorityFeePerGas) : undefined
-      });
-      setStatus('Waiting for deposit confirmation...');
-      const depositReceipt = await txResponse.wait();
-      console.log('Deposit successful:', depositReceipt.transactionHash);
+      const balance = await tokenContract.balanceOf(wallet.address);
+      if (balance.lt(amountBN)) {
+        throw new Error('Insufficient balance for transfer');
+      }
 
-      await axios.post('https://directpay.onrender.com/webhook/deposit-signed', {
+      const transferTx = await tokenContract.transfer(session.blockradarAddress, amountBN);
+      await transferTx.wait();
+
+      await axios.post(`${process.env.REACT_APP_API_URL}/webhook/deposit-confirmed`, {
         userId,
-        txHash: depositReceipt.transactionHash
+        walletAddress: wallet.address,
+        txHash: transferTx.hash,
+        amount: ethers.utils.formatUnits(session.amount, session.decimals),
+        chainId: session.chainId,
       });
+      setStatus('Deposit confirmed! Funds are being processed.');
+    } catch (err) {
+      setError('Transaction failed: ' + err.message);
+      setStatus('');
+      notifyError(userId, 'Transaction failed: ' + err.message);
+      console.error('Transaction error:', err); // Debug log
+    }
+  };
 
-      setStatus('Deposit completed! Return to Telegram to check your payout status.');
-      alert('Deposit completed! Return to Telegram to check your payout status.');
-      logout();
-    } catch (error) {
-      console.error('Error in wallet connection or signing:', error);
-      setStatus(`Error: ${error.message || 'Something went wrong.'}`);
-      alert(`Error: ${error.message || 'Something went wrong. Try again or check Telegram.'}`);
+  const notifyError = async (userId, message) => {
+    try {
+      await axios.post(`${process.env.REACT_APP_API_URL}/webhook/error`, {
+        userId,
+        error: message,
+      });
+    } catch (err) {
+      console.error('Failed to notify bot of error:', err);
     }
   };
 
   return (
-    <div style={{ textAlign: 'center', padding: '20px' }}>
-      <h1>Connect Your Wallet</h1>
-      <p>{status}</p>
-      {ready && authenticated && wallets.length > 0 && (
-        <p>Follow the prompts in your wallet to approve and deposit.</p>
+    <div className="connect-wallet-container">
+      <h1>DirectPay Wallet Connector</h1>
+      {!ready ? (
+        <p>Loading Privy...</p>
+      ) : !authenticated ? (
+        <div>
+          <p>{status}</p>
+          <button onClick={login}>Connect Wallet</button>
+          {error && <p className="error">{error}</p>}
+        </div>
+      ) : (
+        <div>
+          <p>Connected Wallet: {wallets[0]?.address}</p>
+          {session && (
+            <div>
+              <p>Token: {session.symbol} ({session.tokenName})</p>
+              <p>Amount: {ethers.utils.formatUnits(session.amount, session.decimals)} {session.symbol}</p>
+              <p>Network: {session.networkName}</p>
+              <p>Deposit to: {session.blockradarAddress}</p>
+            </div>
+          )}
+          <p>{status}</p>
+          {error && <p className="error">{error}</p>}
+          {status === 'Wallet connected successfully. Proceed with transaction?' && (
+            <button onClick={handleTransactionFlow}>Proceed</button>
+          )}
+          <button onClick={logout}>Disconnect Wallet</button>
+        </div>
       )}
     </div>
   );
-}
+};
 
 export default ConnectWalletApp;
