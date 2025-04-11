@@ -54,7 +54,6 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Split the command and trim whitespace
     const args = ctx.message.text.split(' ').filter(arg => arg.trim() !== '');
     if (args.length !== 4) {
       await ctx.reply('Invalid format. Use: /sell <amount> <contract_address> <network>\nExample: /sell 10 0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48 Ethereum');
@@ -64,24 +63,17 @@ const sellScene = new Scenes.WizardScene(
     const [, amountStr, contractAddress, network] = args;
     const amount = parseFloat(amountStr);
 
-    // Validate amount
     if (isNaN(amount) || amount <= 0) {
       await ctx.reply('Invalid amount. Please provide a positive number.');
       return ctx.scene.leave();
     }
 
-    // Validate contract address (basic check for 0x prefix and length)
     if (!contractAddress.startsWith('0x') || contractAddress.length !== 42) {
       await ctx.reply('Invalid contract address. It should start with 0x and be 42 characters long.');
       return ctx.scene.leave();
     }
 
-    // Normalize and validate network (case-insensitive)
-    const chainIdMap = {
-      'ethereum': 1,
-      'base': 8453,
-      'solana': 101,
-    };
+    const chainIdMap = { 'ethereum': 1, 'base': 8453, 'solana': 101 };
     const normalizedNetwork = network.toLowerCase();
     const chainId = chainIdMap[normalizedNetwork];
     if (!chainId) {
@@ -89,7 +81,6 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Validate token with Relay
     let token;
     try {
       const response = await axios.post(
@@ -97,6 +88,7 @@ const sellScene = new Scenes.WizardScene(
         { chainIds: [chainId], address: contractAddress, defaultList: true, verified: true },
         { headers: { 'Content-Type': 'application/json' }, timeout: 5000 }
       );
+      logger.info(`Relay API response for user ${userId}: ${JSON.stringify(response.data)}`);
       const currencies = response.data[0];
       token = currencies && currencies.length > 0 ? currencies[0] : null;
     } catch (error) {
@@ -128,21 +120,33 @@ const sellScene = new Scenes.WizardScene(
     const msg = userState.usePidgin
       ? `Step 1/3: You wan sell ${amount} ${token.symbol} (${ctx.wizard.state.network}). Correct?`
       : `Step 1/3: Sell ${amount} ${token.symbol} (${ctx.wizard.state.network}). Confirm?`;
-    await ctx.reply(msg, Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Yes', 'confirm_token')],
-      [Markup.button.callback('❌ No', 'cancel_sell')],
-    ]));
-    logger.info(`User ${userId} prompted for confirmation`);
-    return ctx.wizard.next();
+    try {
+      await ctx.reply(msg, Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes', 'confirm_token')],
+        [Markup.button.callback('❌ No', 'cancel_sell')],
+      ]));
+      logger.info(`User ${userId} prompted for confirmation`);
+      return ctx.wizard.next();
+    } catch (error) {
+      logger.error(`Failed to send confirmation message for user ${userId}: ${error.message}`);
+      await ctx.reply('Error sending confirmation. Try again.');
+      return ctx.scene.leave();
+    }
   },
   // Step 2: Bank Selection
   async (ctx) => {
-    const userId = ctx.wizard.state.userId;
+    const userId = ctx.wizard.state?.userId;
+    if (!userId) {
+      logger.error(`User ID missing in wizard state at step 2`);
+      await ctx.reply('Session error. Please start over with /sell.');
+      return ctx.scene.leave();
+    }
+
     logger.info(`User ${userId} at step 2, callback: ${JSON.stringify(ctx.callbackQuery)}`);
 
     if (!ctx.callbackQuery) {
       logger.warn(`No callbackQuery for user ${userId} in step 2`);
-      await ctx.reply('Please confirm or cancel.');
+      await ctx.reply('Please confirm or cancel the token selection.');
       return ctx.scene.leave();
     }
 
@@ -176,6 +180,7 @@ const sellScene = new Scenes.WizardScene(
         ];
 
     try {
+      // Fallback to reply if editMessageText fails
       await ctx.editMessageText(msg, {
         reply_markup: Markup.inlineKeyboard(buttons).reply_markup,
         parse_mode: 'Markdown',
@@ -185,13 +190,27 @@ const sellScene = new Scenes.WizardScene(
       return ctx.wizard.next();
     } catch (error) {
       logger.error(`Failed to edit message for user ${userId}: ${error.message}`);
-      await ctx.reply('Error showing bank options. Try again.');
-      return ctx.scene.leave();
+      try {
+        await ctx.reply(msg, Markup.inlineKeyboard(buttons));
+        await ctx.answerCbQuery();
+        logger.info(`User ${userId} shown bank options via reply (fallback)`);
+        return ctx.wizard.next();
+      } catch (fallbackError) {
+        logger.error(`Fallback reply failed for user ${userId}: ${fallbackError.message}`);
+        await ctx.reply('Error showing bank options. Try again.');
+        return ctx.scene.leave();
+      }
     }
   },
   // Step 3: Wallet Connection
   async (ctx) => {
-    const userId = ctx.wizard.state.userId;
+    const userId = ctx.wizard.state?.userId;
+    if (!userId) {
+      logger.error(`User ID missing in wizard state at step 3`);
+      await ctx.reply('Session error. Please start over with /sell.');
+      return ctx.scene.leave();
+    }
+
     logger.info(`User ${userId} at step 3, callback: ${JSON.stringify(ctx.callbackQuery)}`);
 
     if (!ctx.callbackQuery) {
@@ -314,8 +333,15 @@ sellScene.enter(async (ctx) => {
 // Action Handlers
 sellScene.action('confirm_token', async (ctx) => {
   logger.info(`User ${ctx.from.id} confirmed token`);
-  await ctx.answerCbQuery();
-  return ctx.wizard.next();
+  try {
+    await ctx.answerCbQuery();
+    logger.info(`User ${ctx.from.id} advancing to step 2`);
+    return ctx.wizard.next();
+  } catch (error) {
+    logger.error(`Error in confirm_token action for user ${ctx.from.id}: ${error.message}`);
+    await ctx.reply('Error confirming token. Try again.');
+    return ctx.scene.leave();
+  }
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
