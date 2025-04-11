@@ -1,94 +1,129 @@
 const { WizardScene, Markup } = require('telegraf');
 const admin = require('firebase-admin');
+const axios = require('axios');
 
 const db = admin.firestore();
 
 const sellScene = new WizardScene(
   'sell_scene',
-  // Step 1: Amount and Asset
+  // Step 1: Parse /sell command and verify asset
   async (ctx) => {
-    // Default user state if not fetched from Firestore
-    const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
-    const userState = userDoc.exists ? userDoc.data() : { usePidgin: false, lastSellAsset: 'USDC' };
-    const lastAsset = userState.lastSellAsset || 'USDC';
-    const msg = userState.usePidgin
-      ? `Step 1/4: How much ${lastAsset} you wan sell? Enter amount (e.g., 10):`
-      : `Step 1/4: How much ${lastAsset} do you want to sell? Enter amount (e.g., 10):`;
-    await ctx.reply(msg, Markup.inlineKeyboard([
-      [Markup.button.callback('Change Asset', 'change_asset')],
-      [Markup.button.callback('❌ Cancel', 'cancel_sell')]
-    ]));
+    if (!ctx.message || !ctx.message.text.startsWith('/sell')) {
+      await ctx.reply('Use: /sell <amount> <asset> <chain> (e.g., /sell 10 USDC Ethereum)');
+      return ctx.scene.leave();
+    }
+
+    const [, amountStr, asset, chain] = ctx.message.text.split(' ');
+    const amount = parseFloat(amountStr);
+    if (isNaN(amount) || amount <= 0 || !asset || !chain) {
+      await ctx.reply('Invalid input. Use: /sell <amount> <asset> <chain>');
+      return ctx.scene.leave();
+    }
+
+    ctx.wizard.state.data = { userId: ctx.from.id, amount: amount.toString() };
+    const chainIdMap = { Ethereum: 1, Base: 8453, Polygon: 137, BSC: 56 }; // Add more EVM chains as needed
+    const chainId = chainIdMap[chain];
+    if (!chainId) {
+      await ctx.reply('Unsupported chain. Supported: Ethereum, Base, Polygon, BSC');
+      return ctx.scene.leave();
+    }
+    ctx.wizard.state.data.chainId = chainId;
+    ctx.wizard.state.data.networkName = chain;
+
+    // Verify asset with Relay
+    try {
+      const response = await axios.post('https://api.relay.link/currencies/v1', {
+        chainIds: [chainId],
+        term: asset.toLowerCase(),
+        verified: true,
+        limit: 1,
+        includeAllChains: false,
+        useExternalSearch: true,
+        depositAddressOnly: true,
+      }, { headers: { 'Content-Type': 'application/json' } });
+
+      const currencies = response.data[0];
+      if (!currencies || currencies.length === 0) {
+        await ctx.reply(`No verified asset found for "${asset}" on ${chain}.`);
+        return ctx.scene.leave();
+      }
+
+      ctx.wizard.state.data.asset = currencies[0];
+      const { symbol, name, address } = ctx.wizard.state.data.asset;
+      await ctx.reply(
+        `Found asset:\nSymbol: ${symbol}\nName: ${name}\nAddress: ${address}\nConfirm this asset?`,
+        Markup.inlineKeyboard([
+          [Markup.button.callback('✅ Yes', 'confirm_asset')],
+          [Markup.button.callback('❌ No', 'cancel_sell')]
+        ])
+      );
+    } catch (err) {
+      await ctx.reply(`Error verifying asset: ${err.message}`);
+      return ctx.scene.leave();
+    }
     return ctx.wizard.next();
   },
-  // Step 2: Validate Amount and Select Network
+  // Step 2: Bank selection or linking
   async (ctx) => {
-    if (!ctx.message || !ctx.message.text) return ctx.reply('Please enter an amount.');
-    const amount = parseFloat(ctx.message.text);
-    if (isNaN(amount) || amount <= 0) {
-      return ctx.reply('Invalid amount. Try again:', Markup.inlineKeyboard([
+    if (!ctx.callbackQuery || ctx.callbackQuery.data === 'cancel_sell') {
+      await ctx.reply('Sell cancelled.');
+      return ctx.scene.leave();
+    }
+
+    const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
+    const userState = userDoc.exists ? userDoc.data() : { usePidgin: false };
+    const bankDetails = userState.bankDetails;
+
+    ctx.wizard.state.data.amountWei = ethers.utils.parseUnits(
+      ctx.wizard.state.data.amount,
+      ctx.wizard.state.data.asset.decimals
+    ).toString();
+
+    let msg = userState.usePidgin
+      ? `Step 2/3: You wan sell ${ctx.wizard.state.data.amount} ${ctx.wizard.state.data.asset.symbol} (${ctx.wizard.state.data.networkName}). `
+      : `Step 2/3: You’re selling ${ctx.wizard.state.data.amount} ${ctx.wizard.state.data.asset.symbol} (${ctx.wizard.state.data.networkName}). `;
+
+    if (bankDetails) {
+      msg += userState.usePidgin
+        ? `We go send cash to ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}. Use this bank?`
+        : `Funds will be sent to ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}. Use this bank?`;
+      ctx.wizard.state.data.bankDetails = bankDetails;
+      await ctx.reply(msg, Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes', 'confirm_bank')],
+        [Markup.button.callback('✏️ Link New Bank', 'add_bank')],
+        [Markup.button.callback('❌ Cancel', 'cancel_sell')]
+      ]));
+    } else {
+      msg += userState.usePidgin
+        ? 'You no get bank linked. Add one now?'
+        : 'No bank linked. Add one now?';
+      await ctx.reply(msg, Markup.inlineKeyboard([
+        [Markup.button.callback('✏️ Add Bank', 'add_bank')],
         [Markup.button.callback('❌ Cancel', 'cancel_sell')]
       ]));
     }
-
-    const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
-    const userState = userDoc.exists ? userDoc.data() : { usePidgin: false };
-    ctx.wizard.state.data = { userId: ctx.from.id, amount: (amount * 1e6).toString() }; // USDC has 6 decimals
-
-    const msg = userState.usePidgin
-      ? 'Step 2/4: Which network you dey use? Pick one:'
-      : 'Step 2/4: Which network are you using? Select one:';
-    await ctx.reply(msg, Markup.inlineKeyboard([
-      [Markup.button.callback('Solana', 'network_SOLANA')],
-      [Markup.button.callback('Ethereum', 'network_ETHEREUM')],
-      [Markup.button.callback('Base', 'network_BASE')],
-      [Markup.button.callback('❌ Cancel', 'cancel_sell')]
-    ]));
     return ctx.wizard.next();
   },
-  // Step 3: Bank Selection
+  // Step 3: Summary and wallet connect
   async (ctx) => {
-    if (!ctx.callbackQuery) return ctx.reply('Please select a network.');
-    const network = ctx.callbackQuery.data.split('_')[1];
-    const chainIdMap = { SOLANA: 101, ETHEREUM: 1, BASE: 8453 };
-    const assetMap = {
-      SOLANA: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC on Solana
-      ETHEREUM: '0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48', // USDC on Ethereum
-      BASE: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
-    };
-    ctx.wizard.state.data.chainId = chainIdMap[network];
-    ctx.wizard.state.data.asset = assetMap[network];
-    ctx.wizard.state.data.networkName = network;
-
-    const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
-    const userState = userDoc.exists ? userDoc.data() : { usePidgin: false };
-    const msg = userState.usePidgin
-      ? 'Step 3/4: Where you wan send the cash? Pick bank or add new one:'
-      : 'Step 3/4: Where do you want the cash sent? Select or add a bank:';
-    await ctx.reply(msg, Markup.inlineKeyboard([
-      [Markup.button.callback('Select Bank', 'select_bank')],
-      [Markup.button.callback('Add New Bank', 'add_bank')],
-      [Markup.button.callback('❌ Cancel', 'cancel_sell')]
-    ]));
-    return ctx.wizard.next();
-  },
-  // Step 4: Summary and Connect Wallet
-  async (ctx) => {
-    if (!ctx.callbackQuery) return ctx.reply('Please select a bank option.');
+    if (!ctx.callbackQuery) return ctx.reply('Please select an option.');
     if (ctx.callbackQuery.data === 'add_bank') {
       return ctx.scene.enter('bank_linking_scene_temp', { fromSell: true });
+    }
+    if (ctx.callbackQuery.data === 'cancel_sell') {
+      await ctx.reply('Sell cancelled.');
+      return ctx.scene.leave();
     }
 
     const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
     const userState = userDoc.exists ? userDoc.data() : { usePidgin: false };
-    const bankDetails = userState.bankDetails || { bankName: 'Test Bank', accountNumber: '1234567890' }; // Default if not set
-    ctx.wizard.state.data.bankDetails = bankDetails;
+    const bankDetails = ctx.wizard.state.data.bankDetails;
 
-    // Store session in Firestore
     const referenceId = `${ctx.wizard.state.data.userId}-${Date.now()}`;
     await db.collection('sessions').doc(referenceId).set({
       userId: ctx.wizard.state.data.userId,
-      amount: ctx.wizard.state.data.amount, // In wei (6 decimals for USDC)
-      asset: ctx.wizard.state.data.asset,
+      amount: ctx.wizard.state.data.amountWei,
+      asset: ctx.wizard.state.data.asset.address,
       chainId: ctx.wizard.state.data.chainId,
       bankDetails,
       status: 'pending',
@@ -96,13 +131,13 @@ const sellScene = new WizardScene(
     });
 
     const msg = userState.usePidgin
-      ? `Step 4/4: Summary:\nSell: ${ctx.wizard.state.data.amount / 1e6} USDC (${ctx.wizard.state.data.networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`
-      : `Step 4/4: Summary:\nSell: ${ctx.wizard.state.data.amount / 1e6} USDC (${ctx.wizard.state.data.networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`;
+      ? `Step 3/3: Summary:\nSell: ${ctx.wizard.state.data.amount} ${ctx.wizard.state.data.asset.symbol} (${ctx.wizard.state.data.networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`
+      : `Step 3/3: Summary:\nSell: ${ctx.wizard.state.data.amount} ${ctx.wizard.state.data.asset.symbol} (${ctx.wizard.state.data.networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`;
     await ctx.reply(msg, Markup.inlineKeyboard([
       [Markup.button.url('Connect Wallet', `${process.env.WEBAPP_URL}/connect?userId=${ctx.wizard.state.data.userId}&session=${referenceId}`)],
       [Markup.button.callback('❌ Cancel', 'cancel_sell')]
     ]));
-    return ctx.scene.leave(); // Exit scene, frontend takes over
+    return ctx.scene.leave();
   }
 );
 
@@ -116,11 +151,18 @@ sellScene.enter(async (ctx) => {
     const userDoc = await db.collection('users').doc(ctx.from.id.toString()).get();
     const userState = userDoc.exists ? userDoc.data() : { usePidgin: false };
     const { amount, networkName, bankDetails, asset, chainId } = ctx.wizard.state.data;
+
+    await db.collection('users').doc(ctx.from.id.toString()).set(
+      { bankDetails },
+      { merge: true }
+    );
+
+    const amountWei = ethers.utils.parseUnits(amount, asset.decimals).toString();
     const referenceId = `${ctx.wizard.state.data.userId}-${Date.now()}`;
     await db.collection('sessions').doc(referenceId).set({
       userId: ctx.wizard.state.data.userId,
-      amount,
-      asset,
+      amount: amountWei,
+      asset: asset.address,
       chainId,
       bankDetails,
       status: 'pending',
@@ -128,8 +170,8 @@ sellScene.enter(async (ctx) => {
     });
 
     const msg = userState.usePidgin
-      ? `Step 4/4: Summary:\nSell: ${amount / 1e6} USDC (${networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`
-      : `Step 4/4: Summary:\nSell: ${amount / 1e6} USDC (${networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`;
+      ? `Step 3/3: Summary:\nSell: ${amount} ${asset.symbol} (${networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`
+      : `Step 3/3: Summary:\nSell: ${amount} ${asset.symbol} (${networkName})\nBank: ${bankDetails.bankName} - ****${bankDetails.accountNumber.slice(-4)}\nConnect your wallet to continue:`;
     await ctx.reply(msg, Markup.inlineKeyboard([
       [Markup.button.url('Connect Wallet', `${process.env.WEBAPP_URL}/connect?userId=${ctx.wizard.state.data.userId}&session=${referenceId}`)],
       [Markup.button.callback('❌ Cancel', 'cancel_sell')]
@@ -138,38 +180,12 @@ sellScene.enter(async (ctx) => {
   }
 });
 
-// Cancel action
+// Actions
+sellScene.action('confirm_asset', (ctx) => ctx.wizard.next());
+sellScene.action('confirm_bank', (ctx) => ctx.wizard.next());
 sellScene.action('cancel_sell', async (ctx) => {
   await ctx.reply('Sell cancelled.');
   return ctx.scene.leave();
-});
-
-// Network selection actions
-sellScene.action(/network_(.*)/, async (ctx) => {
-  ctx.wizard.selectStep(2);
-  return sellScene.steps[2](ctx);
-});
-
-// Placeholder for bank selection (replace with real logic)
-sellScene.action('select_bank', async (ctx) => {
-  const userDoc = await db.collection('users').doc(ctx.wizard.state.data.userId.toString()).get();
-  const userState = userDoc.exists ? userDoc.data() : { usePidgin: false };
-  ctx.wizard.state.data.bankDetails = userState.bankDetails || { bankName: 'Test Bank', accountNumber: '1234567890' };
-  return ctx.wizard.next();
-});
-
-// Placeholder for changing asset (optional)
-sellScene.action('change_asset', async (ctx) => {
-  const userDoc = await db.collection('users').doc(ctx.wizard.state.data?.userId.toString() || ctx.from.id.toString()).get();
-  const userState = userDoc.exists ? userDoc.data() : { usePidgin: false };
-  await ctx.reply(userState.usePidgin ? 'For now, we only support USDC. Continue?' : 'Currently, only USDC is supported. Continue?', Markup.inlineKeyboard([
-    [Markup.button.callback('Yes', 'continue')],
-    [Markup.button.callback('❌ Cancel', 'cancel_sell')]
-  ]));
-});
-
-sellScene.action('continue', async (ctx) => {
-  return ctx.wizard.selectStep(1);
 });
 
 module.exports = sellScene;
