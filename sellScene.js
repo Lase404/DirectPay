@@ -3,7 +3,7 @@ const axios = require('axios');
 const admin = require('firebase-admin');
 const winston = require('winston');
 
-// Logger setup (assuming it's global or imported)
+// Logger setup
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -16,10 +16,10 @@ const logger = winston.createLogger({
   ],
 });
 
-// Firebase setup (assuming db is initialized globally)
+// Firebase setup
 const db = admin.firestore();
 
-// External dependencies (assuming these are defined elsewhere)
+// External dependencies
 const networkMap = {
   'base': 8453,
   'polygon': 137,
@@ -32,7 +32,7 @@ const chains = {
   bnb: { chainId: 56, name: 'BNB Chain' },
 };
 
-// Placeholder for getUserState (assuming it's imported or global)
+// Placeholder for getUserState
 async function getUserState(userId) {
   try {
     const userDoc = await db.collection('users').doc(userId).get();
@@ -67,7 +67,6 @@ const sellScene = new Scenes.WizardScene(
     const userId = ctx.from.id.toString();
     logger.info(`User ${userId} entered sell_scene with: ${ctx.message.text}`);
 
-    // Ensure command is /sell
     if (!ctx.message.text.startsWith('/sell ')) {
       const userState = await getUserState(userId);
       const usage = userState.usePidgin
@@ -175,18 +174,16 @@ const sellScene = new Scenes.WizardScene(
     const confirm = userState.usePidgin
       ? `You wan sell ${amount} ${currencyData.symbol} on ${network}?\n*Click* "Yes" to go ahead or "No" to stop.`
       : `Sell ${amount} ${currencyData.symbol} on ${network}?\n*Click* "Yes" to confirm or "No" to cancel.`;
+    const keyboard = Markup.inlineKeyboard([
+      Markup.button.callback('✅ Yes', 'yes'),
+      Markup.button.callback('❌ No', 'no'),
+    ]).removeKeyboard();
     try {
-      await ctx.replyWithMarkdown(confirm, {
-        ...Markup.inlineKeyboard([
-          Markup.button.callback('✅ Yes', 'yes'),
-          Markup.button.callback('❌ No', 'no'),
-        ]),
-        reply_markup: Markup.removeKeyboard().reply_markup, // Hide keyboard to discourage typing
-      });
-      logger.info(`User ${userId} prompted for confirmation`);
+      await ctx.replyWithMarkdown(confirm, keyboard);
+      logger.info(`User ${userId} prompted for confirmation, markup: ${JSON.stringify(keyboard)}`);
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Failed to send confirmation for user ${userId}: ${error.message}`);
+      logger.error(`Failed to send confirmation for user ${userId}: ${error.message}, markup: ${JSON.stringify(keyboard)}`);
       try {
         await ctx.reply('Error sending confirmation. Try again.');
       } catch (err) {
@@ -212,18 +209,31 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Handle typed inputs (e.g., "yes")
+    // Handle typed inputs with fallback
     if (!ctx.callbackQuery && ctx.message?.text) {
+      const text = ctx.message.text.toLowerCase();
       const userState = await getUserState(userId);
+      if (text === 'yes') {
+        logger.info(`User ${userId} typed 'yes', treating as confirmation`);
+        return ctx.wizard.next();
+      } else if (text === 'no') {
+        logger.info(`User ${userId} typed 'no', cancelling`);
+        try {
+          await ctx.reply(userState.usePidgin ? 'Sell don cancel.' : 'Sell cancelled.', { parse_mode: 'Markdown' });
+        } catch (error) {
+          logger.error(`Failed to send cancel message for user ${userId}: ${error.message}`);
+        }
+        return ctx.scene.leave();
+      }
       const msg = userState.usePidgin
-        ? 'Oga, *click* di "Yes" or "No" button wey I send o!'
-        : 'Please *click* the "Yes" or "No" button I sent!';
+        ? 'Oga, *click* di "Yes" or "No" button wey I send o! Or type "yes" or "no".'
+        : 'Please *click* the "Yes" or "No" button I sent! Or type "yes" or "no".';
       try {
         await ctx.replyWithMarkdown(msg);
       } catch (error) {
         logger.error(`Failed to send typed input prompt for user ${userId}: ${error.message}`);
       }
-      return; // Stay in step 2
+      return;
     }
 
     const action = ctx.callbackQuery?.data;
@@ -280,19 +290,17 @@ const sellScene = new Scenes.WizardScene(
         ? 'No bank dey o. Add one for this sell?'
         : 'No bank linked. Link a new one for this sell?';
 
+    const keyboard = Markup.inlineKeyboard([
+      linkedBank ? Markup.button.callback('✅ Use Existing', 'use_existing') : null,
+      Markup.button.callback('🏦 Link New', 'link_new'),
+    ].filter(Boolean));
     try {
-      await ctx.editMessageText(prompt, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([
-          linkedBank ? Markup.button.callback('✅ Use Existing', 'use_existing') : null,
-          Markup.button.callback('🏦 Link New', 'link_new'),
-        ].filter(Boolean)).reply_markup,
-      });
+      await ctx.editMessageText(prompt, keyboard);
       await ctx.answerCbQuery();
-      logger.info(`User ${userId} shown bank options`);
+      logger.info(`User ${userId} shown bank options, markup: ${JSON.stringify(keyboard)}`);
       return ctx.wizard.next();
     } catch (error) {
-      logger.error(`Failed to edit bank prompt for user ${userId}: ${error.message}`);
+      logger.error(`Failed to edit bank prompt for user ${userId}: ${error.message}, markup: ${JSON.stringify(keyboard)}`);
       try {
         await ctx.reply('Error showing bank options. Try again.');
       } catch (err) {
@@ -307,7 +315,6 @@ const sellScene = new Scenes.WizardScene(
     logger.info(`User ${userId} at step 3, wizard state: ${JSON.stringify(ctx.wizard.state.data)}`);
     logger.info(`Current wizard step: ${ctx.wizard.cursor}`);
 
-    // Validate wizard state
     if (!ctx.wizard.state.data?.userId || !ctx.wizard.state.data?.amount || !ctx.wizard.state.data?.ca) {
       logger.error(`Invalid wizard state for user ${userId}: ${JSON.stringify(ctx.wizard.state.data)}`);
       try {
@@ -318,7 +325,6 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Handle typed inputs
     if (!ctx.callbackQuery && ctx.message?.text) {
       const userState = await getUserState(userId);
       const msg = userState.usePidgin
@@ -329,7 +335,7 @@ const sellScene = new Scenes.WizardScene(
       } catch (error) {
         logger.error(`Failed to send typed input prompt for user ${userId}: ${error.message}`);
       }
-      return; // Stay in step 3
+      return;
     }
 
     const action = ctx.callbackQuery?.data;
@@ -376,7 +382,6 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Handle return from bank linking
     if (ctx.wizard.state.tempBank && ctx.scene.session.bankDetails) {
       ctx.wizard.state.data.bankDetails = ctx.scene.session.bankDetails;
       blockradarAddress = ctx.scene.session.bankDetails.relayAddress;
@@ -420,24 +425,21 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Privy wallet connection
     const privyConnectUrl = `${process.env.WEBAPP_URL}/connect?userId=${userId}&referenceId=${referenceId}`;
     const msg = userState.usePidgin
       ? `Transaction don set! *Click* di button to connect your wallet with Privy o.`
       : `Transaction created! *Click* the button to connect your wallet with Privy.`;
+    const keyboard = Markup.inlineKeyboard([
+      Markup.button.url('Connect Wallet', privyConnectUrl),
+      Markup.button.callback('❌ Cancel', 'cancel'),
+    ]);
     try {
-      await ctx.editMessageText(msg, {
-        parse_mode: 'Markdown',
-        reply_markup: Markup.inlineKeyboard([
-          Markup.button.url('Connect Wallet', privyConnectUrl),
-          Markup.button.callback('❌ Cancel', 'cancel'),
-        ]).reply_markup,
-      });
+      await ctx.editMessageText(msg, keyboard);
       await ctx.answerCbQuery();
-      logger.info(`User ${userId} prompted for Privy wallet connection: ${referenceId}`);
+      logger.info(`User ${userId} prompted for Privy wallet connection: ${referenceId}, markup: ${JSON.stringify(keyboard)}`);
       return ctx.scene.leave();
     } catch (error) {
-      logger.error(`Failed to prompt Privy connect for user ${userId}: ${error.message}`);
+      logger.error(`Failed to prompt Privy connect for user ${userId}: ${error.message}, markup: ${JSON.stringify(keyboard)}`);
       try {
         await ctx.reply('Error connecting wallet. Try again.');
       } catch (err) {
@@ -457,7 +459,6 @@ sellScene.action('yes', async (ctx) => {
   } catch (error) {
     logger.error(`Failed to answer yes callback for user ${userId}: ${error.message}`);
   }
-  // No ctx.wizard.next(); step 1 handles advancement
 });
 
 sellScene.action('no', async (ctx) => {
@@ -525,7 +526,7 @@ sellScene.enter(async (ctx) => {
     logger.info(`User ${userId} returned from bank linking`);
     ctx.wizard.state.data = ctx.scene.state.sellData;
     ctx.wizard.state.tempBank = true;
-    ctx.wizard.cursor = 2; // Resume at step 3
+    ctx.wizard.cursor = 2;
     try {
       return await ctx.wizard.steps[ctx.wizard.cursor](ctx);
     } catch (error) {
