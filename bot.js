@@ -1058,11 +1058,9 @@ const stage = new Scenes.Stage([
   sendMessageScene,
   receiptGenerationScene,
   bankLinkingSceneTemp,
-  sellScene
+  sellScene,
 ]);
-
 bot.use(stage.middleware());
-// Setup sellScene with dependencies
 sellSceneModule.setup(bot, db, logger, getUserState);
 // =================== Apply Telegraf Webhook Middleware ===================
 if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
