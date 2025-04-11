@@ -1,6 +1,8 @@
-const { WizardScene, Markup } = require('telegraf');
+const { Markup } = require('telegraf');
+const { WizardScene } = require('telegraf/scenes/wizard'); // Correct import
 const admin = require('firebase-admin');
 const axios = require('axios');
+const ethers = require('ethers'); // Already required for ethers.utils
 
 const db = admin.firestore();
 
