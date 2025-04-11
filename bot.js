@@ -1050,7 +1050,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
 
 // Import sellScene
 const sellSceneModule = require('./sellScene');
-const sellScene = sellSceneModule.sellScene;
+const sellScene = sellSceneModule.sellScene
 
 // Register all scenes
 const stage = new Scenes.Stage([
@@ -1062,6 +1062,15 @@ const stage = new Scenes.Stage([
 ]);
 bot.use(stage.middleware());
 sellSceneModule.setup(bot, db, logger, getUserState);
+// Add /sell command handler
+bot.command('sell', async (ctx) => {
+  try {
+    await ctx.scene.enter('sell_scene');
+  } catch (error) {
+    logger.error(`Error entering sell_scene for user ${ctx.from.id}: ${error.message}`);
+    await ctx.replyWithMarkdown('❌ Something went wrong. Try again later.');
+  }
+});
 // =================== Apply Telegraf Webhook Middleware ===================
 if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
   const webhookURL = `${WEBHOOK_DOMAIN}${WEBHOOK_PATH}`;
