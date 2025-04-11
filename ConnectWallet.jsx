@@ -20,8 +20,7 @@ function ConnectWalletApp() {
   const [isConfirmed, setIsConfirmed] = useState(false);
 
   const relayClient = new RelayClient({
-    apiKey: process.env.REACT_APP_RELAY_API_KEY,
-    baseUrl: 'https://api.relay.link',
+    baseUrl: 'https://api.relay.link'
   });
 
   const urlParams = new URLSearchParams(window.location.search);
