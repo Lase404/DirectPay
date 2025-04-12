@@ -14,7 +14,8 @@
     "axios": "^1.6.0",
     "ethers": "^5.7.2",
     "@reservoir0x/relay-sdk": "1.4.8",
-    "@reservoir0x/relay-ethers-wallet-adapter": "13.0.8"
+    "@reservoir0x/relay-ethers-wallet-adapter": "13.0.8",
+    "react-router-dom": "^7.5.0"
   },
   "browserslist": {
     "production": [">0.2%", "not dead", "not op_mini all"],
