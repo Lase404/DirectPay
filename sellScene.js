@@ -9,10 +9,29 @@ const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // Step 1: Parse and Validate Input
   async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const userState = await sellScene.getUserState(userId);
-    const input = ctx.message.text.replace('/sell', '').trim().split(/\s+/);
+    if (!ctx.from || !ctx.from.id) {
+      sellScene.logger.error('Missing ctx.from or ctx.from.id in sell scene');
+      await ctx.replyWithMarkdown(
+        '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
 
+    const userId = ctx.from.id.toString();
+    let userState;
+    try {
+      userState = await sellScene.getUserState(userId);
+    } catch (error) {
+      sellScene.logger.error(`Failed to fetch user state for userId ${userId}: ${error.message}`);
+      await ctx.replyWithMarkdown(
+        '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    const input = ctx.message.text.replace('/sell', '').trim().split(/\s+/);
     sellScene.logger.info(`User ${userId} entered sell scene with input: ${ctx.message.text}`);
 
     if (input.length < 3) {
@@ -62,7 +81,10 @@ const sellScene = new Scenes.WizardScene(
         assets = await validateAssetByTerm(assetInput, chainId, sellScene.relayClient);
       }
 
-      if (!assets || assets.length === 0) {
+      // Handle nested array response
+      const flattenedAssets = Array.isArray(assets) && Array.isArray(assets[0]) ? assets.flat() : assets;
+
+      if (!flattenedAssets || flattenedAssets.length === 0) {
         const errorMsg = userState.usePidgin
           ? '❌ No asset match your input for this chain. Check the symbol or address and try again.'
           : '❌ No matching assets found for this chain. Verify the symbol or address and try again.';
@@ -72,10 +94,13 @@ const sellScene = new Scenes.WizardScene(
         return ctx.scene.leave();
       }
 
-      ctx.wizard.state.validatedAssets = assets;
-      if (assets.length > 1) {
-        const options = assets.map((asset, index) => [
-          Markup.button.callback(`${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)`, `select_asset_${index}`)
+      ctx.wizard.state.validatedAssets = flattenedAssets;
+      if (flattenedAssets.length > 1) {
+        const options = flattenedAssets.map((asset, index) => [
+          Markup.button.callback(
+            `${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)${asset.metadata.verified ? '' : ' (Unverified)'}`,
+            `select_asset_${index}`
+          )
         ]);
         options.push([Markup.button.callback('❌ Cancel', 'cancel_sell')]);
         await ctx.replyWithMarkdown(userState.usePidgin
@@ -84,7 +109,18 @@ const sellScene = new Scenes.WizardScene(
         ctx.wizard.state.stepStartedAt = Date.now();
         return ctx.wizard.next();
       } else {
-        ctx.wizard.state.selectedAsset = assets[0];
+        ctx.wizard.state.selectedAsset = flattenedAssets[0];
+        if (!flattenedAssets[0].metadata.verified) {
+          await ctx.replyWithMarkdown(userState.usePidgin
+            ? '⚠ This asset no verified. E fit get risk. You wan continue? (Step 1/4)'
+            : '⚠ This asset is unverified and may carry risks. Proceed with caution? (Step 1/4)',
+            Markup.inlineKeyboard([
+              [Markup.button.callback('✅ Yes', 'confirm_unverified')],
+              [Markup.button.callback('❌ Cancel', 'cancel_sell')]
+            ])
+          );
+          return ctx.wizard.next();
+        }
         return ctx.wizard.selectStep(2); // Skip to bank selection
       }
     } catch (error) {
@@ -98,12 +134,11 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
-  // Step 2: Select Asset (if multiple)
+  // Step 2: Select Asset or Confirm Unverified
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
     const userState = await sellScene.getUserState(userId);
 
-    // Check for timeout
     if (Date.now() - ctx.wizard.state.stepStartedAt > INACTIVITY_TIMEOUT) {
       sellScene.logger.info(`User ${userId} timed out in asset selection`);
       await ctx.replyWithMarkdown(userState.usePidgin
@@ -114,10 +149,9 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Actions handle this step
     await ctx.replyWithMarkdown(userState.usePidgin
-      ? '⏳ Dey wait for you to pick asset...'
-      : '⏳ Waiting for you to select an asset...');
+      ? '⏳ Dey wait for you to pick or confirm asset...'
+      : '⏳ Waiting for you to select or confirm asset...');
   },
   // Step 3: Bank Selection
   async (ctx) => {
@@ -178,14 +212,16 @@ const sellScene = new Scenes.WizardScene(
         `*Name:* ${asset.name}\n` +
         `*Address:* \`${asset.address}\`\n` +
         `*Chain:* ${ctx.wizard.state.chain}\n` +
-        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n\n` +
+        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
+        `${asset.metadata.verified ? '' : '*Note:* This asset is unverified. Proceed with caution.\n\n'}` +
         `Where you want the funds go?`
       : `✅ *Asset Confirmed* (Step 2/4)\n\n` +
         `*Symbol:* ${asset.symbol}\n` +
         `*Name:* ${asset.name}\n` +
         `*Address:* \`${asset.address}\`\n` +
         `*Chain:* ${ctx.wizard.state.chain}\n` +
-        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n\n` +
+        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
+        `${asset.metadata.verified ? '' : '*Note:* This asset is unverified. Proceed with caution.\n\n'}` +
         `Where would you like to receive the funds?`;
     await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
     return ctx.wizard.next();
@@ -207,7 +243,6 @@ const sellScene = new Scenes.WizardScene(
       return;
     }
 
-    // Check for timeout
     if (Date.now() - ctx.wizard.state.stepStartedAt > INACTIVITY_TIMEOUT) {
       sellScene.logger.info(`User ${userId} timed out in bank confirmation`);
       await ctx.replyWithMarkdown(userState.usePidgin
@@ -218,7 +253,6 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    // Wait for confirmation
     await ctx.replyWithMarkdown(userState.usePidgin
       ? '⏳ Dey wait for you to confirm bank details...'
       : '⏳ Waiting for you to confirm bank details...');
@@ -246,12 +280,14 @@ const sellScene = new Scenes.WizardScene(
       ? `📝 *Sell Details* (Step 3/4)\n\n` +
         `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
         `*Chain:* ${ctx.wizard.state.chain}\n` +
-        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n` +
+        `${asset.metadata.verified ? '' : '*Note:* Unverified asset. Proceed with caution.\n\n'}` +
         `Ready to connect your wallet?`
       : `📝 *Sell Details* (Step 3/4)\n\n` +
         `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
         `*Chain:* ${ctx.wizard.state.chain}\n` +
-        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n` +
+        `${asset.metadata.verified ? '' : '*Note:* Unverified asset. Proceed with caution.\n\n'}` +
         `Ready to connect your wallet?`;
     await ctx.replyWithMarkdown(confirmMsg);
 
@@ -264,7 +300,8 @@ const sellScene = new Scenes.WizardScene(
       blockradarWallet: selectedWalletAddress,
       status: 'pending',
       createdAt: new Date().toISOString(),
-      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString() // 15-minute session
+      expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+      isVerifiedAsset: asset.metadata.verified
     };
 
     sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
@@ -382,14 +419,14 @@ async function validateAssetByAddress(address, chainId, relayClient) {
     const response = await axios.post('https://api.relay.link/currencies/v1', {
       chainIds: [chainId],
       term: address,
-      verified: true,
+      verified: false, // Allow unverified for broader search
       limit: 10,
       includeAllChains: false,
       useExternalSearch: true,
       depositAddressOnly: true
     }, { headers: { 'Content-Type': 'application/json' } });
     sellScene.logger.info(`Relay.link response for address ${address}: ${JSON.stringify(response.data)}`);
-    return response.data.flat();
+    return response.data;
   } catch (error) {
     sellScene.logger.error(`Address validation failed for address ${address}: ${error.message}`);
     throw error;
@@ -402,14 +439,14 @@ async function validateAssetByTerm(term, chainId, relayClient) {
     const response = await axios.post('https://api.relay.link/currencies/v1', {
       chainIds: [chainId],
       term,
-      verified: true,
+      verified: false, // Allow unverified for broader search
       limit: 10,
       includeAllChains: false,
       useExternalSearch: true,
       depositAddressOnly: true
     }, { headers: { 'Content-Type': 'application/json' } });
     sellScene.logger.info(`Relay.link response for term ${term}: ${JSON.stringify(response.data)}`);
-    return response.data.flat();
+    return response.data;
   } catch (error) {
     sellScene.logger.error(`Term validation failed for term ${term}: ${error.message}`);
     throw error;
@@ -442,6 +479,14 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   return ctx.wizard.selectStep(2);
 });
 
+sellScene.action('confirm_unverified', async (ctx) => {
+  const userId = ctx.wizard.state.userId;
+  sellScene.logger.info(`User ${userId} confirmed unverified asset`);
+  ctx.wizard.state.stepStartedAt = Date.now();
+  await ctx.answerCbQuery();
+  return ctx.wizard.selectStep(2);
+});
+
 sellScene.action(/select_bank_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
   const userId = ctx.wizard.state.userId;
@@ -458,7 +503,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
         [Markup.button.callback('❌ Cancel', 'cancel_sell')]
       ]));
     await ctx.answerCbQuery();
-    return;
+      return;
   }
 
   ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
@@ -532,7 +577,10 @@ sellScene.action('back_to_asset', async (ctx) => {
   }
 
   const options = assets.map((asset, index) => [
-    Markup.button.callback(`${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)`, `select_asset_${index}`)
+    Markup.button.callback(
+      `${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)${asset.metadata.verified ? '' : ' (Unverified)'}`,
+      `select_asset_${index}`
+    )
   ]);
   options.push([Markup.button.callback('❌ Cancel', 'cancel_sell')]);
 
@@ -573,14 +621,16 @@ sellScene.action('back_to_bank', async (ctx) => {
       `*Name:* ${ctx.wizard.state.selectedAsset.name}\n` +
       `*Address:* \`${ctx.wizard.state.selectedAsset.address}\`\n` +
       `*Chain:* ${ctx.wizard.state.chain}\n` +
-      `*Amount:* ${ctx.wizard.state.amount} ${ctx.wizard.state.selectedAsset.symbol}\n\n` +
+      `*Amount:* ${ctx.wizard.state.amount} ${ctx.wizard.state.selectedAsset.symbol}\n` +
+      `${ctx.wizard.state.selectedAsset.metadata.verified ? '' : '*Note:* This asset is unverified. Proceed with caution.\n\n'}` +
       `Where you want the funds go?`
     : `✅ *Asset Confirmed* (Step 2/4)\n\n` +
       `*Symbol:* ${ctx.wizard.state.selectedAsset.symbol}\n` +
       `*Name:* ${ctx.wizard.state.selectedAsset.name}\n` +
       `*Address:* \`${ctx.wizard.state.selectedAsset.address}\`\n` +
       `*Chain:* ${ctx.wizard.state.chain}\n` +
-      `*Amount:* ${ctx.wizard.state.amount} ${ctx.wizard.state.selectedAsset.symbol}\n\n` +
+      `*Amount:* ${ctx.wizard.state.amount} ${ctx.wizard.state.selectedAsset.symbol}\n` +
+      `${ctx.wizard.state.selectedAsset.metadata.verified ? '' : '*Note:* This asset is unverified. Proceed with caution.\n\n'}` +
       `Where would you like to receive the funds?`;
   await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
   ctx.wizard.state.stepStartedAt = Date.now();
@@ -589,7 +639,7 @@ sellScene.action('back_to_bank', async (ctx) => {
 });
 
 sellScene.action('retry_sell', async (ctx) => {
-  sellScene.logger.info(`User ${ctx.wizard.state.userId} requested to retry sell`);
+  sellScene.logger.info(`User ${ctx.wizard.state.userId || 'unknown'} requested to retry sell`);
   await ctx.answerCbQuery();
   await ctx.scene.enter('sell_scene');
 });
@@ -618,7 +668,6 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
   sellScene.chains = chains;
   sellScene.webhookDomain = process.env.WEBHOOK_DOMAIN;
 
-  // Handle temp bank linking completion
   bot.on('callback_query', async (ctx) => {
     if (ctx.scene.current?.id === 'bank_linking_scene_temp' && ctx.wizard.state.awaitingTempBank) {
       if (ctx.callbackQuery.data === 'confirm_bank_temp') {
@@ -627,7 +676,7 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
         ctx.wizard.state.selectedWalletAddress = ctx.scene.state.walletAddress || ctx.wizard.state.selectedWalletAddress;
         ctx.wizard.state.stepStartedAt = Date.now();
         await ctx.answerCbQuery();
-        await ctx.wizard.selectStep(3); // Go to bank confirmation
+        await ctx.wizard.selectStep(3);
       }
     }
   });
