@@ -4,21 +4,50 @@
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
+    "test": "react-scripts test",
     "eject": "react-scripts eject"
   },
   "dependencies": {
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-scripts": "5.0.1",
-    "@privy-io/react-auth": "^1.0.0",
-    "axios": "^1.6.0",
+    "@privy-io/react-auth": "^1.77.2",
+    "@reservoir0x/relay-ethers-wallet-adapter": "^15.0.14",
+    "@reservoir0x/relay-sdk": "^1.5.0",
+    "axios": "^1.7.2",
+    "dotenv": "^16.4.5",
     "ethers": "^5.7.2",
-    "@reservoir0x/relay-sdk": "1.4.8",
-    "@reservoir0x/relay-ethers-wallet-adapter": "13.0.8",
-    "react-router-dom": "^7.5.0"
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.1",
+    "react-scripts": "^5.0.1",
+    "react-toastify": "^10.0.5",
+    "viem": "^2.21.55"
+  },
+  "devDependencies": {
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.34.3",
+    "eslint-plugin-react-hooks": "^4.6.2",
+    "tailwindcss": "^3.4.10"
   },
   "browserslist": {
-    "production": [">0.2%", "not dead", "not op_mini all"],
-    "development": ["last 1 chrome version", "last 1 firefox version", "last 1 safari version"]
+    "production": [
+      ">0.5%",
+      "last 2 versions",
+      "not dead",
+      "not op_mini all"
+    ],
+    "development": [
+      "last 1 chrome version",
+      "last 1 firefox version",
+      "last 1 safari version"
+    ]
+  },
+  "eslintConfig": {
+    "extends": [
+      "react-app",
+      "plugin:react/recommended",
+      "plugin:react-hooks/recommended"
+    ],
+    "rules": {
+      "react/prop-types": "off"
+    }
   }
 }
