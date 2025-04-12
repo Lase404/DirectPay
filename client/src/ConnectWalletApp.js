@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, Fragment } from 'react';
 import { useLocation } from 'react-router-dom';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
 import { createClient, getClient } from '@reservoir0x/relay-sdk';
@@ -6,6 +6,9 @@ import { adaptEthersSigner } from '@reservoir0x/relay-ethers-wallet-adapter';
 import { ethers } from 'ethers';
 import axios from 'axios';
 import { toast, ToastContainer } from 'react-toastify';
+import { FaCoins, FaGasPump, FaExchangeAlt, FaShieldAlt, FaClock, FaWallet, FaCheckCircle, FaPaperPlane, FaCopy, FaExternalLinkAlt, FaChevronDown, FaExclamationTriangle } from 'react-icons/fa';
+import QRCode from 'react-qr-code';
+import { Dialog, Transition } from '@headlessui/react';
 import 'react-toastify/dist/ReactToastify.css';
 import './ConnectWalletApp.css';
 
@@ -41,6 +44,284 @@ const SUPPORTED_CHAINS = {
   },
 };
 
+const TransactionTimeline = ({ status, progress }) => {
+  const steps = [
+    { id: 'connect', label: 'Connect Wallet', icon: FaWallet },
+    { id: 'approve', label: 'Approve Token', icon: FaCheckCircle },
+    { id: 'deposit', label: 'Deposit Funds', icon: FaPaperPlane },
+    { id: 'complete', label: 'Complete', icon: FaCheckCircle }
+  ];
+
+  const getStepStatus = (stepId) => {
+    if (stepId === 'connect' && status !== 'idle') return 'completed';
+    if (stepId === 'approve' && status.includes('approval')) return 'active';
+    if (stepId === 'approve' && status.includes('completed')) return 'completed';
+    if (stepId === 'deposit' && status.includes('Depositing')) return 'active';
+    if (stepId === 'deposit' && status.includes('submitted')) return 'completed';
+    if (stepId === 'complete' && status.includes('Sell completed')) return 'completed';
+    return 'pending';
+  };
+
+  return (
+    <div className="card mb-6">
+      <div className="flex justify-between">
+        {steps.map((step, index) => (
+          <div key={step.id} className="flex flex-col items-center relative">
+            <div
+              className={`w-10 h-10 flex items-center justify-center rounded-full ${
+                getStepStatus(step.id) === 'completed'
+                  ? 'bg-[var(--success)] text-white'
+                  : getStepStatus(step.id) === 'active'
+                  ? 'bg-[var(--primary)] text-white animate-pulse'
+                  : 'bg-gray-300 text-gray-600'
+              }`}
+              title={step.label}
+            >
+              <step.icon className="w-5 h-5" />
+            </div>
+            <span className="text-xs mt-2 text-gray-600">{step.label}</span>
+            {index < steps.length - 1 && (
+              <div className="absolute top-4 left-10 w-full h-1 bg-gray-200">
+                <div
+                  className={`h-full ${
+                    getStepStatus(steps[index + 1].id) !== 'pending' ? 'bg-[var(--success)]' : 'bg-gray-200'
+                  }`}
+                  style={{ width: 'calc(100% - 2.5rem)' }}
+                />
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {progress > 0 && progress < 100 && (
+        <div className="mt-4">
+          <div className="w-full bg-gray-200 rounded-full h-2.5">
+            <div
+              className="bg-[var(--primary)] h-2.5 rounded-full"
+              style={{ width: `${progress}%` }}
+            />
+          </div>
+          <p className="text-sm text-gray-600 mt-1">Progress: {progress}%</p>
+        </div>
+      )}
+    </div>
+  );
+};
+
+const QuoteDisplay = ({ quote, tokenInfo, logoUri, isVerifiedAsset }) => {
+  const [showDetails, setShowDetails] = useState(false);
+
+  return (
+    <div className="card mb-4">
+      <h3 className="text-lg font-semibold text-gray-800 mb-2">Transaction Summary</h3>
+      {!isVerifiedAsset && (
+        <div className="flex items-center p-3 bg-yellow-100 text-yellow-800 rounded-lg mb-4" role="alert">
+          <FaExclamationTriangle className="w-5 h-5 mr-2" />
+          <span>
+            This asset ({tokenInfo.symbol}) is unverified. It may have low liquidity or risks. Proceed with caution.
+          </span>
+        </div>
+      )}
+      <div className="space-y-2">
+        <p className="flex items-center">
+          <img
+            src={logoUri || 'https://via.placeholder.com/20'}
+            alt={`${tokenInfo.symbol} logo`}
+            className="w-5 h-5 mr-2 rounded-full"
+            onError={(e) => (e.target.src = 'https://via.placeholder.com/20')}
+          />
+          <span>
+            Input: {formatTokenAmount(quote.details?.currencyIn?.amount, tokenInfo.decimals)}{' '}
+            {tokenInfo.symbol} (~${formatUSD(quote.details?.currencyIn?.amountUsd)})
+          </span>
+        </p>
+        <p className="flex items-center">
+          <FaCoins className="w-4 h-4 mr-2 text-green-500" />
+          <span>
+            Output: {formatTokenAmount(quote.details?.currencyOut?.amount, 6)} USDC
+            (~${formatUSD(quote.details?.currencyOut?.amountUsd)})
+          </span>
+        </p>
+        <button
+          onClick={() => setShowDetails(!showDetails)}
+          className="text-[var(--primary)] text-sm flex items-center"
+        >
+          {showDetails ? 'Hide Details' : 'Show Details'}
+          <FaChevronDown className={`ml-1 transform ${showDetails ? 'rotate-180' : ''}`} />
+        </button>
+        {showDetails && (
+          <div className="pl-4 space-y-2 animate-fade-in">
+            <p className="flex items-center">
+              <FaGasPump className="w-4 h-4 mr-2 text-gray-500" />
+              Gas Fee: {formatTokenAmount(quote.fees?.gas?.amount, 18)} ETH
+              (~${formatUSD(quote.fees?.gas?.amountUsd)})
+            </p>
+            <p className="flex items-center">
+              <FaGasPump className="w-4 h-4 mr-2 text-gray-500" />
+              Relayer Fee: {formatTokenAmount(quote.fees?.relayer?.amount, 18)} ETH
+              (~${formatUSD(quote.fees?.relayer?.amountUsd)})
+            </p>
+            <p className="flex items-center">
+              <FaExchangeAlt className="w-4 h-4 mr-2 text-red-500" />
+              Swap Impact: {quote.details?.swapImpact?.percent}% (~${formatUSD(quote.details?.swapImpact?.usd)})
+            </p>
+            <p className="flex items-center">
+              <FaShieldAlt className="w-4 h-4 mr-2 text-blue-500" />
+              Slippage Tolerance: {quote.details?.slippageTolerance?.destination?.percent || '0'}%
+            </p>
+            <p className="flex items-center">
+              <FaClock className="w-4 h-4 mr-2 text-gray-500" />
+              Est. Time: ~{quote.breakdown?.[0]?. surprises me that you got this far, you must be a real code whisperer! timeEstimate || 12} seconds
+            </p>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const TransactionStatus = ({ txHash, chainId, status }) => {
+  const explorerUrl = SUPPORTED_CHAINS[chainId]?.blockExplorer || 'https://etherscan.io';
+  const txLink = txHash ? `${explorerUrl}/tx/${txHash}` : '';
+
+  const copyTxHash = () => {
+    navigator.clipboard.write(txHash);
+    toast.info('Transaction hash copied!');
+  };
+
+  return txHash ? (
+    <div className="card mb-4">
+      <h3 className="text-lg font-semibold text-gray-800 mb-2">Transaction Status</h3>
+      <p className="text-sm flex items-center">
+        <span className="font-semibold mr-1">Status:</span> {status}
+      </p>
+      <p className="text-sm flex items-center">
+        <span className="font-semibold mr-1">Tx Hash:</span>
+        <a href={txLink} target="_blank" rel="noopener noreferrer" className="text-[var(--primary)] truncate">
+          {txHash.slice(0, 6)}...{txHash.slice(-4)}
+          <FaExternalLinkAlt className="inline ml-1 w-3 h-3" />
+        </a>
+        <button onClick={copyTxHash} className="ml-2 text-gray-500 hover:text-gray-700">
+          <FaCopy className="w-4 h-4" />
+        </button>
+      </p>
+      <div className="mt-4 hidden sm:block">
+        <QRCode value={txLink} size={100} />
+      </div>
+    </div>
+  ) : null;
+};
+
+const ConfirmSellModal = ({ isOpen, onClose, onConfirm, quote, tokenInfo, isVerifiedAsset, balance }) => {
+  const totalFeesUsd =
+    parseFloat(quote.fees?.gas?.amountUsd || 0) +
+    parseFloat(quote.fees?.relayer?.amountUsd || 0);
+  const inputUsd = parseFloat(quote.details?.currencyIn?.amountUsd || 0);
+  const isHighFee = inputUsd > 0 && totalFeesUsd / inputUsd > 0.1;
+  const inputAmount = formatTokenAmount(quote.details?.currencyIn?.amount, tokenInfo.decimals);
+  const isInsufficientBalance = balance !== null && parseFloat(balance) < parseFloat(inputAmount);
+
+  return (
+    <Transition appear show={isOpen} as={Fragment}>
+      <Dialog as="div" className="relative z-10" onClose={onClose}>
+        <Transition.Child
+          as={Fragment}
+          enter="ease-out duration-300"
+          enterFrom="opacity-0"
+          enterTo="opacity-100"
+          leave="ease-in duration-200"
+          leaveFrom="opacity-100"
+          leaveTo="opacity-0"
+        >
+          <div className="fixed inset-0 bg-black bg-opacity-25" />
+        </Transition.Child>
+
+        <div className="fixed inset-0 overflow-y-auto">
+          <div className="flex min-h-full items-center justify-center p-4">
+            <Transition.Child
+              as={Fragment}
+              enter="ease-out duration-300"
+              enterFrom="opacity-0 scale-95"
+              enterTo="opacity-100 scale-100"
+              leave="ease-in duration-200"
+              leaveFrom="opacity-100 scale-100"
+              leaveTo="opacity-0 scale-95"
+            >
+              <Dialog.Panel className="card max-w-md">
+                <Dialog.Title className="text-lg font-semibold text-gray-800">
+                  Confirm Sell
+                </Dialog.Title>
+                <div className="mt-2 space-y-2">
+                  <p className="text-sm">
+                    You’re selling{' '}
+                    <strong>
+                      {inputAmount} {tokenInfo.symbol}
+                    </strong>{' '}
+                    for{' '}
+                    <strong>
+                      {formatTokenAmount(quote.details?.currencyOut?.amount, 6)} USDC
+                    </strong>
+                    .
+                  </p>
+                  <p className="text-sm">
+                    Total Fees: ~${formatUSD(totalFeesUsd)} (Gas: ${formatUSD(quote.fees?.gas?.amountUsd)}, Relayer: ${formatUSD(quote.fees?.relayer?.amountUsd)})
+                  </p>
+                  {!isVerifiedAsset && (
+                    <p className="text-sm text-[var(--error)]">
+                      ⚠ This is an unverified asset. Ensure you trust the token before proceeding.
+                    </p>
+                  )}
+                  {isHighFee && (
+                    <p className="text-sm text-[var(--error)]">
+                      ⚠ High fees detected ({((totalFeesUsd / inputUsd) * 100).toFixed(1)}% of input). Proceed carefully.
+                    </p>
+                  )}
+                  {isInsufficientBalance && (
+                    <p className="text-sm text-[var(--error)]">
+                      ⚠ Insufficient balance: {balance} {tokenInfo.symbol} available, {inputAmount} required.
+                    </p>
+                  )}
+                </div>
+                <div className="mt-4 flex justify-end space-x-2">
+                  <button
+                    onClick={onClose}
+                    className="btn-secondary"
+                    aria-label="Cancel sell transaction"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={onConfirm}
+                    className="btn-primary"
+                    aria-label="Confirm sell transaction"
+                    disabled={isInsufficientBalance}
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </Dialog.Panel>
+            </Transition.Child>
+          </div>
+        </div>
+      </Dialog>
+    </Transition>
+  );
+};
+
+const HelpSection = () => (
+  <div className="mt-4 text-center">
+    <a
+      href="https://t.me/maxcswap"
+      target="_blank"
+      rel="noopener noreferrer"
+      className="text-[var(--primary)] text-sm hover:underline"
+      aria-label="Contact support via Telegram"
+    >
+      Need help? Contact @maxcswap
+    </a>
+  </div>
+);
+
 const ConnectWalletApp = () => {
   const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
@@ -50,6 +331,11 @@ const ConnectWalletApp = () => {
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('idle');
   const [tokenInfo, setTokenInfo] = useState({ symbol: 'Token', decimals: 18 });
+  const [txHash, setTxHash] = useState(null);
+  const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+  const [balance, setBalance] = useState(null);
+  const [logoUri, setLogoUri] = useState(null);
+  const [progress, setProgress] = useState(0);
   const location = useLocation();
 
   useEffect(() => {
@@ -94,7 +380,6 @@ const ConnectWalletApp = () => {
           setSession(response.data);
           setError(null);
 
-          // Fetch token metadata using Infura
           if (response.data.token !== '0x0000000000000000000000000000000000000000') {
             try {
               const chainConfig = SUPPORTED_CHAINS[response.data.chainId];
@@ -104,14 +389,30 @@ const ConnectWalletApp = () => {
                 [
                   'function symbol() view returns (string)',
                   'function decimals() view returns (uint8)',
+                  'function balanceOf(address) view returns (uint256)'
                 ],
                 provider
               );
-              const [symbol, decimals] = await Promise.all([
+              const [symbol, decimals, balance] = await Promise.all([
                 tokenContract.symbol(),
                 tokenContract.decimals(),
+                wallets[0]?.address
+                  ? tokenContract.balanceOf(wallets[0].address)
+                  : Promise.resolve(ethers.BigNumber.from(0))
               ]);
               setTokenInfo({ symbol, decimals });
+              setBalance(ethers.utils.formatUnits(balance, decimals));
+              // Fetch logo from Relay.link
+              const logoResponse = await axios.post('https://api.relay.link/currencies/v1', {
+                chainIds: [response.data.chainId],
+                term: response.data.token,
+                verified: false,
+                limit: 1
+              });
+              const assets = logoResponse.data.flat();
+              if (assets[0]?.metadata?.logoURI) {
+                setLogoUri(assets[0].metadata.logoURI);
+              }
             } catch (err) {
               console.error('Failed to fetch token metadata:', err);
               setTokenInfo({ symbol: 'Token', decimals: 18 });
@@ -123,13 +424,20 @@ const ConnectWalletApp = () => {
               symbol: chainConfig.nativeCurrency.symbol,
               decimals: chainConfig.nativeCurrency.decimals,
             });
+            try {
+              const provider = new ethers.providers.JsonRpcProvider(chainConfig.rpcUrl);
+              const balance = await provider.getBalance(wallets[0]?.address || ethers.constants.AddressZero);
+              setBalance(ethers.utils.formatUnits(balance, chainConfig.nativeCurrency.decimals));
+            } catch (err) {
+              console.error('Failed to fetch native balance:', err);
+            }
           }
 
           break;
         } catch (err) {
           console.error(`Attempt ${attempt} failed:`, err);
           if (attempt === retryCount) {
-            setError(`Failed to fetch session: ${err.message}. Please try again or contact support.`);
+            setError(`Failed to fetch session: ${err.message}. Please try again or contact support at @maxcswap.`);
             toast.error('Failed to fetch session. Please try again.');
           } else {
             await new Promise(resolve => setTimeout(resolve, delay));
@@ -141,7 +449,7 @@ const ConnectWalletApp = () => {
     if (ready && authenticated) {
       fetchSession();
     }
-  }, [ready, authenticated, location.search]);
+  }, [ready, authenticated, location.search, wallets]);
 
   const switchChain = async (chainId, retryCount = 2) => {
     if (!SUPPORTED_CHAINS[chainId]) {
@@ -188,9 +496,9 @@ const ConnectWalletApp = () => {
       } catch (err) {
         attempt++;
         if (attempt > retryCount) {
-          setError(`Failed to switch to chain ID ${chainId}: ${err.message}`);
+          setError(`Failed to switch to chain ID ${chainId}: ${err.message}. Please manually set your wallet to ${SUPPORTED_CHAINS[chainId].name}.`);
           setStatus('error');
-          toast.error(`Failed to switch chains. Please try again.`);
+          toast.error(`Failed to switch chains. Please set your wallet to ${SUPPORTED_CHAINS[chainId].name}.`);
           throw err;
         }
         await new Promise(resolve => setTimeout(resolve, 1000));
@@ -218,10 +526,28 @@ const ConnectWalletApp = () => {
       setQuote(quote);
       setError(null);
       toast.success('Quote fetched successfully!');
+      // Check balance sufficiency
+      const inputAmount = ethers.utils.formatUnits(session.amountInWei, tokenInfo.decimals);
+      if (balance && parseFloat(balance) < parseFloat(inputAmount)) {
+        setError(`Insufficient ${tokenInfo.symbol} balance: ${balance} available, ${inputAmount} required. Please add funds to your wallet.`);
+        toast.error('Insufficient balance. Please add funds to your wallet.');
+      }
     } catch (err) {
-      setError(`Failed to fetch quote: ${err.message}`);
+      let errorMsg = err.message;
+      let suggestion = 'Please try again or contact support at @maxcswap.';
+      if (err.message.includes('insufficient funds')) {
+        errorMsg = 'Insufficient funds for gas or token amount.';
+        suggestion = 'Please add funds to your wallet and try again.';
+      } else if (err.message.includes('network')) {
+        errorMsg = 'Network error.';
+        suggestion = 'Check your internet connection and try again.';
+      } else if (err.message.includes('unsupported token')) {
+        errorMsg = `The token ${tokenInfo.symbol} may not be supported for bridging.`;
+        suggestion = 'Try a different token or contact support.';
+      }
+      setError(`Failed to fetch quote: ${errorMsg} ${suggestion}`);
       setStatus('error');
-      toast.error('Failed to fetch quote. Please try again.');
+      toast.error(`${errorMsg} ${suggestion}`);
     } finally {
       setLoading(false);
     }
@@ -237,25 +563,21 @@ const ConnectWalletApp = () => {
 
     setLoading(true);
     setStatus('Initiating transaction...');
+    setProgress(10);
 
     try {
-      // Ensure wallet is on the origin chain
       await switchChain(session.chainId);
-
-      let txHash = null;
       let approvalCompleted = false;
       let signatureCompleted = false;
 
       await getClient().actions.execute({
         quote,
         wallet: adaptedWallet,
-        depositGasLimit: '500000', // Reasonable limit for deposits
+        depositGasLimit: '500000',
         onProgress: async (progress) => {
           console.log('Transaction progress:', progress);
-
           const { currentStep, currentStepItem, txHashes, error, refunded } = progress;
 
-          // Handle errors
           if (error || currentStep?.error || currentStepItem?.error) {
             const errorMsg =
               error?.message ||
@@ -269,11 +591,11 @@ const ConnectWalletApp = () => {
             throw new Error('Operation failed and was refunded.');
           }
 
-          // Update status based on current step
           if (currentStep?.id === 'approve' && !approvalCompleted) {
             setStatus('Awaiting approval in your wallet...');
+            setProgress(30);
             if (currentStepItem?.data) {
-              currentStepItem.data.gas = '50000'; // Optimize approval gas
+              currentStepItem.data.gas = '50000';
             }
           }
 
@@ -282,12 +604,14 @@ const ConnectWalletApp = () => {
             currentStepItem?.status === 'complete'
           ) {
             setStatus('Approval completed. Preparing next step...');
+            setProgress(50);
             toast.success('Token approval completed!');
             approvalCompleted = true;
           }
 
           if (currentStep?.id.includes('authorize') && !signatureCompleted) {
             setStatus('Awaiting signature in your wallet...');
+            setProgress(60);
             if (currentStep.kind === 'signature' && currentStepItem?.data?.sign) {
               toast.info('Please sign the authorization.');
             }
@@ -298,6 +622,7 @@ const ConnectWalletApp = () => {
             currentStepItem?.status === 'complete'
           ) {
             setStatus('Signature completed. Proceeding to deposit...');
+            setProgress(70);
             toast.success('Authorization signed!');
             signatureCompleted = true;
           }
@@ -306,26 +631,24 @@ const ConnectWalletApp = () => {
             currentStep?.id === 'deposit' &&
             (approvalCompleted || signatureCompleted)
           ) {
-            await switchChain(session.chainId); // Ensure still on origin chain
+            await switchChain(session.chainId);
             setStatus('Depositing funds to relayer...');
+            setProgress(80);
             toast.info('Please confirm the deposit transaction.');
           }
 
           if (txHashes && txHashes.length > 0) {
-            txHash = txHashes[txHashes.length - 1].txHash;
+            const txHash = txHashes[txHashes.length - 1].txHash;
             const isBatch = txHashes[txHashes.length - 1].isBatchTx || false;
+            setTxHash(txHash);
             setStatus(
               `Transaction ${isBatch ? 'batch ' : ''}submitted: ${txHash.slice(0, 6)}...`
             );
+            setProgress(90);
             toast.success(
               `Transaction ${isBatch ? 'batch ' : ''}submitted: ${txHash.slice(0, 6)}...`
             );
             setStatus('Awaiting relayer confirmation...');
-          }
-
-          // Update UI with progress details
-          if (progress.details) {
-            console.log('Quote details:', progress.details);
           }
         },
       });
@@ -337,10 +660,11 @@ const ConnectWalletApp = () => {
             txHash,
           });
           setStatus('Sell completed successfully!');
+          setProgress(100);
           toast.success('Sell completed! Funds will be sent to your bank.');
         } catch (webhookErr) {
           console.error('Webhook error:', webhookErr);
-          setError(`Sell completed, but failed to notify server: ${webhookErr.message}`);
+          setError(`Sell completed, but failed to notify server: ${webhookErr.message}. Contact support to verify your transaction.`);
           toast.warn('Sell completed, but server notification failed. Contact support.');
         }
       } else {
@@ -349,17 +673,36 @@ const ConnectWalletApp = () => {
     } catch (err) {
       console.error('Sell error:', err);
       let errorMsg = err.message;
+      let suggestion = 'Please try again or contact support at @maxcswap.';
       if (err.name === 'DepositTransactionTimeoutError') {
-        errorMsg = `Deposit transaction ${err.txHash} is still pending. Please wait or check your wallet.`;
+        errorMsg = `Deposit transaction ${err.txHash} is still pending.`;
+        suggestion = 'Check your wallet for pending transactions or try again later.';
       } else if (err.name === 'TransactionConfirmationError') {
-        errorMsg = `Transaction failed: ${err.message}. Receipt: ${JSON.stringify(err.receipt)}`;
+        errorMsg = `Transaction failed: ${err.message}.`;
+        suggestion = 'Verify your wallet settings and try again.';
+      } else if (err.message.includes('user rejected')) {
+        errorMsg = 'Transaction rejected.';
+        suggestion = 'Please approve the transaction in your wallet.';
+      } else if (err.message.includes('insufficient')) {
+        errorMsg = 'Insufficient funds for the transaction.';
+        suggestion = 'Ensure you have enough funds for gas and tokens.';
       }
-      setError(`Error during sell: ${errorMsg}`);
+      setError(`Error during sell: ${errorMsg} ${suggestion}`);
       setStatus('error');
-      toast.error(`Sell failed: ${errorMsg}`);
+      toast.error(`${errorMsg} ${suggestion}`);
+      setProgress(0);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleSellClick = () => {
+    setIsConfirmOpen(true);
+  };
+
+  const handleConfirmSell = () => {
+    setIsConfirmOpen(false);
+    handleSell();
   };
 
   useEffect(() => {
@@ -371,7 +714,7 @@ const ConnectWalletApp = () => {
           const adaptedWallet = adaptEthersSigner(signer);
           await fetchQuote(adaptedWallet);
         } catch (err) {
-          setError(`Failed to initialize wallet for quote: ${err.message}`);
+          setError(`Failed to initialize wallet for quote: ${err.message}. Please reconnect your wallet.`);
           setStatus('error');
           toast.error('Failed to initialize wallet. Please reconnect.');
         }
@@ -379,13 +722,11 @@ const ConnectWalletApp = () => {
     }
   }, [wallets, session, ready, authenticated]);
 
-  // Format USD values to 2 decimal places
   const formatUSD = (value) => {
     if (!value) return '0.00';
     return parseFloat(value).toFixed(2);
   };
 
-  // Format token amounts based on decimals
   const formatTokenAmount = (amount, decimals) => {
     try {
       return ethers.utils.formatUnits(amount, decimals);
@@ -397,27 +738,30 @@ const ConnectWalletApp = () => {
   if (!ready) {
     return (
       <div className="flex items-center justify-center h-screen">
-        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
+        <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-[var(--primary)]"></div>
       </div>
     );
   }
 
   return (
-    <div className="min-h-screen bg-gray-100 flex items-center justify-center p-4">
-      <div className="bg-white rounded-lg shadow-lg p-6 w-full max-w-md">
-        <h1 className="text-2xl font-bold text-center mb-4">DirectPay Wallet Connector</h1>
-        <ToastContainer position="top-right" autoClose={5000} />
+    <div className="min-h-screen flex items-center justify-center p-4 bg-[var(--background)]">
+      <div className="card w-full max-w-lg">
+        <div className="flex items-center mb-4">
+          <img src="/logo.png" alt="DirectPay Logo" className="h-8 mr-2" />
+          <h1 className="text-2xl font-bold text-gray-800">DirectPay</h1>
+        </div>
+        <ToastContainer position="top-right" autoClose={5000} role="alert" aria-live="assertive" />
         {!authenticated ? (
           <button
             onClick={login}
-            className="w-full bg-blue-600 text-white py-2 rounded-lg hover:bg-blue-700 transition"
-            aria-label="Connect Wallet"
+            className="btn-primary w-full"
+            aria-label="Connect your cryptocurrency wallet"
           >
             Connect Wallet
           </button>
         ) : (
           <>
-            <div className="mb-4">
+            <div className="card mb-4" role="region" aria-live="polite" aria-label="Wallet information">
               <p className="text-sm text-gray-600">
                 <span className="font-semibold">Connected:</span>{' '}
                 {wallets[0]?.address.slice(0, 6)}...{wallets[0]?.address.slice(-4)}
@@ -425,142 +769,93 @@ const ConnectWalletApp = () => {
               <p className="text-sm text-gray-600">
                 <span className="font-semibold">Status:</span> {status}
               </p>
+              {balance !== null && (
+                <p className="text-sm text-gray-600">
+                  <span className="font-semibold">Balance:</span> {parseFloat(balance).toFixed(4)} {tokenInfo.symbol}
+                </p>
+              )}
             </div>
             {session ? (
-              <div className="space-y-3">
-                <p className="text-sm">
-                  <span className="font-semibold">Amount:</span>{' '}
-                  {formatTokenAmount(session.amountInWei, tokenInfo.decimals)} {tokenInfo.symbol}
-                </p>
-                <p className="text-sm">
-                  <span className="font-semibold">Chain:</span>{' '}
-                  {SUPPORTED_CHAINS[session.chainId]?.name || 'Unknown'}
-                </p>
-                <p className="text-sm">
-                  <span className="font-semibold">To:</span>{' '}
-                  {session.blockradarWallet.slice(0, 6)}...{session.blockradarWallet.slice(-4)}
-                </p>
+              <>
+                <TransactionTimeline status={status} progress={progress} />
+                <div className="card mb-4">
+                  <h3 className="text-lg font-semibold text-gray-800 mb-2">Sell Details</h3>
+                  <p className="text-sm">
+                    <span className="font-semibold">Amount:</span>{' '}
+                    {formatTokenAmount(session.amountInWei, tokenInfo.decimals)} {tokenInfo.symbol}
+                  </p>
+                  <p className="text-sm">
+                    <span className="font-semibold">Chain:</span>{' '}
+                    {SUPPORTED_CHAINS[session.chainId]?.name || 'Unknown'}
+                  </p>
+                  <p className="text-sm">
+                    <span className="font-semibold">To:</span>{' '}
+                    {session.blockradarWallet.slice(0, 6)}...{session.blockradarWallet.slice(-4)}
+                  </p>
+                </div>
                 {quote ? (
                   <>
-                    <div className="border-t pt-2">
-                      <p className="text-sm font-semibold">Quote Details:</p>
-                      <p className="text-sm">
-                        <span className="font-semibold">Input:</span>{' '}
-                        {formatTokenAmount(
-                          quote.details?.currencyIn?.amount,
-                          quote.details?.currencyIn?.currency?.decimals || 18
-                        )}{' '}
-                        {quote.details?.currencyIn?.currency?.symbol || 'Unknown'} (~$
-                        {formatUSD(quote.details?.currencyIn?.amountUsd)})
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-semibold">Output:</span>{' '}
-                        {formatTokenAmount(
-                          quote.details?.currencyOut?.amount,
-                          quote.details?.currencyOut?.currency?.decimals || 6
-                        )}{' '}
-                        {quote.details?.currencyOut?.currency?.symbol || 'USDC'} (~$
-                        {formatUSD(quote.details?.currencyOut?.amountUsd)})
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-semibold">Gas Fee:</span>{' '}
-                        {formatTokenAmount(
-                          quote.fees?.gas?.amount,
-                          quote.fees?.gas?.currency?.decimals || 18
-                        )}{' '}
-                        {quote.fees?.gas?.currency?.symbol || 'ETH'} (~$
-                        {formatUSD(quote.fees?.gas?.amountUsd)})
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-semibold">Relayer Fee:</span>{' '}
-                        {formatTokenAmount(
-                          quote.fees?.relayer?.amount,
-                          quote.fees?.relayer?.currency?.decimals || 18
-                        )}{' '}
-                        {quote.fees?.relayer?.currency?.symbol || 'ETH'} (~$
-                        {formatUSD(quote.fees?.relayer?.amountUsd)})
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-semibold">Swap Impact:</span>{' '}
-                        {quote.details?.swapImpact?.percent}% (~$
-                        {formatUSD(quote.details?.swapImpact?.usd)})
-                      </p>
-                      <p className="text-sm">
-                        <span className="font-semibold">Slippage Tolerance:</span>{' '}
-                        {quote.details?.slippageTolerance?.destination?.percent || '0'}%
-                      </p>
-                    </div>
+                    <QuoteDisplay
+                      quote={quote}
+                      tokenInfo={tokenInfo}
+                      logoUri={logoUri}
+                      isVerifiedAsset={session.isVerifiedAsset !== false}
+                    />
+                    {txHash && (
+                      <TransactionStatus
+                        txHash={txHash}
+                        chainId={session.chainId}
+                        status={status}
+                      />
+                    )}
                     <button
-                      onClick={handleSell}
+                      onClick={handleSellClick}
                       disabled={loading}
-                      className={`w-full py-2 rounded-lg transition ${
-                        loading
-                          ? 'bg-gray-400 cursor-not-allowed'
-                          : 'bg-green-600 text-white hover:bg-green-700'
-                      }`}
-                      aria-label="Execute Sell"
+                      className={`btn-primary w-full ${loading ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      aria-label="Execute sell transaction"
                     >
                       {loading ? (
                         <span className="flex items-center justify-center">
-                          <svg
-                            className="animate-spin h-5 w-5 mr-2 text-white"
-                            viewBox="0 0 24 24"
-                          >
-                            <circle
-                              className="opacity-25"
-                              cx="12"
-                              cy="12"
-                              r="10"
-                              stroke="currentColor"
-                              strokeWidth="4"
-                            />
-                            <path
-                              className="opacity-75"
-                              fill="currentColor"
-                              d="M4 12a8 8 0 018-8v8H4z"
-                            />
-                          </svg>
+                          <FaSpinner className="animate-spin h-5 w-5 mr-2" />
                           Processing...
                         </span>
                       ) : (
                         'Execute Sell'
                       )}
                     </button>
+                    <ConfirmSellModal
+                      isOpen={isConfirmOpen}
+                      onClose={() => setIsConfirmOpen(false)}
+                      onConfirm={handleConfirmSell}
+                      quote={quote}
+                      tokenInfo={tokenInfo}
+                      isVerifiedAsset={session.isVerifiedAsset !== false}
+                      balance={balance}
+                    />
                   </>
                 ) : (
                   <p className="text-sm text-gray-500">
                     {loading ? 'Fetching quote...' : 'Waiting for quote...'}
                   </p>
                 )}
-              </div>
+                <button
+                  onClick={logout}
+                  className="btn-secondary w-full mt-4"
+                  aria-label="Disconnect wallet"
+                >
+                  Disconnect
+                </button>
+              </>
             ) : (
               <p className="text-sm text-gray-500">Fetching session...</p>
             )}
-            <button
-              onClick={logout}
-              className="w-full mt-4 bg-red-600 text-white py-2 rounded-lg hover:bg-red-700 transition"
-              aria-label="Disconnect Wallet"
-            >
-              Disconnect
-            </button>
-          </>
-        )}
-        {error && (
-          <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg" role="alert">
-            {error}
-            {error.includes('Missing sessionId') && (
-              <p>
-                <a
-                  href="https://t.me/yourBotUsername"
-                  className="underline"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                >
-                  Return to Telegram
-                </a>
-              </p>
+            {error && (
+              <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg" role="alert">
+                {error}
+              </div>
             )}
-          </div>
+            <HelpSection />
+          </>
         )}
       </div>
     </div>
