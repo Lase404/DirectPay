@@ -8,7 +8,7 @@ const sellScene = new Scenes.WizardScene(
   // Step 1: Parse and Validate Input
   async (ctx) => {
     const userId = ctx.from.id.toString();
-    const userState = await ctx.getUserState(userId);
+    const userState = await sellScene.getUserState(userId); // Use sellScene.getUserState
     const input = ctx.message.text.replace('/sell', '').trim().split(/\s+/);
 
     if (input.length < 3) {
@@ -44,9 +44,9 @@ const sellScene = new Scenes.WizardScene(
 
       let assets;
       if (ethers.utils.isAddress(assetInput)) {
-        assets = await validateAssetByAddress(ctx.wizard.state.assetInput, chainId, ctx.relayClient);
+        assets = await validateAssetByAddress(ctx.wizard.state.assetInput, chainId, sellScene.relayClient);
       } else {
-        assets = await validateAssetByTerm(ctx.wizard.state.assetInput, chainId, ctx.relayClient);
+        assets = await validateAssetByTerm(ctx.wizard.state.assetInput, chainId, sellScene.relayClient);
       }
 
       if (!assets || assets.length === 0) {
@@ -71,7 +71,7 @@ const sellScene = new Scenes.WizardScene(
         return ctx.wizard.selectStep(2); // Skip to bank selection
       }
     } catch (error) {
-      ctx.logger.error(`Error validating asset for user ${userId}: ${error.message}`);
+      sellScene.logger.error(`Error validating asset for user ${userId}: ${error.message}`);
       const errorMsg = userState.usePidgin
         ? '❌ Error checking asset. Try again or contact [@maxcswap](https://t.me/maxcswap).'
         : '❌ Error verifying asset. Try again or contact [@maxcswap](https://t.me/maxcswap).';
@@ -86,7 +86,7 @@ const sellScene = new Scenes.WizardScene(
   // Step 3: Bank Selection
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
-    const userState = await ctx.getUserState(userId);
+    const userState = await sellScene.getUserState(userId); // Use sellScene.getUserState
     const walletsWithBank = userState.wallets.filter(w => w.bank);
 
     if (!ctx.wizard.state.selectedAsset) {
@@ -141,7 +141,7 @@ const sellScene = new Scenes.WizardScene(
   // Step 5: Fetch Quote and Execute with Privy
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
-    const userState = await ctx.getUserState(userId);
+    const userState = await sellScene.getUserState(userId); // Use sellScene.getUserState
     const asset = ctx.wizard.state.selectedAsset;
     const bankDetails = ctx.wizard.state.bankDetails;
 
@@ -156,11 +156,11 @@ const sellScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown(userState.usePidgin
       ? '🔗 Connect your wallet now to sell. Follow the link below:'
       : '🔗 Please connect your wallet to proceed with the sell. Follow the link below:');
-    const connectUrl = `${ctx.webhookDomain}/connect?userId=${userId}&sessionId=${ctx.wizard.state.sessionId}`;
+    const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}&sessionId=${ctx.wizard.state.sessionId}`;
     await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
 
     // Store session in Firestore
-    await ctx.db.collection('sessions').doc(ctx.wizard.state.sessionId).set({
+    await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set({
       userId,
       amountInWei: ctx.wizard.state.amountInWei,
       token: asset.address,
@@ -250,7 +250,7 @@ async function fetchRelayQuote(userAddress, originChainId, originCurrency, amoun
 // Actions
 sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
-  const userState = await ctx.getUserState(ctx.wizard.state.userId);
+  const userState = await sellScene.getUserState(ctx.wizard.state.userId);
   const assets = ctx.wizard.state.validatedAssets;
 
   if (index >= 0 && index < assets.length) {
@@ -268,12 +268,12 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
 sellScene.action(/select_bank_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
   const userId = ctx.wizard.state.userId;
-  const userState = await ctx.getUserState(userId);
+  const userState = await sellScene.getUserState(userId);
   const walletsWithBank = userState.wallets.filter(w => w.bank);
 
   if (index >= 0 && index < walletsWithBank.length) {
     ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
-    ctx.wizard.state.sessionId = uuidv4();
+    ctx.wizard.state.sessionId = require('uuid').v4();
     const confirmMsg = userState.usePidgin
       ? `🏦 You go receive funds to:\n` +
         `*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n` +
@@ -301,7 +301,7 @@ sellScene.action('link_temp_bank', async (ctx) => {
 
 sellScene.action('confirm_bank', async (ctx) => {
   const userId = ctx.wizard.state.userId;
-  const userState = await ctx.getUserState(userId);
+  const userState = await sellScene.getUserState(userId);
   await ctx.replyWithMarkdown(userState.usePidgin
     ? '🔄 Dey fetch quote for your sell...'
     : '🔄 Fetching quote for your sell...');
@@ -316,11 +316,11 @@ sellScene.action('confirm_bank', async (ctx) => {
       asset.address,
       ctx.wizard.state.amountInWei,
       blockradarWallet,
-      ctx.relayClient
+      sellScene.relayClient
     );
 
     ctx.wizard.state.quote = quote;
-    ctx.wizard.state.sessionId = uuidv4();
+    ctx.wizard.state.sessionId = require('uuid').v4();
 
     const amountInUSD = ctx.wizard.state.amount * 1; // Assume 1:1 for simplicity, adjust with real rates
     const amountOut = ethers.utils.formatUnits(quote.amountOut, 6); // USDC decimals
@@ -343,7 +343,7 @@ sellScene.action('confirm_bank', async (ctx) => {
     await ctx.replyWithMarkdown(quoteMsg);
     return ctx.wizard.selectStep(4);
   } catch (error) {
-    ctx.logger.error(`Error fetching quote for user ${userId}: ${error.message}`);
+    sellScene.logger.error(`Error fetching quote for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown(userState.usePidgin
       ? '❌ Error fetching quote. Try again.'
       : '❌ Failed to fetch quote. Please try again.');
@@ -352,7 +352,7 @@ sellScene.action('confirm_bank', async (ctx) => {
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
-  const userState = await ctx.getUserState(ctx.wizard.state.userId);
+  const userState = await sellScene.getUserState(ctx.wizard.state.userId);
   await ctx.replyWithMarkdown(userState.usePidgin
     ? '❌ Sell cancelled.'
     : '❌ Sell process cancelled.');
@@ -362,7 +362,7 @@ sellScene.action('cancel_sell', async (ctx) => {
 
 // Setup Function
 function setup(bot, db, logger, getUserState, updateUserState, relayClient, privyClient, exchangeRates, chains) {
-  sellScene.getUserState = getUserState;
+  sellScene.getUserState = getUserState; // Attach getUserState to the scene
   sellScene.db = db;
   sellScene.logger = logger;
   sellScene.relayClient = relayClient;
@@ -376,7 +376,7 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
     if (ctx.scene.current?.id === 'bank_linking_scene_temp' && ctx.wizard.state.awaitingTempBank) {
       if (ctx.callbackQuery.data === 'confirm_bank_temp') {
         ctx.wizard.state.bankDetails = ctx.scene.state.bankDetails;
-        ctx.wizard.state.sessionId = uuidv4();
+        ctx.wizard.state.sessionId = require('uuid').v4();
         await ctx.wizard.selectStep(4); // Proceed to quote fetching
       }
     }
