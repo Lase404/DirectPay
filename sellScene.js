@@ -175,33 +175,43 @@ const sellScene = new Scenes.WizardScene(
         `Ready to connect your wallet to proceed?`;
     await ctx.replyWithMarkdown(confirmMsg);
 
-    const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}`;
-    sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
-
-    await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
-
+    // Prepare session data to pass in the URL
     const sessionData = {
       userId,
       amountInWei: ctx.wizard.state.amountInWei,
       token: asset.address,
       chainId: asset.chainId,
-      bankDetails,
+      bankDetails: JSON.stringify(bankDetails),
       blockradarWallet: ctx.wizard.state.selectedWalletAddress,
       status: 'pending',
       createdAt: new Date().toISOString()
     };
-    sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}, data: ${JSON.stringify(sessionData)}`);
 
+    // Encode session data as query parameters
+    const queryParams = new URLSearchParams({
+      userId: sessionData.userId,
+      amountInWei: sessionData.amountInWei,
+      token: sessionData.token,
+      chainId: sessionData.chainId.toString(),
+      bankDetails: sessionData.bankDetails,
+      blockradarWallet: sessionData.blockradarWallet,
+      status: sessionData.status,
+      createdAt: sessionData.createdAt
+    }).toString();
+
+    const connectUrl = `${sellScene.webhookDomain}/connect?${queryParams}`;
+    sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
+
+    await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
+
+    // Optionally store the session in Firestore for backend logging or future use
+    sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}, data: ${JSON.stringify(sessionData)}`);
     try {
       await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
       sellScene.logger.info(`Successfully stored session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
     } catch (error) {
       sellScene.logger.error(`Failed to store session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}: ${error.message}`);
-      const errorMsg = userState.usePidgin
-        ? '❌ Error saving session. Try again or contact [@maxcswap](https://t.me/maxcswap).'
-        : '❌ Error saving session. Try again or contact [@maxcswap](https://t.me/maxcswap).';
-      await ctx.replyWithMarkdown(errorMsg);
-      return ctx.scene.leave();
+      // Do not fail the flow, as Firestore storage is not critical for the client
     }
 
     return ctx.wizard.next();
@@ -330,13 +340,11 @@ sellScene.action('confirm_bank', async (ctx) => {
   sellScene.logger.info(`User ${userId} confirmed bank selection`);
 
   try {
-    // Attempt to answer the callback query, but don't let it block the flow if it fails
     try {
       await ctx.answerCbQuery();
       sellScene.logger.info(`Successfully answered callback query for user ${userId}`);
     } catch (cbError) {
       sellScene.logger.warn(`Failed to answer callback query for user ${userId}: ${cbError.message}`);
-      // Proceed anyway, as answering the callback query is not critical
     }
 
     return await ctx.wizard.selectStep(4);
