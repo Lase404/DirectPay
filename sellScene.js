@@ -2,7 +2,7 @@
 const { Scenes, Markup } = require('telegraf');
 const axios = require('axios');
 const ethers = require('ethers');
-const { v4: uuidv4 } = require('uuid'); // Import uuid
+const { v4: uuidv4 } = require('uuid');
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
@@ -11,6 +11,8 @@ const sellScene = new Scenes.WizardScene(
     const userId = ctx.from.id.toString();
     const userState = await sellScene.getUserState(userId);
     const input = ctx.message.text.replace('/sell', '').trim().split(/\s+/);
+
+    sellScene.logger.info(`User ${userId} entered sell scene with input: ${ctx.message.text}`);
 
     if (input.length < 3) {
       const errorMsg = userState.usePidgin
@@ -90,6 +92,8 @@ const sellScene = new Scenes.WizardScene(
     const userState = await sellScene.getUserState(userId);
     const walletsWithBank = userState.wallets.filter(w => w.bank);
 
+    sellScene.logger.info(`User ${userId} reached bank selection step. Wallets with bank: ${walletsWithBank.length}`);
+
     if (!ctx.wizard.state.selectedAsset) {
       const errorMsg = userState.usePidgin
         ? '❌ No asset selected. Start again with /sell.'
@@ -146,6 +150,8 @@ const sellScene = new Scenes.WizardScene(
     const asset = ctx.wizard.state.selectedAsset;
     const bankDetails = ctx.wizard.state.bankDetails;
 
+    sellScene.logger.info(`User ${userId} reached wallet connection step. Asset: ${asset.symbol}, Bank: ${bankDetails.bankName}`);
+
     if (!bankDetails) {
       const errorMsg = userState.usePidgin
         ? '❌ No bank selected. Start again with /sell.'
@@ -154,7 +160,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    ctx.wizard.state.sessionId = uuidv4(); // Generate session ID here
+    ctx.wizard.state.sessionId = uuidv4();
 
     const confirmMsg = userState.usePidgin
       ? `📝 *Sell Details*\n\n` +
@@ -170,25 +176,28 @@ const sellScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown(confirmMsg);
 
     const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}&sessionId=${ctx.wizard.state.sessionId}`;
+    sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
+
     await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
 
     // Store session in Firestore
-    await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set({
+    const sessionData = {
       userId,
       amountInWei: ctx.wizard.state.amountInWei,
       token: asset.address,
       chainId: asset.chainId,
       bankDetails,
-      blockradarWallet: userState.wallets[0].address, // Store for later
+      blockradarWallet: userState.wallets[0].address,
       status: 'pending',
       createdAt: new Date().toISOString()
-    });
+    };
+    sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}, data: ${JSON.stringify(sessionData)}`);
+    await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
 
     return ctx.wizard.next();
   },
   // Step 6: Wait for Wallet Connection and Client-Side Execution
   async (ctx) => {
-    // This step waits for client-side execution via Privy
     const userState = await sellScene.getUserState(ctx.wizard.state.userId);
     await ctx.replyWithMarkdown(userState.usePidgin
       ? '⏳ Dey wait for you to complete the sell for browser...'
@@ -210,6 +219,7 @@ function mapChainToId(chain) {
 
 async function validateAssetByAddress(address, chainId, relayClient) {
   try {
+    sellScene.logger.info(`Validating asset by address: ${address} on chainId: ${chainId}`);
     const response = await axios.post('https://api.relay.link/currencies/v1', {
       chainIds: [chainId],
       term: address,
@@ -219,14 +229,17 @@ async function validateAssetByAddress(address, chainId, relayClient) {
       useExternalSearch: true,
       depositAddressOnly: true
     }, { headers: { 'Content-Type': 'application/json' } });
+    sellScene.logger.info(`Relay.link response for address ${address}: ${JSON.stringify(response.data)}`);
     return response.data.flat();
   } catch (error) {
+    sellScene.logger.error(`Address validation failed for address ${address}: ${error.message}`);
     throw new Error(`Address validation failed: ${error.message}`);
   }
 }
 
 async function validateAssetByTerm(term, chainId, relayClient) {
   try {
+    sellScene.logger.info(`Validating asset by term: ${term} on chainId: ${chainId}`);
     const response = await axios.post('https://api.relay.link/currencies/v1', {
       chainIds: [chainId],
       term,
@@ -236,8 +249,10 @@ async function validateAssetByTerm(term, chainId, relayClient) {
       useExternalSearch: true,
       depositAddressOnly: true
     }, { headers: { 'Content-Type': 'application/json' } });
+    sellScene.logger.info(`Relay.link response for term ${term}: ${JSON.stringify(response.data)}`);
     return response.data.flat();
   } catch (error) {
+    sellScene.logger.error(`Term validation failed for term ${term}: ${error.message}`);
     throw new Error(`Term validation failed: ${error.message}`);
   }
 }
@@ -247,6 +262,8 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
   const userState = await sellScene.getUserState(ctx.wizard.state.userId);
   const assets = ctx.wizard.state.validatedAssets;
+
+  sellScene.logger.info(`User ${ctx.wizard.state.userId} selected asset index ${index}`);
 
   if (index >= 0 && index < assets.length) {
     ctx.wizard.state.selectedAsset = assets[index];
@@ -265,6 +282,8 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
   const userId = ctx.wizard.state.userId;
   const userState = await sellScene.getUserState(userId);
   const walletsWithBank = userState.wallets.filter(w => w.bank);
+
+  sellScene.logger.info(`User ${userId} selected bank index ${index}`);
 
   if (index >= 0 && index < walletsWithBank.length) {
     ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
@@ -289,6 +308,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
 });
 
 sellScene.action('link_temp_bank', async (ctx) => {
+  sellScene.logger.info(`User ${ctx.wizard.state.userId} chose to link a temporary bank`);
   await ctx.scene.enter('bank_linking_scene_temp');
   ctx.wizard.state.awaitingTempBank = true;
   await ctx.answerCbQuery();
@@ -296,13 +316,13 @@ sellScene.action('link_temp_bank', async (ctx) => {
 
 sellScene.action('confirm_bank', async (ctx) => {
   const userId = ctx.wizard.state.userId;
-  const userState = await sellScene.getUserState(userId);
-  // Skip quote fetching here; move to client-side
-  return ctx.wizard.selectStep(4); // Proceed to wallet connection
+  sellScene.logger.info(`User ${userId} confirmed bank selection`);
+  return ctx.wizard.selectStep(4);
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
   const userState = await sellScene.getUserState(ctx.wizard.state.userId);
+  sellScene.logger.info(`User ${ctx.wizard.state.userId} cancelled the sell process`);
   await ctx.replyWithMarkdown(userState.usePidgin
     ? '❌ Sell cancelled.'
     : '❌ Sell process cancelled.');
@@ -325,9 +345,10 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
   bot.on('callback_query', async (ctx) => {
     if (ctx.scene.current?.id === 'bank_linking_scene_temp' && ctx.wizard.state.awaitingTempBank) {
       if (ctx.callbackQuery.data === 'confirm_bank_temp') {
+        sellScene.logger.info(`User ${ctx.wizard.state.userId} confirmed temporary bank linking`);
         ctx.wizard.state.bankDetails = ctx.scene.state.bankDetails;
         ctx.wizard.state.sessionId = uuidv4();
-        await ctx.wizard.selectStep(4); // Proceed to wallet connection
+        await ctx.wizard.selectStep(4);
       }
     }
   });
