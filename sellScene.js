@@ -19,6 +19,7 @@ const sellScene = new Scenes.WizardScene(
     }
 
     const userId = ctx.from.id.toString();
+    ctx.wizard.state.userId = userId; // Explicitly set userId
     let userState;
     try {
       userState = await sellScene.getUserState(userId);
@@ -31,10 +32,10 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    const input = ctx.message.text.replace('/sell', '').trim().split(/\s+/);
-    sellScene.logger.info(`User ${userId} entered sell scene with input: ${ctx.message.text}`);
+    const input = ctx.message?.text?.replace('/sell', '').trim().split(/\s+/);
+    sellScene.logger.info(`User ${userId} entered sell scene with input: ${ctx.message?.text || 'unknown'}`);
 
-    if (input.length < 3) {
+    if (!input || input.length < 3) {
       const errorMsg = userState.usePidgin
         ? '❌ Format no correct. Use: /sell <amount> <asset/address> <chain>\nE.g., /sell 100 USDC eth'
         : '❌ Invalid format. Use: /sell <amount> <asset/address> <chain>\nE.g., /sell 100 USDC eth';
@@ -136,8 +137,30 @@ const sellScene = new Scenes.WizardScene(
   },
   // Step 2: Select Asset or Confirm Unverified
   async (ctx) => {
-    const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId);
+    if (!ctx.from || !ctx.from.id) {
+      sellScene.logger.error('Missing ctx.from or ctx.from.id in step 2');
+      await ctx.replyWithMarkdown(
+        '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+    ctx.wizard.state.userId = userId; // Ensure userId is set
+    let userState;
+    try {
+      userState = await sellScene.getUserState(userId);
+    } catch (error) {
+      sellScene.logger.error(`Failed to fetch user state for userId ${userId} in step 2: ${error.message}`);
+      await ctx.replyWithMarkdown(
+        '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    sellScene.logger.info(`User ${userId} reached step 2: asset selection/confirmation`);
 
     if (Date.now() - ctx.wizard.state.stepStartedAt > INACTIVITY_TIMEOUT) {
       sellScene.logger.info(`User ${userId} timed out in asset selection`);
@@ -155,10 +178,30 @@ const sellScene = new Scenes.WizardScene(
   },
   // Step 3: Bank Selection
   async (ctx) => {
-    const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId);
-    const walletsWithBank = userState.wallets.filter(w => w.bank);
+    if (!ctx.from || !ctx.from.id) {
+      sellScene.logger.error('Missing ctx.from or ctx.from.id in step 3');
+      await ctx.replyWithMarkdown(
+        '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
 
+    const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+    ctx.wizard.state.userId = userId;
+    let userState;
+    try {
+      userState = await sellScene.getUserState(userId);
+    } catch (error) {
+      sellScene.logger.error(`Failed to fetch user state for userId ${userId} in step 3: ${error.message}`);
+      await ctx.replyWithMarkdown(
+        '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    const walletsWithBank = userState.wallets.filter(w => w.bank);
     sellScene.logger.info(`User ${userId} reached bank selection step. Wallets with bank: ${walletsWithBank.length}`);
 
     if (!ctx.wizard.state.selectedAsset) {
@@ -228,8 +271,30 @@ const sellScene = new Scenes.WizardScene(
   },
   // Step 4: Confirm Bank Selection
   async (ctx) => {
-    const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId);
+    if (!ctx.from || !ctx.from.id) {
+      sellScene.logger.error('Missing ctx.from or ctx.from.id in step 4');
+      await ctx.replyWithMarkdown(
+        '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+    ctx.wizard.state.userId = userId;
+    let userState;
+    try {
+      userState = await sellScene.getUserState(userId);
+    } catch (error) {
+      sellScene.logger.error(`Failed to fetch user state for userId ${userId} in step 4: ${error.message}`);
+      await ctx.replyWithMarkdown(
+        '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    sellScene.logger.info(`User ${userId} reached step 4: bank confirmation`);
 
     if (!ctx.wizard.state.bankDetails || !ctx.wizard.state.selectedWalletAddress) {
       const errorMsg = userState.usePidgin
@@ -259,9 +324,31 @@ const sellScene = new Scenes.WizardScene(
   },
   // Step 5: Prompt Wallet Connection
   async (ctx) => {
-    const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId);
+    if (!ctx.from || !ctx.from.id) {
+      sellScene.logger.error('Missing ctx.from or ctx.from.id in step 5');
+      await ctx.replyWithMarkdown(
+        '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+    ctx.wizard.state.userId = userId;
+    let userState;
+    try {
+      userState = await sellScene.getUserState(userId);
+    } catch (error) {
+      sellScene.logger.error(`Failed to fetch user state for userId ${userId} in step 5: ${error.message}`);
+      await ctx.replyWithMarkdown(
+        '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
     const { selectedAsset: asset, bankDetails, selectedWalletAddress, amountInWei } = ctx.wizard.state;
+    sellScene.logger.info(`User ${userId} reached step 5: wallet connection`);
 
     if (!asset || !bankDetails || !selectedWalletAddress || !amountInWei) {
       const errorMsg = userState.usePidgin
@@ -331,9 +418,31 @@ const sellScene = new Scenes.WizardScene(
   },
   // Step 6: Wait for Wallet Connection and Client-Side Execution
   async (ctx) => {
-    const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId);
+    if (!ctx.from || !ctx.from.id) {
+      sellScene.logger.error('Missing ctx.from or ctx.from.id in step 6');
+      await ctx.replyWithMarkdown(
+        '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
+    const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+    ctx.wizard.state.userId = userId;
+    let userState;
+    try {
+      userState = await sellScene.getUserState(userId);
+    } catch (error) {
+      sellScene.logger.error(`Failed to fetch user state for userId ${userId} in step 6: ${error.message}`);
+      await ctx.replyWithMarkdown(
+        '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+        Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+      );
+      return ctx.scene.leave();
+    }
+
     const sessionId = ctx.wizard.state.sessionId;
+    sellScene.logger.info(`User ${userId} reached step 6: waiting for wallet connection, sessionId: ${sessionId}`);
 
     if (!sessionId) {
       const errorMsg = userState.usePidgin
@@ -399,6 +508,18 @@ const sellScene = new Scenes.WizardScene(
   }
 );
 
+// Middleware to ensure userId is set for all actions
+sellScene.use((ctx, next) => {
+  if (ctx.from && ctx.from.id) {
+    ctx.wizard.state = ctx.wizard.state || {};
+    ctx.wizard.state.userId = ctx.wizard.state.userId || ctx.from.id.toString();
+    sellScene.logger.debug(`Ensured userId ${ctx.wizard.state.userId} in middleware`);
+  } else {
+    sellScene.logger.warn('Missing ctx.from in middleware');
+  }
+  return next();
+});
+
 // Helper Functions
 function mapChainToId(chain) {
   const chainMap = {
@@ -419,7 +540,7 @@ async function validateAssetByAddress(address, chainId, relayClient) {
     const response = await axios.post('https://api.relay.link/currencies/v1', {
       chainIds: [chainId],
       term: address,
-      verified: false, // Allow unverified for broader search
+      verified: false,
       limit: 10,
       includeAllChains: false,
       useExternalSearch: true,
@@ -439,7 +560,7 @@ async function validateAssetByTerm(term, chainId, relayClient) {
     const response = await axios.post('https://api.relay.link/currencies/v1', {
       chainIds: [chainId],
       term,
-      verified: false, // Allow unverified for broader search
+      verified: false,
       limit: 10,
       includeAllChains: false,
       useExternalSearch: true,
@@ -455,11 +576,33 @@ async function validateAssetByTerm(term, chainId, relayClient) {
 
 // Actions
 sellScene.action(/select_asset_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1], 10);
-  const userId = ctx.wizard.state.userId;
-  const userState = await sellScene.getUserState(userId);
-  const assets = ctx.wizard.state.validatedAssets;
+  if (!ctx.from || !ctx.from.id) {
+    sellScene.logger.error('Missing ctx.from or ctx.from.id in select_asset action');
+    await ctx.replyWithMarkdown(
+      '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
 
+  const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+  ctx.wizard.state.userId = userId;
+  let userState;
+  try {
+    userState = await sellScene.getUserState(userId);
+  } catch (error) {
+    sellScene.logger.error(`Failed to fetch user state for userId ${userId} in select_asset: ${error.message}`);
+    await ctx.replyWithMarkdown(
+      '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const index = parseInt(ctx.match[1], 10);
+  const assets = ctx.wizard.state.validatedAssets;
   sellScene.logger.info(`User ${userId} selected asset index ${index}`);
 
   if (!assets || index < 0 || index >= assets.length) {
@@ -480,7 +623,18 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
 });
 
 sellScene.action('confirm_unverified', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
+  if (!ctx.from || !ctx.from.id) {
+    sellScene.logger.error('Missing ctx.from or ctx.from.id in confirm_unverified action');
+    await ctx.replyWithMarkdown(
+      '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+  ctx.wizard.state.userId = userId;
   sellScene.logger.info(`User ${userId} confirmed unverified asset`);
   ctx.wizard.state.stepStartedAt = Date.now();
   await ctx.answerCbQuery();
@@ -488,11 +642,33 @@ sellScene.action('confirm_unverified', async (ctx) => {
 });
 
 sellScene.action(/select_bank_(\d+)/, async (ctx) => {
-  const index = parseInt(ctx.match[1], 10);
-  const userId = ctx.wizard.state.userId;
-  const userState = await sellScene.getUserState(userId);
-  const walletsWithBank = userState.wallets.filter(w => w.bank);
+  if (!ctx.from || !ctx.from.id) {
+    sellScene.logger.error('Missing ctx.from or ctx.from.id in select_bank action');
+    await ctx.replyWithMarkdown(
+      '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
 
+  const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+  ctx.wizard.state.userId = userId;
+  let userState;
+  try {
+    userState = await sellScene.getUserState(userId);
+  } catch (error) {
+    sellScene.logger.error(`Failed to fetch user state for userId ${userId} in select_bank: ${error.message}`);
+    await ctx.replyWithMarkdown(
+      '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const index = parseInt(ctx.match[1], 10);
+  const walletsWithBank = userState.wallets.filter(w => w.bank);
   sellScene.logger.info(`User ${userId} selected bank index ${index}`);
 
   if (index < 0 || index >= walletsWithBank.length) {
@@ -503,7 +679,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
         [Markup.button.callback('❌ Cancel', 'cancel_sell')]
       ]));
     await ctx.answerCbQuery();
-      return;
+    return;
   }
 
   ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
@@ -530,8 +706,30 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
 });
 
 sellScene.action('confirm_bank', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
-  const userState = await sellScene.getUserState(userId);
+  if (!ctx.from || !ctx.from.id) {
+    sellScene.logger.error('Missing ctx.from or ctx.from.id in confirm_bank action');
+    await ctx.replyWithMarkdown(
+      '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+  ctx.wizard.state.userId = userId;
+  let userState;
+  try {
+    userState = await sellScene.getUserState(userId);
+  } catch (error) {
+    sellScene.logger.error(`Failed to fetch user state for userId ${userId} in confirm_bank: ${error.message}`);
+    await ctx.replyWithMarkdown(
+      '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
 
   sellScene.logger.info(`User ${userId} confirmed bank selection`);
 
@@ -552,7 +750,18 @@ sellScene.action('confirm_bank', async (ctx) => {
 });
 
 sellScene.action('link_temp_bank', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
+  if (!ctx.from || !ctx.from.id) {
+    sellScene.logger.error('Missing ctx.from or ctx.from.id in link_temp_bank action');
+    await ctx.replyWithMarkdown(
+      '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+  ctx.wizard.state.userId = userId;
   sellScene.logger.info(`User ${userId} chose to link a temporary bank`);
   ctx.wizard.state.awaitingTempBank = true;
   await ctx.scene.enter('bank_linking_scene_temp');
@@ -560,10 +769,32 @@ sellScene.action('link_temp_bank', async (ctx) => {
 });
 
 sellScene.action('back_to_asset', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
-  const userState = await sellScene.getUserState(userId);
-  const assets = ctx.wizard.state.validatedAssets;
+  if (!ctx.from || !ctx.from.id) {
+    sellScene.logger.error('Missing ctx.from or ctx.from.id in back_to_asset action');
+    await ctx.replyWithMarkdown(
+      '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
 
+  const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+  ctx.wizard.state.userId = userId;
+  let userState;
+  try {
+    userState = await sellScene.getUserState(userId);
+  } catch (error) {
+    sellScene.logger.error(`Failed to fetch user state for userId ${userId} in back_to_asset: ${error.message}`);
+    await ctx.replyWithMarkdown(
+      '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const assets = ctx.wizard.state.validatedAssets;
   sellScene.logger.info(`User ${userId} returned to asset selection`);
 
   if (!assets || assets.length === 0) {
@@ -593,10 +824,32 @@ sellScene.action('back_to_asset', async (ctx) => {
 });
 
 sellScene.action('back_to_bank', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
-  const userState = await sellScene.getUserState(userId);
-  const walletsWithBank = userState.wallets.filter(w => w.bank);
+  if (!ctx.from || !ctx.from.id) {
+    sellScene.logger.error('Missing ctx.from or ctx.from.id in back_to_bank action');
+    await ctx.replyWithMarkdown(
+      '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
 
+  const userId = ctx.wizard.state.userId || ctx.from.id.toString();
+  ctx.wizard.state.userId = userId;
+  let userState;
+  try {
+    userState = await sellScene.getUserState(userId);
+  } catch (error) {
+    sellScene.logger.error(`Failed to fetch user state for userId ${userId} in back_to_bank: ${error.message}`);
+    await ctx.replyWithMarkdown(
+      '❌ Error accessing your account. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const walletsWithBank = userState.wallets.filter(w => w.bank);
   sellScene.logger.info(`User ${userId} returned to bank selection`);
 
   if (!ctx.wizard.state.selectedAsset) {
@@ -639,14 +892,22 @@ sellScene.action('back_to_bank', async (ctx) => {
 });
 
 sellScene.action('retry_sell', async (ctx) => {
-  sellScene.logger.info(`User ${ctx.wizard.state.userId || 'unknown'} requested to retry sell`);
+  const userId = ctx.from?.id?.toString() || ctx.wizard.state.userId || 'unknown';
+  sellScene.logger.info(`User ${userId} requested to retry sell`);
   await ctx.answerCbQuery();
   await ctx.scene.enter('sell_scene');
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
-  const userState = await sellScene.getUserState(userId);
+  const userId = ctx.wizard.state.userId || ctx.from?.id?.toString() || 'unknown';
+  let userState;
+  try {
+    userState = await sellScene.getUserState(userId);
+  } catch (error) {
+    sellScene.logger.error(`Failed to fetch user state for userId ${userId} in cancel_sell: ${error.message}`);
+    userState = { usePidgin: false }; // Fallback
+  }
+
   sellScene.logger.info(`User ${userId} cancelled the sell process`);
   await ctx.replyWithMarkdown(userState.usePidgin
     ? '❌ Sell cancelled. You fit start again with /sell.'
@@ -671,7 +932,17 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
   bot.on('callback_query', async (ctx) => {
     if (ctx.scene.current?.id === 'bank_linking_scene_temp' && ctx.wizard.state.awaitingTempBank) {
       if (ctx.callbackQuery.data === 'confirm_bank_temp') {
-        sellScene.logger.info(`User ${ctx.wizard.state.userId} confirmed temporary bank linking`);
+        const userId = ctx.wizard.state.userId || ctx.from?.id?.toString();
+        if (!userId) {
+          sellScene.logger.error('Missing userId in bank_linking_scene_temp callback');
+          await ctx.replyWithMarkdown(
+            '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+            Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+          );
+          await ctx.answerCbQuery();
+          return;
+        }
+        sellScene.logger.info(`User ${userId} confirmed temporary bank linking`);
         ctx.wizard.state.bankDetails = ctx.scene.state.bankDetails;
         ctx.wizard.state.selectedWalletAddress = ctx.scene.state.walletAddress || ctx.wizard.state.selectedWalletAddress;
         ctx.wizard.state.stepStartedAt = Date.now();
