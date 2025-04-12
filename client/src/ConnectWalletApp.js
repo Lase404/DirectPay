@@ -24,7 +24,7 @@ const ConnectWalletApp = () => {
   }, []);
 
   useEffect(() => {
-    const fetchSession = async (retryCount = 3, delay = 1000) => {
+    const parseSessionFromUrl = () => {
       const urlParams = new URLSearchParams(location.search);
       const userId = urlParams.get('userId');
       if (!userId) {
@@ -32,42 +32,42 @@ const ConnectWalletApp = () => {
         return;
       }
 
-      for (let attempt = 1; attempt <= retryCount; attempt++) {
-        try {
-          console.log(`Attempt ${attempt}: Fetching session from /api/session?userId=${userId}`);
-          const response = await axios.get(`/api/session?userId=${userId}`);
-          console.log('Session response:', response.data);
+      try {
+        const sessionData = {
+          userId: urlParams.get('userId'),
+          amountInWei: urlParams.get('amountInWei'),
+          token: urlParams.get('token'),
+          chainId: parseInt(urlParams.get('chainId'), 10),
+          bankDetails: JSON.parse(urlParams.get('bankDetails')),
+          blockradarWallet: urlParams.get('blockradarWallet'),
+          status: urlParams.get('status'),
+          createdAt: urlParams.get('createdAt')
+        };
 
-          // Validate session data
-          const requiredFields = ['amountInWei', 'token', 'chainId', 'bankDetails', 'blockradarWallet'];
-          const missingFields = requiredFields.filter(field => !(field in response.data));
-          if (missingFields.length > 0) {
-            throw new Error(`Invalid session data: Missing fields - ${missingFields.join(', ')}`);
-          }
-
-          // Validate bankDetails
-          const bankRequiredFields = ['bankName', 'accountNumber', 'accountName'];
-          const missingBankFields = bankRequiredFields.filter(field => !(field in response.data.bankDetails));
-          if (missingBankFields.length > 0) {
-            throw new Error(`Invalid bank details: Missing fields - ${missingBankFields.join(', ')}`);
-          }
-
-          setSession(response.data);
-          setError(null);
-          break; // Exit retry loop on success
-        } catch (err) {
-          console.error(`Attempt ${attempt} failed:`, err);
-          if (attempt === retryCount) {
-            setError(`Failed to fetch session after ${retryCount} attempts: ${err.message}. Please try again or contact support.`);
-          } else {
-            await new Promise(resolve => setTimeout(resolve, delay));
-          }
+        // Validate session data
+        const requiredFields = ['amountInWei', 'token', 'chainId', 'bankDetails', 'blockradarWallet'];
+        const missingFields = requiredFields.filter(field => !sessionData[field]);
+        if (missingFields.length > 0) {
+          throw new Error(`Invalid session data: Missing fields - ${missingFields.join(', ')}`);
         }
+
+        // Validate bankDetails
+        const bankRequiredFields = ['bankName', 'accountNumber', 'accountName'];
+        const missingBankFields = bankRequiredFields.filter(field => !(field in sessionData.bankDetails));
+        if (missingBankFields.length > 0) {
+          throw new Error(`Invalid bank details: Missing fields - ${missingBankFields.join(', ')}`);
+        }
+
+        setSession(sessionData);
+        setError(null);
+      } catch (err) {
+        console.error('Error parsing session from URL:', err);
+        setError(`Failed to parse session data: ${err.message}. Please return to Telegram and try again.`);
       }
     };
 
     if (ready && authenticated) {
-      fetchSession();
+      parseSessionFromUrl();
     }
   }, [ready, authenticated, location.search]);
 
@@ -189,7 +189,7 @@ const ConnectWalletApp = () => {
               )}
             </>
           ) : (
-            <p>Fetching session...</p>
+            <p>Parsing session...</p>
           )}
           <button onClick={logout}>Disconnect</button>
         </>
