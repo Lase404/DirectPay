@@ -147,10 +147,17 @@ const ConnectWalletApp = () => {
 
   useEffect(() => {
     if (wallets.length > 0 && session && !quote && ready && authenticated) {
-      const provider = await wallets[0].getEthersProvider();
-      const signer = provider.getSigner();
-      const adaptedWallet = adaptEthersSigner(signer);
-      fetchQuote(adaptedWallet);
+      (async () => {
+        try {
+          const provider = await wallets[0].getEthersProvider();
+          const signer = await provider.getSigner();
+          const adaptedWallet = adaptEthersSigner(signer);
+          await fetchQuote(adaptedWallet);
+        } catch (err) {
+          setError(`Failed to initialize wallet for quote: ${err.message}`);
+          setStatus('error');
+        }
+      })();
     }
   }, [wallets, session, ready, authenticated]);
 
