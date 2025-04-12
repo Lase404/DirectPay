@@ -1,5 +1,6 @@
 // client/src/ConnectWalletApp.js
 import React, { useEffect, useState } from 'react';
+import { useLocation } from 'react-router-dom';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
 import axios from 'axios';
 import { ethers } from 'ethers';
@@ -12,13 +13,15 @@ const ConnectWalletApp = () => {
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const location = useLocation();
 
   useEffect(() => {
     const fetchSession = async () => {
-      const urlParams = new URLSearchParams(window.location.hash.substring(1));
-      console.log('window.location.hash:', window.location.hash);
-      console.log('window.location:', window.location);
+      const urlParams = new URLSearchParams(location.search);
+      console.log('location.search:', location.search);
+      console.log('location:', location);
       console.log('window.location.search (for comparison):', window.location.search);
+      console.log('window.location:', window.location);
       const userId = urlParams.get('userId');
       const sessionId = urlParams.get('sessionId');
       console.log('Extracted userId:', userId, 'sessionId:', sessionId);
@@ -42,7 +45,7 @@ const ConnectWalletApp = () => {
     if (ready && authenticated) {
       fetchSession();
     }
-  }, [ready, authenticated]);
+  }, [ready, authenticated, location.search]);
 
   const fetchQuote = async (walletAddress) => {
     if (!session) return;
@@ -100,8 +103,8 @@ const ConnectWalletApp = () => {
 
       console.log('Notifying server of sell completion');
       await axios.post('/webhook/sell-completed', {
-        userId: new URLSearchParams(window.location.hash.substring(1)).get('userId'),
-        sessionId: new URLSearchParams(window.location.hash.substring(1)).get('sessionId'),
+        userId: new URLSearchParams(location.search).get('userId'),
+        sessionId: new URLSearchParams(location.search).get('sessionId'),
         txHash: txResponse.hash
       });
 
