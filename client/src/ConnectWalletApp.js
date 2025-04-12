@@ -6,7 +6,7 @@ import { adaptEthersSigner } from '@reservoir0x/relay-ethers-wallet-adapter';
 import { ethers } from 'ethers';
 import axios from 'axios';
 import { toast, ToastContainer } from 'react-toastify';
-import { FaCoins, FaGasPump, FaExchangeAlt, FaShieldAlt, FaClock, FaWallet, FaCheckCircle, FaPaperPlane, FaCopy, FaExternalLinkAlt, FaChevronDown, FaExclamationTriangle } from 'react-icons/fa';
+import { FaCoins, FaGasPump, FaExchangeAlt, FaShieldAlt, FaClock, FaWallet, FaCheckCircle, FaPaperPlane, FaCopy, FaExternalLinkAlt, FaChevronDown, FaExclamationTriangle, FaSpinner } from 'react-icons/fa';
 import QRCode from 'react-qr-code';
 import { Dialog, Transition } from '@headlessui/react';
 import 'react-toastify/dist/ReactToastify.css';
@@ -171,7 +171,7 @@ const QuoteDisplay = ({ quote, tokenInfo, logoUri, isVerifiedAsset }) => {
             </p>
             <p className="flex items-center">
               <FaClock className="w-4 h-4 mr-2 text-gray-500" />
-              Est. Time: {quote.breakdown?.[0]?.timeEstimate || 12} seconds
+              Est. Time: ~{quote.breakdown?.[0]?.timeEstimate || 12} seconds
             </p>
           </div>
         )}
@@ -337,6 +337,19 @@ const ConnectWalletApp = () => {
   const [logoUri, setLogoUri] = useState(null);
   const [progress, setProgress] = useState(0);
   const location = useLocation();
+
+  const formatUSD = (value) => {
+    if (!value) return '0.00';
+    return parseFloat(value).toFixed(2);
+  };
+
+  const formatTokenAmount = (amount, decimals) => {
+    try {
+      return ethers.utils.formatUnits(amount, decimals);
+    } catch {
+      return amount;
+    }
+  };
 
   useEffect(() => {
     createClient({
@@ -721,19 +734,6 @@ const ConnectWalletApp = () => {
       })();
     }
   }, [wallets, session, ready, authenticated]);
-
-  const formatUSD = (value) => {
-    if (!value) return '0.00';
-    return parseFloat(value).toFixed(2);
-  };
-
-  const formatTokenAmount = (amount, decimals) => {
-    try {
-      return ethers.utils.formatUnits(amount, decimals);
-    } catch {
-      return amount;
-    }
-  };
 
   if (!ready) {
     return (
