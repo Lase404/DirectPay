@@ -171,7 +171,7 @@ const QuoteDisplay = ({ quote, tokenInfo, logoUri, isVerifiedAsset }) => {
             </p>
             <p className="flex items-center">
               <FaClock className="w-4 h-4 mr-2 text-gray-500" />
-              Est. Time: ~{quote.breakdown?.[0]?.timeEstimate || 12} seconds
+              Est. Time: {quote.breakdown?.[0]?.timeEstimate || 12} seconds
             </p>
           </div>
         )}
