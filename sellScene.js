@@ -85,7 +85,7 @@ const sellScene = new Scenes.WizardScene(
   async (ctx) => {
     // Handled by action below
   },
-  // Step 3: Bank Selection
+  // Step 3: Bank Selection and Wallet Connection Prompt
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
     const userState = await sellScene.getUserState(userId);
@@ -121,6 +121,7 @@ const sellScene = new Scenes.WizardScene(
       Markup.button.callback(`${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})`, `select_bank_${index}`)
     ]);
     bankOptions.push([Markup.button.callback('➕ Use Another Bank', 'link_temp_bank')]);
+    bankOptions.push([Markup.button.callback('❌ Cancel', 'cancel_sell')]);
 
     const assetMsg = userState.usePidgin
       ? `✅ *Asset Confirmed*\n\n` +
@@ -138,85 +139,7 @@ const sellScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
     return ctx.wizard.next();
   },
-  // Step 4: Confirm Bank and Proceed to Wallet Connection
-  async (ctx) => {
-    // Handled by actions below
-  },
-  // Step 5: Prompt for Wallet Connection
-  async (ctx) => {
-    const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId);
-    const asset = ctx.wizard.state.selectedAsset;
-    const bankDetails = ctx.wizard.state.bankDetails;
-
-    sellScene.logger.info(`User ${userId} reached wallet connection step. Asset: ${asset.symbol}, Bank: ${bankDetails.bankName}, Bank Details: ${JSON.stringify(bankDetails)}`);
-
-    if (!bankDetails) {
-      sellScene.logger.error(`No bank details found for user ${userId} at wallet connection step`);
-      const errorMsg = userState.usePidgin
-        ? '❌ No bank selected. Start again with /sell.'
-        : '❌ No bank selected. Please start over with /sell.';
-      await ctx.replyWithMarkdown(errorMsg);
-      return ctx.scene.leave();
-    }
-
-    ctx.wizard.state.sessionId = uuidv4();
-
-    const confirmMsg = userState.usePidgin
-      ? `📝 *Sell Details*\n\n` +
-        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
-        `*Chain:* ${ctx.wizard.state.chain}\n` +
-        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
-        `Ready to connect your wallet to proceed?`
-      : `📝 *Sell Details*\n\n` +
-        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
-        `*Chain:* ${ctx.wizard.state.chain}\n` +
-        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
-        `Ready to connect your wallet to proceed?`;
-    await ctx.replyWithMarkdown(confirmMsg);
-
-    // Prepare session data to pass in the URL
-    const sessionData = {
-      userId,
-      amountInWei: ctx.wizard.state.amountInWei,
-      token: asset.address,
-      chainId: asset.chainId,
-      bankDetails: JSON.stringify(bankDetails),
-      blockradarWallet: ctx.wizard.state.selectedWalletAddress,
-      status: 'pending',
-      createdAt: new Date().toISOString()
-    };
-
-    // Encode session data as query parameters
-    const queryParams = new URLSearchParams({
-      userId: sessionData.userId,
-      amountInWei: sessionData.amountInWei,
-      token: sessionData.token,
-      chainId: sessionData.chainId.toString(),
-      bankDetails: sessionData.bankDetails,
-      blockradarWallet: sessionData.blockradarWallet,
-      status: sessionData.status,
-      createdAt: sessionData.createdAt
-    }).toString();
-
-    const connectUrl = `${sellScene.webhookDomain}/connect?${queryParams}`;
-    sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
-
-    await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
-
-    // Optionally store the session in Firestore for backend logging or future use
-    sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}, data: ${JSON.stringify(sessionData)}`);
-    try {
-      await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
-      sellScene.logger.info(`Successfully stored session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
-    } catch (error) {
-      sellScene.logger.error(`Failed to store session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}: ${error.message}`);
-      // Do not fail the flow, as Firestore storage is not critical for the client
-    }
-
-    return ctx.wizard.next();
-  },
-  // Step 6: Wait for Wallet Connection and Client-Side Execution
+  // Step 4: Wait for Wallet Connection and Client-Side Execution
   async (ctx) => {
     const userState = await sellScene.getUserState(ctx.wizard.state.userId);
     await ctx.replyWithMarkdown(userState.usePidgin
@@ -309,22 +232,64 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
     ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
     ctx.wizard.state.selectedWalletAddress = walletsWithBank[index].address;
     ctx.wizard.state.sessionId = uuidv4();
+
+    const asset = ctx.wizard.state.selectedAsset;
+    const bankDetails = ctx.wizard.state.bankDetails;
+
+    // Directly prompt for wallet connection without a separate confirmation step
     const confirmMsg = userState.usePidgin
-      ? `🏦 You go receive funds to:\n` +
-        `*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n` +
-        `*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n` +
-        `*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\n` +
-        `E correct?`
-      : `🏦 Funds will be sent to:\n` +
-        `*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n` +
-        `*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n` +
-        `*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\n` +
-        `Is this correct?`;
-    await ctx.replyWithMarkdown(confirmMsg, Markup.inlineKeyboard([
-      [Markup.button.callback('✅ Yes', 'confirm_bank')],
-      [Markup.button.callback('❌ No', 'cancel_sell')]
-    ]));
+      ? `📝 *Sell Details*\n\n` +
+        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
+        `*Chain:* ${ctx.wizard.state.chain}\n` +
+        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+        `Ready to connect your wallet to proceed?`
+      : `📝 *Sell Details*\n\n` +
+        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
+        `*Chain:* ${ctx.wizard.state.chain}\n` +
+        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+        `Ready to connect your wallet to proceed?`;
+    await ctx.replyWithMarkdown(confirmMsg);
+
+    // Prepare session data to pass in the URL
+    const sessionData = {
+      userId,
+      amountInWei: ctx.wizard.state.amountInWei,
+      token: asset.address,
+      chainId: asset.chainId,
+      bankDetails: JSON.stringify(bankDetails),
+      blockradarWallet: ctx.wizard.state.selectedWalletAddress,
+      status: 'pending',
+      createdAt: new Date().toISOString()
+    };
+
+    // Encode session data as query parameters
+    const queryParams = new URLSearchParams({
+      userId: sessionData.userId,
+      amountInWei: sessionData.amountInWei,
+      token: sessionData.token,
+      chainId: sessionData.chainId.toString(),
+      bankDetails: sessionData.bankDetails,
+      blockradarWallet: sessionData.blockradarWallet,
+      status: sessionData.status,
+      createdAt: sessionData.createdAt
+    }).toString();
+
+    const connectUrl = `${sellScene.webhookDomain}/connect?${queryParams}`;
+    sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
+
+    await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
+
+    // Optionally store the session in Firestore for backend logging
+    sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}, data: ${JSON.stringify(sessionData)}`);
+    try {
+      await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
+      sellScene.logger.info(`Successfully stored session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
+    } catch (error) {
+      sellScene.logger.error(`Failed to store session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}: ${error.message}`);
+    }
+
     await ctx.answerCbQuery();
+    return ctx.wizard.selectStep(3); // Move to waiting for wallet connection
   }
 });
 
@@ -333,30 +298,6 @@ sellScene.action('link_temp_bank', async (ctx) => {
   await ctx.scene.enter('bank_linking_scene_temp');
   ctx.wizard.state.awaitingTempBank = true;
   await ctx.answerCbQuery();
-});
-
-sellScene.action('confirm_bank', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
-  sellScene.logger.info(`User ${userId} confirmed bank selection`);
-
-  try {
-    try {
-      await ctx.answerCbQuery();
-      sellScene.logger.info(`Successfully answered callback query for user ${userId}`);
-    } catch (cbError) {
-      sellScene.logger.warn(`Failed to answer callback query for user ${userId}: ${cbError.message}`);
-    }
-
-    return await ctx.wizard.selectStep(4);
-  } catch (error) {
-    sellScene.logger.error(`Error advancing to wallet connection step for user ${userId}: ${error.message}`);
-    const userState = await sellScene.getUserState(userId);
-    const errorMsg = userState.usePidgin
-      ? '❌ Error proceeding to wallet connection. Try again or contact [@maxcswap](https://t.me/maxcswap).'
-      : '❌ Error proceeding to wallet connection. Try again or contact [@maxcswap](https://t.me/maxcswap).';
-    await ctx.replyWithMarkdown(errorMsg);
-    return ctx.scene.leave();
-  }
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
@@ -387,7 +328,7 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
         sellScene.logger.info(`User ${ctx.wizard.state.userId} confirmed temporary bank linking`);
         ctx.wizard.state.bankDetails = ctx.scene.state.bankDetails;
         ctx.wizard.state.sessionId = uuidv4();
-        await ctx.wizard.selectStep(4);
+        await ctx.wizard.selectStep(2); // Return to bank selection step
       }
     }
   });
