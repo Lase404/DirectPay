@@ -2,13 +2,14 @@
 const { Scenes, Markup } = require('telegraf');
 const axios = require('axios');
 const ethers = require('ethers');
+const { v4: uuidv4 } = require('uuid'); // Import uuid
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // Step 1: Parse and Validate Input
   async (ctx) => {
     const userId = ctx.from.id.toString();
-    const userState = await sellScene.getUserState(userId); // Use sellScene.getUserState
+    const userState = await sellScene.getUserState(userId);
     const input = ctx.message.text.replace('/sell', '').trim().split(/\s+/);
 
     if (input.length < 3) {
@@ -86,7 +87,7 @@ const sellScene = new Scenes.WizardScene(
   // Step 3: Bank Selection
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId); // Use sellScene.getUserState
+    const userState = await sellScene.getUserState(userId);
     const walletsWithBank = userState.wallets.filter(w => w.bank);
 
     if (!ctx.wizard.state.selectedAsset) {
@@ -134,14 +135,14 @@ const sellScene = new Scenes.WizardScene(
     await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
     return ctx.wizard.next();
   },
-  // Step 4: Confirm Bank and Proceed to Quote
+  // Step 4: Confirm Bank and Proceed to Wallet Connection
   async (ctx) => {
     // Handled by actions below
   },
-  // Step 5: Fetch Quote and Execute with Privy
+  // Step 5: Prompt for Wallet Connection
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
-    const userState = await sellScene.getUserState(userId); // Use sellScene.getUserState
+    const userState = await sellScene.getUserState(userId);
     const asset = ctx.wizard.state.selectedAsset;
     const bankDetails = ctx.wizard.state.bankDetails;
 
@@ -153,9 +154,21 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    await ctx.replyWithMarkdown(userState.usePidgin
-      ? '🔗 Connect your wallet now to sell. Follow the link below:'
-      : '🔗 Please connect your wallet to proceed with the sell. Follow the link below:');
+    ctx.wizard.state.sessionId = uuidv4(); // Generate session ID here
+
+    const confirmMsg = userState.usePidgin
+      ? `📝 *Sell Details*\n\n` +
+        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
+        `*Chain:* ${ctx.wizard.state.chain}\n` +
+        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+        `Ready to connect your wallet to proceed?`
+      : `📝 *Sell Details*\n\n` +
+        `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
+        `*Chain:* ${ctx.wizard.state.chain}\n` +
+        `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+        `Ready to connect your wallet to proceed?`;
+    await ctx.replyWithMarkdown(confirmMsg);
+
     const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}&sessionId=${ctx.wizard.state.sessionId}`;
     await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
 
@@ -166,15 +179,20 @@ const sellScene = new Scenes.WizardScene(
       token: asset.address,
       chainId: asset.chainId,
       bankDetails,
+      blockradarWallet: userState.wallets[0].address, // Store for later
       status: 'pending',
       createdAt: new Date().toISOString()
     });
 
     return ctx.wizard.next();
   },
-  // Step 6: Wait for Wallet Connection and Execute
+  // Step 6: Wait for Wallet Connection and Client-Side Execution
   async (ctx) => {
     // This step waits for client-side execution via Privy
+    const userState = await sellScene.getUserState(ctx.wizard.state.userId);
+    await ctx.replyWithMarkdown(userState.usePidgin
+      ? '⏳ Dey wait for you to complete the sell for browser...'
+      : '⏳ Waiting for you to complete the sell in your browser...');
   }
 );
 
@@ -186,7 +204,6 @@ function mapChainToId(chain) {
     'polygon': 137,
     'bnb': 56,
     'base': 8453,
-    // Add more EVM chains as needed
   };
   return chainMap[chain.toLowerCase()];
 }
@@ -225,28 +242,6 @@ async function validateAssetByTerm(term, chainId, relayClient) {
   }
 }
 
-async function fetchRelayQuote(userAddress, originChainId, originCurrency, amount, recipient, relayClient) {
-  try {
-    const quotePayload = {
-      user: userAddress,
-      originChainId,
-      originCurrency,
-      destinationChainId: 8453, // Base chain
-      destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
-      tradeType: 'EXACT_INPUT',
-      recipient,
-      amount,
-      refundTo: userAddress
-    };
-    const response = await axios.post('https://api.relay.link/quote', quotePayload, {
-      headers: { 'Content-Type': 'application/json' }
-    });
-    return response.data;
-  } catch (error) {
-    throw new Error(`Failed to fetch Relay quote: ${error.message}`);
-  }
-}
-
 // Actions
 sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
@@ -273,7 +268,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
 
   if (index >= 0 && index < walletsWithBank.length) {
     ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
-    ctx.wizard.state.sessionId = require('uuid').v4();
+    ctx.wizard.state.sessionId = uuidv4();
     const confirmMsg = userState.usePidgin
       ? `🏦 You go receive funds to:\n` +
         `*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n` +
@@ -302,53 +297,8 @@ sellScene.action('link_temp_bank', async (ctx) => {
 sellScene.action('confirm_bank', async (ctx) => {
   const userId = ctx.wizard.state.userId;
   const userState = await sellScene.getUserState(userId);
-  await ctx.replyWithMarkdown(userState.usePidgin
-    ? '🔄 Dey fetch quote for your sell...'
-    : '🔄 Fetching quote for your sell...');
-  
-  const asset = ctx.wizard.state.selectedAsset;
-  const blockradarWallet = userState.wallets[0].address; // Assuming first wallet for simplicity
-
-  try {
-    const quote = await fetchRelayQuote(
-      '0xUserWalletPlaceholder', // Will be updated client-side
-      asset.chainId,
-      asset.address,
-      ctx.wizard.state.amountInWei,
-      blockradarWallet,
-      sellScene.relayClient
-    );
-
-    ctx.wizard.state.quote = quote;
-    ctx.wizard.state.sessionId = require('uuid').v4();
-
-    const amountInUSD = ctx.wizard.state.amount * 1; // Assume 1:1 for simplicity, adjust with real rates
-    const amountOut = ethers.utils.formatUnits(quote.amountOut, 6); // USDC decimals
-    const fees = ethers.utils.formatEther(quote.feeDetails.totalFee);
-    const slippage = quote.slippage || '0.5%';
-
-    const quoteMsg = userState.usePidgin
-      ? `📊 *Sell Quote*\n\n` +
-        `*Amount In:* ${ctx.wizard.state.amount} ${asset.symbol} (~$${amountInUSD})\n` +
-        `*Amount Out:* ${amountOut} USDC\n` +
-        `*Fees:* ${fees} ETH\n` +
-        `*Slippage:* ${slippage}\n\n` +
-        `Ready to connect wallet and sell?`
-      : `📊 *Sell Quote*\n\n` +
-        `*Amount In:* ${ctx.wizard.state.amount} ${asset.symbol} (~$${amountInUSD})\n` +
-        `*Amount Out:* ${amountOut} USDC\n` +
-        `*Fees:* ${fees} ETH\n` +
-        `*Slippage:* ${slippage}\n\n` +
-        `Ready to connect your wallet and proceed?`;
-    await ctx.replyWithMarkdown(quoteMsg);
-    return ctx.wizard.selectStep(4);
-  } catch (error) {
-    sellScene.logger.error(`Error fetching quote for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown(userState.usePidgin
-      ? '❌ Error fetching quote. Try again.'
-      : '❌ Failed to fetch quote. Please try again.');
-    return ctx.scene.leave();
-  }
+  // Skip quote fetching here; move to client-side
+  return ctx.wizard.selectStep(4); // Proceed to wallet connection
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
@@ -362,7 +312,7 @@ sellScene.action('cancel_sell', async (ctx) => {
 
 // Setup Function
 function setup(bot, db, logger, getUserState, updateUserState, relayClient, privyClient, exchangeRates, chains) {
-  sellScene.getUserState = getUserState; // Attach getUserState to the scene
+  sellScene.getUserState = getUserState;
   sellScene.db = db;
   sellScene.logger = logger;
   sellScene.relayClient = relayClient;
@@ -376,8 +326,8 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
     if (ctx.scene.current?.id === 'bank_linking_scene_temp' && ctx.wizard.state.awaitingTempBank) {
       if (ctx.callbackQuery.data === 'confirm_bank_temp') {
         ctx.wizard.state.bankDetails = ctx.scene.state.bankDetails;
-        ctx.wizard.state.sessionId = require('uuid').v4();
-        await ctx.wizard.selectStep(4); // Proceed to quote fetching
+        ctx.wizard.state.sessionId = uuidv4();
+        await ctx.wizard.selectStep(4); // Proceed to wallet connection
       }
     }
   });
