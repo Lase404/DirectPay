@@ -3406,18 +3406,16 @@ stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankL
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
 });
-// Updated /api/session endpoint
 app.get('/api/session', async (req, res) => {
   const { userId } = req.query;
-  logger.info(`Received /api/session request: userId=${userId}`);
+  logger.info(`Fetching session for user ${userId}`);
 
   if (!userId) {
-    logger.error('Missing userId in /api/session request');
-    return res.status(400).json({ error: 'Missing userId' });
+    logger.error('No userId provided in /api/session request');
+    return res.status(400).json({ error: 'userId is required' });
   }
 
   try {
-    logger.info(`Querying Firestore for pending session: userId=${userId}`);
     const sessionSnapshot = await db.collection('sessions')
       .where('userId', '==', userId)
       .where('status', '==', 'pending')
@@ -3430,23 +3428,35 @@ app.get('/api/session', async (req, res) => {
       return res.status(404).json({ error: 'No pending session found' });
     }
 
-    const session = sessionSnapshot.docs[0].data();
-    const sessionId = sessionSnapshot.docs[0].id; // Get the sessionId for logging
-    logger.info(`Fetched session for user ${userId}, sessionId: ${sessionId}, data: ${JSON.stringify(session)}`);
+    if (sessionSnapshot.size > 1) {
+      logger.warn(`Multiple pending sessions found for user ${userId}, using the most recent`);
+    }
 
-    const responseData = {
-      amount: session.amountInWei,
-      token: session.token,
-      blockradarWallet: session.blockradarWallet // Renamed from walletAddress to match client expectation
-    };
-    logger.info(`Returning session data for user ${userId}: ${JSON.stringify(responseData)}`);
-    res.json(responseData);
+    const session = sessionSnapshot.docs[0].data();
+    logger.info(`Retrieved session for user ${userId}: ${JSON.stringify(session)}`);
+
+    // Validate session data
+    const requiredFields = ['amountInWei', 'token', 'chainId', 'bankDetails', 'blockradarWallet'];
+    const missingFields = requiredFields.filter(field => !(field in session));
+    if (missingFields.length > 0) {
+      logger.error(`Invalid session data for user ${userId}: Missing fields - ${missingFields.join(', ')}`);
+      return res.status(400).json({ error: `Invalid session data: Missing fields - ${missingFields.join(', ')}` });
+    }
+
+    // Validate bankDetails
+    const bankRequiredFields = ['bankName', 'accountNumber', 'accountName'];
+    const missingBankFields = bankRequiredFields.filter(field => !(field in session.bankDetails));
+    if (missingBankFields.length > 0) {
+      logger.error(`Invalid bank details for user ${userId}: Missing fields - ${missingBankFields.join(', ')}`);
+      return res.status(400).json({ error: `Invalid bank details: Missing fields - ${missingBankFields.join(', ')}` });
+    }
+
+    res.json(session);
   } catch (error) {
     logger.error(`Error fetching session for user ${userId}: ${error.message}`);
-    res.status(500).json({ error: 'Internal server error' });
+    res.status(500).json({ error: 'Failed to fetch session' });
   }
 });
-
 // =================== Server Startup ===================
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
