@@ -565,7 +565,7 @@ const ConnectWalletApp = () => {
         currency: session.token,
         toCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
         tradeType: 'EXACT_INPUT',
-        amount: session.amountIn письма,
+        amount: session.amountIn,
         wallet: adaptedWallet,
         recipient: session.blockradarWallet,
       });
