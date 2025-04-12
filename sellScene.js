@@ -327,7 +327,19 @@ sellScene.action('link_temp_bank', async (ctx) => {
 sellScene.action('confirm_bank', async (ctx) => {
   const userId = ctx.wizard.state.userId;
   sellScene.logger.info(`User ${userId} confirmed bank selection`);
-  return ctx.wizard.selectStep(4);
+
+  try {
+    await ctx.answerCbQuery();
+    return await ctx.wizard.selectStep(4);
+  } catch (error) {
+    sellScene.logger.error(`Error advancing to wallet connection step for user ${userId}: ${error.message}`);
+    const userState = await sellScene.getUserState(userId);
+    const errorMsg = userState.usePidgin
+      ? '❌ Error proceeding to wallet connection. Try again or contact [@maxcswap](https://t.me/maxcswap).'
+      : '❌ Error proceeding to wallet connection. Try again or contact [@maxcswap](https://t.me/maxcswap).';
+    await ctx.replyWithMarkdown(errorMsg);
+    return ctx.scene.leave();
+  }
 });
 
 sellScene.action('cancel_sell', async (ctx) => {
