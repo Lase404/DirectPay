@@ -175,7 +175,8 @@ const sellScene = new Scenes.WizardScene(
         `Ready to connect your wallet to proceed?`;
     await ctx.replyWithMarkdown(confirmMsg);
 
-    const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}&sessionId=${ctx.wizard.state.sessionId}`; // Use query parameters
+    // Only pass userId in the URL since /api/session no longer needs sessionId
+    const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}`;
     sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
 
     await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
@@ -186,7 +187,7 @@ const sellScene = new Scenes.WizardScene(
       token: asset.address,
       chainId: asset.chainId,
       bankDetails,
-      blockradarWallet: userState.wallets[0].address,
+      blockradarWallet: userState.wallets[0].address, // Renamed to match /api/session response
       status: 'pending',
       createdAt: new Date().toISOString()
     };
