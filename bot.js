@@ -3398,26 +3398,7 @@ app.post('/webhook/wallet-connected', async (req, res) => {
   res.status(200).send('OK');
 });
 
-app.get('/api/session', async (req, res) => {
-  const { userId } = req.query;
-  const sessionSnapshot = await db.collection('sessions')
-    .where('userId', '==', userId)
-    .where('status', '==', 'pending')
-    .orderBy('createdAt', 'desc')
-    .limit(1)
-    .get();
 
-  if (sessionSnapshot.empty) {
-    return res.status(404).json({ error: 'No pending session found' });
-  }
-
-  const session = sessionSnapshot.docs[0].data();
-  res.json({
-    amount: session.amountInWei,
-    token: session.token,
-    blockradarWallet: session.walletAddress
-  });
-});
 // Serve React frontend static files
 app.use(express.static(path.join(__dirname, 'client', 'build')));
 
@@ -3425,7 +3406,46 @@ stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankL
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
 });
+// Updated /api/session endpoint
+app.get('/api/session', async (req, res) => {
+  const { userId } = req.query;
+  logger.info(`Received /api/session request: userId=${userId}`);
 
+  if (!userId) {
+    logger.error('Missing userId in /api/session request');
+    return res.status(400).json({ error: 'Missing userId' });
+  }
+
+  try {
+    logger.info(`Querying Firestore for pending session: userId=${userId}`);
+    const sessionSnapshot = await db.collection('sessions')
+      .where('userId', '==', userId)
+      .where('status', '==', 'pending')
+      .orderBy('createdAt', 'desc')
+      .limit(1)
+      .get();
+
+    if (sessionSnapshot.empty) {
+      logger.error(`No pending session found for user ${userId}`);
+      return res.status(404).json({ error: 'No pending session found' });
+    }
+
+    const session = sessionSnapshot.docs[0].data();
+    const sessionId = sessionSnapshot.docs[0].id; // Get the sessionId for logging
+    logger.info(`Fetched session for user ${userId}, sessionId: ${sessionId}, data: ${JSON.stringify(session)}`);
+
+    const responseData = {
+      amount: session.amountInWei,
+      token: session.token,
+      blockradarWallet: session.blockradarWallet // Renamed from walletAddress to match client expectation
+    };
+    logger.info(`Returning session data for user ${userId}: ${JSON.stringify(responseData)}`);
+    res.json(responseData);
+  } catch (error) {
+    logger.error(`Error fetching session for user ${userId}: ${error.message}`);
+    res.status(500).json({ error: 'Internal server error' });
+  }
+});
 
 // =================== Server Startup ===================
 app.listen(PORT, () => {
