@@ -541,7 +541,7 @@ sellScene.action('back_to_asset', async (ctx) => {
     : '🤔 Please select an asset (Step 1/4):', Markup.inlineKeyboard(options));
   ctx.wizard.state.stepStartedAt = Date.now();
   await ctx.answerCbQuery();
-  return ctx.wizard گیبselectStep(1);
+  return ctx.wizard.selectStep(1);
 });
 
 sellScene.action('back_to_bank', async (ctx) => {
