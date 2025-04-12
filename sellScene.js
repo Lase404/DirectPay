@@ -1,4 +1,3 @@
-// sellScene.js
 const { Scenes, Markup } = require('telegraf');
 const axios = require('axios');
 const ethers = require('ethers');
@@ -86,13 +85,13 @@ const sellScene = new Scenes.WizardScene(
   async (ctx) => {
     // Handled by action below
   },
-  // Step 3: Bank Selection
+  // Step 3: Bank Selection (Updated to filter Base wallets)
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
     const userState = await sellScene.getUserState(userId);
-    const walletsWithBank = userState.wallets.filter(w => w.bank);
+    const walletsWithBankOnBase = userState.wallets.filter(w => w.chain === 'base' && w.bank);
 
-    sellScene.logger.info(`User ${userId} reached bank selection step. Wallets with bank: ${walletsWithBank.length}`);
+    sellScene.logger.info(`User ${userId} reached bank selection step. Wallets with bank on Base: ${walletsWithBankOnBase.length}`);
 
     if (!ctx.wizard.state.selectedAsset) {
       const errorMsg = userState.usePidgin
@@ -107,21 +106,21 @@ const sellScene = new Scenes.WizardScene(
 
     ctx.wizard.state.amountInWei = amountInWei;
 
-    if (walletsWithBank.length === 0) {
+    if (walletsWithBankOnBase.length === 0) {
       const prompt = userState.usePidgin
-        ? '🏦 No bank linked yet. You wan link one for this sell?'
-        : '🏦 No bank linked yet. Would you like to link one for this sell?';
+        ? '🏦 No bank linked to your Base wallet yet. You wan link one for this sell?'
+        : '🏦 No bank linked to your Base wallet yet. Would you like to link one for this sell?';
       await ctx.replyWithMarkdown(prompt, Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Yes', 'link_temp_bank')],
+        [Markup.button.callback('✅ Yes', 'link_temp_bank_base')],
         [Markup.button.callback('❌ No', 'cancel_sell')]
       ]));
       return ctx.wizard.next();
     }
 
-    const bankOptions = walletsWithBank.map((wallet, index) => [
+    const bankOptions = walletsWithBankOnBase.map((wallet, index) => [
       Markup.button.callback(`${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})`, `select_bank_${index}`)
     ]);
-    bankOptions.push([Markup.button.callback('➕ Use Another Bank', 'link_temp_bank')]);
+    bankOptions.push([Markup.button.callback('➕ Use Another Bank', 'link_temp_bank_base')]);
 
     const assetMsg = userState.usePidgin
       ? `✅ *Asset Confirmed*\n\n` +
@@ -143,7 +142,7 @@ const sellScene = new Scenes.WizardScene(
   async (ctx) => {
     // Handled by actions below
   },
-  // Step 5: Prompt for Wallet Connection
+  // Step 5: Prompt for Wallet Connection (Updated to store Base wallet)
   async (ctx) => {
     const userId = ctx.wizard.state.userId;
     const userState = await sellScene.getUserState(userId);
@@ -175,7 +174,6 @@ const sellScene = new Scenes.WizardScene(
         `Ready to connect your wallet to proceed?`;
     await ctx.replyWithMarkdown(confirmMsg);
 
-    // Only pass userId in the URL since /api/session no longer needs sessionId
     const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}`;
     sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
 
@@ -187,7 +185,7 @@ const sellScene = new Scenes.WizardScene(
       token: asset.address,
       chainId: asset.chainId,
       bankDetails,
-      blockradarWallet: userState.wallets[0].address, // Renamed to match /api/session response
+      blockradarWallet: ctx.wizard.state.selectedWalletAddress, // Use the selected Base wallet
       status: 'pending',
       createdAt: new Date().toISOString()
     };
@@ -281,12 +279,13 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
   const userId = ctx.wizard.state.userId;
   const userState = await sellScene.getUserState(userId);
-  const walletsWithBank = userState.wallets.filter(w => w.bank);
+  const walletsWithBankOnBase = userState.wallets.filter(w => w.chain === 'base' && w.bank);
 
-  sellScene.logger.info(`User ${userId} selected bank index ${index}`);
+  sellScene.logger.info(`User ${userId} selected bank index ${index} on Base`);
 
-  if (index >= 0 && index < walletsWithBank.length) {
-    ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
+  if (index >= 0 && index < walletsWithBankOnBase.length) {
+    ctx.wizard.state.bankDetails = walletsWithBankOnBase[index].bank;
+    ctx.wizard.state.selectedWalletAddress = walletsWithBankOnBase[index].address;
     ctx.wizard.state.sessionId = uuidv4();
     const confirmMsg = userState.usePidgin
       ? `🏦 You go receive funds to:\n` +
@@ -307,9 +306,9 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
   }
 });
 
-sellScene.action('link_temp_bank', async (ctx) => {
-  sellScene.logger.info(`User ${ctx.wizard.state.userId} chose to link a temporary bank`);
-  await ctx.scene.enter('bank_linking_scene_temp');
+sellScene.action('link_temp_bank_base', async (ctx) => {
+  sellScene.logger.info(`User ${ctx.wizard.state.userId} chose to link a temporary bank for Base`);
+  await ctx.scene.enter('bank_linking_scene_temp', { chain: 'base' });
   ctx.wizard.state.awaitingTempBank = true;
   await ctx.answerCbQuery();
 });
@@ -347,6 +346,7 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
       if (ctx.callbackQuery.data === 'confirm_bank_temp') {
         sellScene.logger.info(`User ${ctx.wizard.state.userId} confirmed temporary bank linking`);
         ctx.wizard.state.bankDetails = ctx.scene.state.bankDetails;
+        ctx.wizard.state.selectedWalletAddress = ctx.scene.state.tempWalletAddress; // Assuming bank_linking_scene_temp sets this
         ctx.wizard.state.sessionId = uuidv4();
         await ctx.wizard.selectStep(4);
       }
