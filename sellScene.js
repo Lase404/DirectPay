@@ -190,7 +190,18 @@ const sellScene = new Scenes.WizardScene(
       createdAt: new Date().toISOString()
     };
     sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}, data: ${JSON.stringify(sessionData)}`);
-    await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
+
+    try {
+      await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
+      sellScene.logger.info(`Successfully stored session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
+    } catch (error) {
+      sellScene.logger.error(`Failed to store session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}: ${error.message}`);
+      const errorMsg = userState.usePidgin
+        ? '❌ Error saving session. Try again or contact [@maxcswap](https://t.me/maxcswap).'
+        : '❌ Error saving session. Try again or contact [@maxcswap](https://t.me/maxcswap).';
+      await ctx.replyWithMarkdown(errorMsg);
+      return ctx.scene.leave();
+    }
 
     return ctx.wizard.next();
   },
