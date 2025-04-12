@@ -1,4 +1,4 @@
-import React, { useEffect, useState, useCallback } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
 import { createClient, getClient } from '@reservoir0x/relay-sdk';
@@ -13,56 +13,73 @@ const ConnectWalletApp = () => {
   const [session, setSession] = useState(null);
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState(null);
-  const [status, setStatus] = useState('idle');
   const [loading, setLoading] = useState(false);
-  const [transactionProgress, setTransactionProgress] = useState(null);
-  const [isCancelRequested, setIsCancelRequested] = useState(false);
+  const [status, setStatus] = useState('idle');
   const location = useLocation();
 
-  // Initialize Relay SDK
   useEffect(() => {
     createClient({
       baseApiUrl: 'https://api.relay.link',
     });
   }, []);
 
-  // Fetch session data
   useEffect(() => {
-    const fetchSession = async () => {
+    const fetchSession = async (retryCount = 3, delay = 1000) => {
       const urlParams = new URLSearchParams(location.search);
       const userId = urlParams.get('userId');
       if (!userId) {
         setError('Missing userId in URL. Please return to Telegram and try again.');
         return;
       }
-      try {
-        setStatus('Fetching session...');
-        const response = await axios.get(`/api/session?userId=${userId}`);
-        if (!response.data || !response.data.blockradarWallet) {
-          throw new Error('Invalid session data received.');
+
+      for (let attempt = 1; attempt <= retryCount; attempt++) {
+        try {
+          console.log(`Attempt ${attempt}: Fetching session from /api/session?userId=${userId}`);
+          const response = await axios.get(`/api/session?userId=${userId}`);
+          console.log('Session response:', response.data);
+
+          // Validate session data
+          const requiredFields = ['amountInWei', 'token', 'chainId', 'bankDetails', 'blockradarWallet'];
+          const missingFields = requiredFields.filter(field => !(field in response.data));
+          if (missingFields.length > 0) {
+            throw new Error(`Invalid session data: Missing fields - ${missingFields.join(', ')}`);
+          }
+
+          // Validate bankDetails
+          const bankRequiredFields = ['bankName', 'accountNumber', 'accountName'];
+          const missingBankFields = bankRequiredFields.filter(field => !(field in response.data.bankDetails));
+          if (missingBankFields.length > 0) {
+            throw new Error(`Invalid bank details: Missing fields - ${missingBankFields.join(', ')}`);
+          }
+
+          setSession(response.data);
+          setError(null);
+          break; // Exit retry loop on success
+        } catch (err) {
+          console.error(`Attempt ${attempt} failed:`, err);
+          if (attempt === retryCount) {
+            setError(`Failed to fetch session after ${retryCount} attempts: ${err.message}. Please try again or contact support.`);
+          } else {
+            await new Promise(resolve => setTimeout(resolve, delay));
+          }
         }
-        setSession(response.data);
-        setStatus('Session loaded.');
-      } catch (err) {
-        setError(`Failed to fetch session: ${err.message}. Please try again or contact support.`);
-        console.error('Session fetch error:', err);
-        setStatus('error');
       }
     };
+
     if (ready && authenticated) {
       fetchSession();
     }
   }, [ready, authenticated, location.search]);
 
-  // Fetch quote using Relay SDK
-  const fetchQuote = useCallback(async (adaptedWallet) => {
-    if (!session || !adaptedWallet) return;
+  const fetchQuote = async (adaptedWallet) => {
+    if (!session) return;
     setLoading(true);
     setStatus('Fetching quote...');
     try {
+      console.log(`Fetching quote for wallet ${wallets[0].address}, session:`, session);
       const quote = await getClient().actions.getQuote({
         chainId: session.chainId,
-        toChainId: 8453, // Base
+        toChainId: 8453,
         currency: session.token,
         toCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
         tradeType: 'EXACT_INPUT',
@@ -70,19 +87,17 @@ const ConnectWalletApp = () => {
         wallet: adaptedWallet,
         recipient: session.blockradarWallet,
       });
+      console.log('Quote response:', quote);
       setQuote(quote);
       setError(null);
-      setStatus('Quote received.');
     } catch (err) {
-      setError(`Failed to fetch quote: ${err.message}. Please try again.`);
-      console.error('Quote fetch error:', err);
+      setError(`Failed to fetch quote: ${err.message}`);
       setStatus('error');
     } finally {
       setLoading(false);
     }
-  }, [session]);
+  };
 
-  // Handle sell transaction
   const handleSell = async () => {
     if (!wallets.length || !session || !quote) return;
 
@@ -93,7 +108,6 @@ const ConnectWalletApp = () => {
 
     setLoading(true);
     setStatus('Executing transaction...');
-    setIsCancelRequested(false);
 
     try {
       let txHash;
@@ -101,10 +115,6 @@ const ConnectWalletApp = () => {
         quote,
         wallet: adaptedWallet,
         onProgress: (progress) => {
-          setTransactionProgress(progress);
-          if (progress.currentStep) {
-            setStatus(`${progress.currentStep.action}: ${progress.currentStep.description}`);
-          }
           if (progress.txHashes && progress.txHashes.length > 0) {
             txHash = progress.txHashes[0].txHash;
             setStatus(`Transaction submitted: ${txHash}`);
@@ -115,58 +125,36 @@ const ConnectWalletApp = () => {
           if (progress.refunded) {
             throw new Error('Operation failed and was refunded.');
           }
-          if (isCancelRequested) {
-            throw new Error('Transaction cancelled by user.');
-          }
         },
       });
 
       if (txHash) {
         await axios.post('/webhook/sell-completed', {
           userId: new URLSearchParams(location.search).get('userId'),
-          txHash: txHash,
+          txHash: txHash
         });
         setStatus('Sell completed successfully!');
       } else {
-        throw new Error('No transaction hash found.');
+        throw new Error('No transaction hash found');
       }
     } catch (err) {
-      setError(`Error during sell: ${err.message}. Please try again or contact support.`);
-      console.error('Sell error:', err);
+      setError(`Error during sell: ${err.message}`);
       setStatus('error');
     } finally {
       setLoading(false);
-      setIsCancelRequested(false);
     }
   };
 
-  // Fix: Use an async IIFE inside useEffect to handle fetchQuote
   useEffect(() => {
-    const loadQuote = async () => {
-      if (wallets.length > 0 && session && !quote && ready && authenticated) {
-        try {
-          const provider = await wallets[0].getEthersProvider();
-          const signer = await provider.getSigner();
-          const adaptedWallet = adaptEthersSigner(signer);
-          await fetchQuote(adaptedWallet);
-        } catch (err) {
-          setError(`Failed to initialize quote fetching: ${err.message}.`);
-          console.error('Quote initialization error:', err);
-          setStatus('error');
-        }
-      }
-    };
+    if (wallets.length > 0 && session && !quote && ready && authenticated) {
+      const provider = await wallets[0].getEthersProvider();
+      const signer = provider.getSigner();
+      const adaptedWallet = adaptEthersSigner(signer);
+      fetchQuote(adaptedWallet);
+    }
+  }, [wallets, session, ready, authenticated]);
 
-    loadQuote();
-  }, [wallets, session, quote, ready, authenticated, fetchQuote]);
-
-  // Handle cancel transaction
-  const handleCancel = () => {
-    setIsCancelRequested(true);
-    setStatus('Cancelling transaction...');
-  };
-
-  if (!ready) return <div className="loading">Loading...</div>;
+  if (!ready) return <div>Loading...</div>;
 
   return (
     <div className="connect-wallet-app">
@@ -180,21 +168,14 @@ const ConnectWalletApp = () => {
           {session ? (
             <>
               <p>Amount: {ethers.utils.formatUnits(session.amountInWei, 6)} {session.token === '0x0000000000000000000000000000000000000000' ? 'ETH' : 'Token'}</p>
-              <p>Destination: {session.blockradarWallet}</p>
+              <p>To: {session.blockradarWallet}</p>
               {quote ? (
                 <>
                   <p>Quote: {ethers.utils.formatUnits(quote.details.currencyOut.amount, 6)} USDC</p>
                   <p>Fees: {ethers.utils.formatEther(quote.fees?.gas?.amount || '0')} ETH</p>
-                  <div className="button-group">
-                    <button onClick={handleSell} disabled={loading}>
-                      {loading ? 'Processing...' : 'Execute Sell'}
-                    </button>
-                    {loading && (
-                      <button onClick={handleCancel} disabled={isCancelRequested}>
-                        Cancel
-                      </button>
-                    )}
-                  </div>
+                  <button onClick={handleSell} disabled={loading}>
+                    {loading ? 'Processing...' : 'Execute Sell'}
+                  </button>
                 </>
               ) : (
                 <p>{loading ? 'Fetching quote...' : 'Waiting for quote...'}</p>
@@ -216,12 +197,6 @@ const ConnectWalletApp = () => {
             </>
           )}
         </p>
-      )}
-      {transactionProgress && transactionProgress.currentStep && (
-        <div className="progress">
-          <p>Step: {transactionProgress.currentStep.action}</p>
-          <p>Description: {transactionProgress.currentStep.description}</p>
-        </div>
       )}
     </div>
   );
