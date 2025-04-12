@@ -1062,12 +1062,21 @@ const stage = new Scenes.Stage([
 ]);
 bot.use(stage.middleware());
 sellSceneModule.setup(bot, db, logger, getUserState);
-// Add /sell command handler
+// /sell command handler
 bot.command('sell', async (ctx) => {
+  const userId = ctx.from.id.toString();
+  const userState = await getUserState(userId); // This works because getUserState is defined in bot.js
+  if (userState.wallets.length === 0 || !userState.wallets.some(w => w.bank)) {
+    const errorMsg = userState.usePidgin
+      ? '❌ You no get wallet or bank linked yet. Go "💼 Generate Wallet" and link bank first.'
+      : '❌ You don’t have a wallet or linked bank yet. Please generate a wallet and link a bank first.';
+    await ctx.replyWithMarkdown(errorMsg);
+    return;
+  }
   try {
     await ctx.scene.enter('sell_scene');
   } catch (error) {
-    logger.error(`Error entering sell_scene for user ${ctx.from.id}: ${error.message}`);
+    logger.error(`Error entering sell_scene for user ${userId}: ${error.message}`);
     await ctx.replyWithMarkdown('❌ Something went wrong. Try again later.');
   }
 });
