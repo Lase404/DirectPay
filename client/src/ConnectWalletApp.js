@@ -1,9 +1,10 @@
-// client/src/ConnectWalletApp.js
 import React, { useEffect, useState } from 'react';
 import { useLocation } from 'react-router-dom';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
-import axios from 'axios';
+import { createClient, getClient } from '@reservoir0x/relay-sdk';
+import { adaptEthersSigner } from '@reservoir0x/relay-ethers-wallet-adapter';
 import { ethers } from 'ethers';
+import axios from 'axios';
 import './ConnectWalletApp.css';
 
 const ConnectWalletApp = () => {
@@ -13,61 +14,55 @@ const ConnectWalletApp = () => {
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [status, setStatus] = useState('idle');
   const location = useLocation();
+
+  useEffect(() => {
+    createClient({
+      baseApiUrl: 'https://api.relay.link',
+    });
+  }, []);
 
   useEffect(() => {
     const fetchSession = async () => {
       const urlParams = new URLSearchParams(location.search);
-      console.log('location.search:', location.search);
-      console.log('location:', location);
-      console.log('window.location.search (for comparison):', window.location.search);
-      console.log('window.location:', window.location);
       const userId = urlParams.get('userId');
-      console.log('Extracted userId:', userId);
-
       if (!userId) {
         setError('Missing userId in URL. Please return to Telegram and try again.');
         return;
       }
-
       try {
-        console.log(`Fetching session from /api/session?userId=${userId}`);
         const response = await axios.get(`/api/session?userId=${userId}`);
-        console.log('Session response:', response.data);
         setSession(response.data);
       } catch (err) {
         setError('Failed to fetch session: ' + err.message);
-        console.error('Session fetch error:', err);
       }
     };
-
     if (ready && authenticated) {
       fetchSession();
     }
   }, [ready, authenticated, location.search]);
 
-  const fetchQuote = async (walletAddress) => {
+  const fetchQuote = async (adaptedWallet) => {
     if (!session) return;
     setLoading(true);
+    setStatus('Fetching quote...');
     try {
-      console.log(`Fetching quote for wallet ${walletAddress}, session:`, session);
-      const quoteResponse = await axios.post('https://api.relay.link/quote', {
-        user: walletAddress,
-        originChainId: 1, // Hardcoded for now; should come from session if available
-        originCurrency: session.token,
-        destinationChainId: 8453,
-        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+      const quote = await getClient().actions.getQuote({
+        chainId: session.chainId,
+        toChainId: 8453,
+        currency: session.token,
+        toCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
         tradeType: 'EXACT_INPUT',
+        amount: session.amountInWei,
+        wallet: adaptedWallet,
         recipient: session.blockradarWallet,
-        amount: session.amount,
-        refundTo: walletAddress
       });
-      console.log('Quote response:', quoteResponse.data);
-      setQuote(quoteResponse.data);
+      setQuote(quote);
       setError(null);
     } catch (err) {
       setError(`Failed to fetch quote: ${err.message}`);
-      console.error('Quote fetch error:', err);
+      setStatus('error');
     } finally {
       setLoading(false);
     }
@@ -79,47 +74,55 @@ const ConnectWalletApp = () => {
     const wallet = wallets[0];
     const provider = await wallet.getEthersProvider();
     const signer = provider.getSigner();
+    const adaptedWallet = adaptEthersSigner(signer);
+
+    setLoading(true);
+    setStatus('Executing transaction...');
 
     try {
-      setLoading(true);
-      if (session.token !== '0x0000000000000000000000000000000000000000') {
-        console.log(`Approving token ${session.token} for amount ${session.amount}`);
-        const erc20Abi = ['function approve(address spender, uint256 amount) public returns (bool)'];
-        const tokenContract = new ethers.Contract(session.token, erc20Abi, signer);
-        const tx = await tokenContract.approve(quote.approvalAddress, session.amount);
-        await tx.wait();
-        console.log('Approval transaction:', tx);
+      let txHash;
+      await getClient().actions.execute({
+        quote,
+        wallet: adaptedWallet,
+        onProgress: (progress) => {
+          if (progress.txHashes && progress.txHashes.length > 0) {
+            txHash = progress.txHashes[0].txHash;
+            setStatus(`Transaction submitted: ${txHash}`);
+          }
+          if (progress.error) {
+            throw new Error(progress.error.message);
+          }
+          if (progress.refunded) {
+            throw new Error('Operation failed and was refunded.');
+          }
+        },
+      });
+
+      if (txHash) {
+        await axios.post('/webhook/sell-completed', {
+          userId: new URLSearchParams(location.search).get('userId'),
+          txHash: txHash
+        });
+        setStatus('Sell completed successfully!');
+      } else {
+        throw new Error('No transaction hash found');
       }
-
-      console.log('Executing sell transaction:', quote);
-      const txResponse = await signer.sendTransaction({
-        to: quote.to,
-        data: quote.data,
-        value: quote.value ? ethers.BigNumber.from(quote.value) : 0
-      });
-      await txResponse.wait();
-      console.log('Sell transaction response:', txResponse);
-
-      console.log('Notifying server of sell completion');
-      await axios.post('/webhook/sell-completed', {
-        userId: new URLSearchParams(location.search).get('userId'),
-        txHash: txResponse.hash
-      });
-
-      setError('Sell completed successfully!');
     } catch (err) {
       setError(`Error during sell: ${err.message}`);
-      console.error('Sell error:', err);
+      setStatus('error');
     } finally {
       setLoading(false);
     }
   };
 
   useEffect(() => {
-    if (wallets.length > 0 && session && !quote) {
-      fetchQuote(wallets[0].address);
+    if (wallets.length > 0 && session && !quote && ready && authenticated) {
+      const provider = await wallets[0].getEthersProvider();
+      const signer = await provider.getSigner();
+      const adaptedWallet = adaptEthersSigner(signer);
+      fetchQuote(adaptedWallet);
     }
-  }, [wallets, session]);
+  }, [wallets, session, ready, authenticated]);
 
   if (!ready) return <div>Loading...</div>;
 
@@ -131,14 +134,15 @@ const ConnectWalletApp = () => {
       ) : (
         <>
           <p>Connected: {wallets[0]?.address}</p>
+          <p>Status: {status}</p>
           {session ? (
             <>
-              <p>Amount: {ethers.utils.formatUnits(session.amount, 6)} {session.token === '0x0000000000000000000000000000000000000000' ? 'ETH' : 'Token'}</p>
+              <p>Amount: {ethers.utils.formatUnits(session.amountInWei, 6)} {session.token === '0x0000000000000000000000000000000000000000' ? 'ETH' : 'Token'}</p>
               <p>To: {session.blockradarWallet}</p>
               {quote ? (
                 <>
-                  <p>Quote: {ethers.utils.formatUnits(quote.amountOut, 6)} USDC</p>
-                  <p>Fees: {ethers.utils.formatEther(quote.feeDetails.totalFee)} ETH</p>
+                  <p>Quote: {ethers.utils.formatUnits(quote.details.currencyOut.amount, 6)} USDC</p>
+                  <p>Fees: {ethers.utils.formatEther(quote.fees?.gas?.amount || '0')} ETH</p>
                   <button onClick={handleSell} disabled={loading}>
                     {loading ? 'Processing...' : 'Execute Sell'}
                   </button>
@@ -159,7 +163,7 @@ const ConnectWalletApp = () => {
           {error.includes('Missing userId') && (
             <>
               <br />
-              <a href="https://t.me/yourBotUsername">Return to Telegram</a>
+              <a href="[invalid url, do not cite] to Telegram</a>
             </>
           )}
         </p>
