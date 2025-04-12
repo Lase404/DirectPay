@@ -3406,57 +3406,7 @@ stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankL
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
 });
-app.get('/api/session', async (req, res) => {
-  const { userId } = req.query;
-  logger.info(`Fetching session for user ${userId}`);
 
-  if (!userId) {
-    logger.error('No userId provided in /api/session request');
-    return res.status(400).json({ error: 'userId is required' });
-  }
-
-  try {
-    const sessionSnapshot = await db.collection('sessions')
-      .where('userId', '==', userId)
-      .where('status', '==', 'pending')
-      .orderBy('createdAt', 'desc')
-      .limit(1)
-      .get();
-
-    if (sessionSnapshot.empty) {
-      logger.error(`No pending session found for user ${userId}`);
-      return res.status(404).json({ error: 'No pending session found' });
-    }
-
-    if (sessionSnapshot.size > 1) {
-      logger.warn(`Multiple pending sessions found for user ${userId}, using the most recent`);
-    }
-
-    const session = sessionSnapshot.docs[0].data();
-    logger.info(`Retrieved session for user ${userId}: ${JSON.stringify(session)}`);
-
-    // Validate session data
-    const requiredFields = ['amountInWei', 'token', 'chainId', 'bankDetails', 'blockradarWallet'];
-    const missingFields = requiredFields.filter(field => !(field in session));
-    if (missingFields.length > 0) {
-      logger.error(`Invalid session data for user ${userId}: Missing fields - ${missingFields.join(', ')}`);
-      return res.status(400).json({ error: `Invalid session data: Missing fields - ${missingFields.join(', ')}` });
-    }
-
-    // Validate bankDetails
-    const bankRequiredFields = ['bankName', 'accountNumber', 'accountName'];
-    const missingBankFields = bankRequiredFields.filter(field => !(field in session.bankDetails));
-    if (missingBankFields.length > 0) {
-      logger.error(`Invalid bank details for user ${userId}: Missing fields - ${missingBankFields.join(', ')}`);
-      return res.status(400).json({ error: `Invalid bank details: Missing fields - ${missingBankFields.join(', ')}` });
-    }
-
-    res.json(session);
-  } catch (error) {
-    logger.error(`Error fetching session for user ${userId}: ${error.message}`);
-    res.status(500).json({ error: 'Failed to fetch session' });
-  }
-});
 // =================== Server Startup ===================
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
