@@ -1,180 +1,176 @@
-import React, { useState, useEffect } from 'react';
+// client/src/ConnectWalletApp.js
+import React, { useEffect, useState } from 'react';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
 import axios from 'axios';
 import { ethers } from 'ethers';
-import './ConnectWalletApp.css'; // Optional styling
-
-const ERC20_ABI = [
-  "function approve(address spender, uint256 amount) public returns (bool)",
-  "function transfer(address to, uint256 amount) public returns (bool)",
-  "function allowance(address owner, address spender) public view returns (uint256)",
-  "function balanceOf(address account) public view returns (uint256)",
-];
+import './ConnectWalletApp.css';
 
 const ConnectWalletApp = () => {
-  return (
-    <PrivyProvider
-      appId={process.env.REACT_APP_PRIVY_APP_ID} // Add to .env in client
-      config={{
-        loginMethods: ['wallet', 'email'],
-        appearance: {
-          theme: 'light',
-          accentColor: '#5288F9',
-        },
-      }}
-    >
-      <WalletConnector />
-    </PrivyProvider>
-  );
-};
-
-const WalletConnector = () => {
-  const { ready, authenticated, login, logout, user } = usePrivy();
+  const { ready, authenticated, login, logout } = usePrivy();
   const { wallets } = useWallets();
   const [session, setSession] = useState(null);
-  const [error, setError] = useState('');
-  const [status, setStatus] = useState('Loading session...');
-  const [userId, setUserId] = useState('');
-  const [sessionId, setSessionId] = useState('');
+  const [quote, setQuote] = useState(null);
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
 
-  // Extract userId and session from URL params
   useEffect(() => {
-    const urlParams = new URLSearchParams(window.location.search);
-    const userIdParam = urlParams.get('userId');
-    const sessionParam = urlParams.get('session');
-    if (userIdParam && sessionParam) {
-      setUserId(userIdParam);
-      setSessionId(sessionParam);
-      fetchSession(userIdParam, sessionParam);
-    } else {
-      setError('Missing userId or session in URL');
-      setStatus('');
-    }
-  }, []);
+    const fetchSession = async () => {
+      const urlParams = new URLSearchParams(window.location.hash.substring(1));
+      console.log('window.location.hash:', window.location.hash);
+      console.log('window.location:', window.location);
+      console.log('window.location.search (for comparison):', window.location.search);
+      const userId = urlParams.get('userId');
+      const sessionId = urlParams.get('sessionId');
+      console.log('Extracted userId:', userId, 'sessionId:', sessionId);
 
-  // Fetch session data from bot
-  const fetchSession = async (userId, session) => {
+      if (!userId || !sessionId) {
+        setError('Missing userId or sessionId in URL. Please return to Telegram and try again.');
+        return;
+      }
+
+      try {
+        console.log(`Fetching session from /api/session?userId=${userId}&sessionId=${sessionId}`);
+        const response = await axios.get(`/api/session?userId=${userId}&sessionId=${sessionId}`);
+        console.log('Session response:', response.data);
+        setSession(response.data);
+      } catch (err) {
+        setError('Failed to fetch session: ' + err.message);
+        console.error('Session fetch error:', err);
+      }
+    };
+
+    if (ready && authenticated) {
+      fetchSession();
+    }
+  }, [ready, authenticated]);
+
+  const fetchQuote = async (walletAddress) => {
+    if (!session) return;
+    setLoading(true);
     try {
-      const response = await axios.get(`${process.env.REACT_APP_API_URL}/api/session`, {
-        params: { userId, session },
+      console.log(`Fetching quote for wallet ${walletAddress}, session:`, session);
+      const quoteResponse = await axios.post('https://api.relay.link/quote', {
+        user: walletAddress,
+        originChainId: session.chainId,
+        originCurrency: session.token,
+        destinationChainId: 8453,
+        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913',
+        tradeType: 'EXACT_INPUT',
+        recipient: session.blockradarWallet,
+        amount: session.amountInWei,
+        refundTo: walletAddress
       });
-      setSession(response.data);
-      setStatus(authenticated ? 'Wallet connected, approving...' : 'Please connect your wallet');
+      console.log('Quote response:', quoteResponse.data);
+      setQuote(quoteResponse.data);
+      setError(null);
     } catch (err) {
-      setError('Failed to fetch session data: ' + err.message);
-      setStatus('');
-      notifyError(userId, 'Failed to fetch session data');
+      setError(`Failed to fetch quote: ${err.message}`);
+      console.error('Quote fetch error:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
-  // Handle wallet connection and transaction flow
+  const handleSell = async () => {
+    if (!wallets.length || !session || !quote) return;
+
+    const wallet = wallets[0];
+    const provider = await wallet.getEthersProvider();
+    const signer = provider.getSigner();
+
+    try {
+      setLoading(true);
+      if (session.token !== '0x0000000000000000000000000000000000000000') {
+        console.log(`Approving token ${session.token} for amount ${session.amountInWei}`);
+        const erc20Abi = ['function approve(address spender, uint256 amount) public returns (bool)'];
+        const tokenContract = new ethers.Contract(session.token, erc20Abi, signer);
+        const tx = await tokenContract.approve(quote.approvalAddress, session.amountInWei);
+        await tx.wait();
+        console.log('Approval transaction:', tx);
+      }
+
+      console.log('Executing sell transaction:', quote);
+      const txResponse = await signer.sendTransaction({
+        to: quote.to,
+        data: quote.data,
+        value: quote.value ? ethers.BigNumber.from(quote.value) : 0
+      });
+      await txResponse.wait();
+      console.log('Sell transaction response:', txResponse);
+
+      console.log('Notifying server of sell completion');
+      await axios.post('/webhook/sell-completed', {
+        userId: new URLSearchParams(window.location.hash.substring(1)).get('userId'),
+        sessionId: new URLSearchParams(window.location.hash.substring(1)).get('sessionId'),
+        txHash: txResponse.hash
+      });
+
+      setError('Sell completed successfully!');
+    } catch (err) {
+      setError(`Error during sell: ${err.message}`);
+      console.error('Sell error:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   useEffect(() => {
-    if (ready && authenticated && session && wallets.length > 0) {
-      handleWalletFlow();
+    if (wallets.length > 0 && session && !quote) {
+      fetchQuote(wallets[0].address);
     }
-  }, [ready, authenticated, session, wallets]);
+  }, [wallets, session]);
 
-  const handleWalletFlow = async () => {
-    const wallet = wallets[0]; // Use the first connected wallet
-    try {
-      // Switch to the correct chain
-      const provider = await wallet.getEthersProvider();
-      const network = await provider.getNetwork();
-      if (network.chainId !== session.chainId) {
-        await wallet.switchChain(session.chainId);
-      }
-
-      // Notify bot of wallet connection
-      await axios.post(`${process.env.REACT_APP_API_URL}/webhook/wallet-connected`, {
-        userId,
-        walletAddress: wallet.address,
-      });
-      setStatus('Wallet connected, approving token...');
-
-      // Approve token
-      const signer = provider.getSigner();
-      const tokenContract = new ethers.Contract(session.asset, ERC20_ABI, signer);
-      const allowance = await tokenContract.allowance(wallet.address, session.blockradarAddress);
-      const amountBN = ethers.BigNumber.from(session.amount);
-
-      if (allowance.lt(amountBN)) {
-        const approveTx = await tokenContract.approve(session.blockradarAddress, amountBN);
-        await approveTx.wait();
-        await axios.post(`${process.env.REACT_APP_API_URL}/webhook/approval-confirmed`, {
-          userId,
-          walletAddress: wallet.address,
-          txHash: approveTx.hash,
-        });
-        setStatus('Approval confirmed, depositing...');
-      } else {
-        setStatus('Allowance sufficient, depositing...');
-      }
-
-      // Transfer token to Blockradar address
-      const balance = await tokenContract.balanceOf(wallet.address);
-      if (balance.lt(amountBN)) {
-        throw new Error('Insufficient balance for transfer');
-      }
-
-      const transferTx = await tokenContract.transfer(session.blockradarAddress, amountBN);
-      await transferTx.wait();
-
-      // Update session status and notify bot
-      await axios.post(`${process.env.REACT_APP_API_URL}/webhook/deposit-confirmed`, {
-        userId,
-        walletAddress: wallet.address,
-        txHash: transferTx.hash,
-        amount: ethers.utils.formatUnits(session.amount, session.decimals),
-        chainId: session.chainId,
-      });
-      setStatus('Deposit confirmed! Funds are being processed.');
-    } catch (err) {
-      setError('Transaction failed: ' + err.message);
-      setStatus('');
-      notifyError(userId, `Transaction failed: ${err.message}`);
-    }
-  };
-
-  const notifyError = async (userId, message) => {
-    try {
-      await axios.post(`${process.env.REACT_APP_API_URL}/webhook/error`, {
-        userId,
-        error: message,
-      });
-    } catch (err) {
-      console.error('Failed to notify bot of error:', err);
-    }
-  };
+  if (!ready) return <div>Loading...</div>;
 
   return (
-    <div className="connect-wallet-container">
+    <div className="connect-wallet-app">
       <h1>DirectPay Wallet Connector</h1>
-      {!ready ? (
-        <p>Loading Privy...</p>
-      ) : !authenticated ? (
-        <div>
-          <p>{status}</p>
-          <button onClick={login}>Connect Wallet</button>
-          {error && <p className="error">{error}</p>}
-        </div>
+      {!authenticated ? (
+        <button onClick={login}>Connect Wallet</button>
       ) : (
-        <div>
-          <p>Connected Wallet: {wallets[0]?.address}</p>
-          {session && (
-            <div>
-              <p>Token: {session.symbol} ({session.tokenName})</p>
-              <p>Amount: {ethers.utils.formatUnits(session.amount, session.decimals)} {session.symbol}</p>
-              <p>Network: {session.networkName}</p>
-              <p>Deposit to: {session.blockradarAddress}</p>
-            </div>
+        <>
+          <p>Connected: {wallets[0]?.address}</p>
+          {session ? (
+            <>
+              <p>Amount: {ethers.utils.formatUnits(session.amountInWei, 6)} {session.token === '0x0000000000000000000000000000000000000000' ? 'ETH' : 'Token'}</p>
+              <p>To: {session.blockradarWallet}</p>
+              {quote ? (
+                <>
+                  <p>Quote: {ethers.utils.formatUnits(quote.amountOut, 6)} USDC</p>
+                  <p>Fees: {ethers.utils.formatEther(quote.feeDetails.totalFee)} ETH</p>
+                  <button onClick={handleSell} disabled={loading}>
+                    {loading ? 'Processing...' : 'Execute Sell'}
+                  </button>
+                </>
+              ) : (
+                <p>{loading ? 'Fetching quote...' : 'Waiting for quote...'}</p>
+              )}
+            </>
+          ) : (
+            <p>Fetching session...</p>
           )}
-          <p>{status}</p>
-          {error && <p className="error">{error}</p>}
-          <button onClick={logout}>Disconnect Wallet</button>
-        </div>
+          <button onClick={logout}>Disconnect</button>
+        </>
+      )}
+      {error && (
+        <p className="error">
+          {error}
+          {error.includes('Missing userId or sessionId') && (
+            <>
+              <br />
+              <a href="https://t.me/yourBotUsername">Return to Telegram</a>
+            </>
+          )}
+        </p>
       )}
     </div>
   );
 };
 
-export default ConnectWalletApp;
+const App = () => (
+  <PrivyProvider appId={process.env.REACT_APP_PRIVY_APP_ID} config={{}}>
+    <ConnectWalletApp />
+  </PrivyProvider>
+);
+
+export default App;
