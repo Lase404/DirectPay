@@ -49,10 +49,11 @@ const TransactionTimeline = ({ status, progress }) => {
     { id: 'connect', label: 'Connect Wallet', icon: FaWallet },
     { id: 'approve', label: 'Approve Token', icon: FaCheckCircle },
     { id: 'deposit', label: 'Deposit Funds', icon: FaPaperPlane },
-    { id: 'complete', label: 'Complete', icon: FaCheckCircle }
+    { id: 'complete', label: 'Complete', icon: FaCheckCircle },
   ];
 
   const getStepStatus = (stepId) => {
+    if (!status) return 'pending';
     if (stepId === 'connect' && status !== 'idle') return 'completed';
     if (stepId === 'approve' && status.includes('approval')) return 'active';
     if (stepId === 'approve' && status.includes('completed')) return 'completed';
@@ -72,8 +73,8 @@ const TransactionTimeline = ({ status, progress }) => {
                 getStepStatus(step.id) === 'completed'
                   ? 'bg-[var(--success)] text-white'
                   : getStepStatus(step.id) === 'active'
-                  ? 'bg-[var(--primary)] text-white animate-pulse'
-                  : 'bg-gray-300 text-gray-600'
+                    ? 'bg-[var(--primary)] text-white animate-pulse'
+                    : 'bg-gray-300 text-gray-600'
               }`}
               title={step.label}
             >
@@ -95,9 +96,9 @@ const TransactionTimeline = ({ status, progress }) => {
       </div>
       {progress > 0 && progress < 100 && (
         <div className="mt-4">
-          <div className="w-full bg-gray-200 rounded-full h-2.5">
+          <div className="progress-bar">
             <div
-              className="bg-[var(--primary)] h-2.5 rounded-full"
+              className="progress-fill"
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -110,15 +111,29 @@ const TransactionTimeline = ({ status, progress }) => {
 
 const QuoteDisplay = ({ quote, tokenInfo, logoUri, isVerifiedAsset }) => {
   const [showDetails, setShowDetails] = useState(false);
+  const formatUSD = (value) => {
+    if (!value || isNaN(value)) return '0.00';
+    return parseFloat(value).toFixed(2);
+  };
+  const formatTokenAmount = (amount, decimals) => {
+    if (!amount || !decimals) return '0';
+    try {
+      return ethers.utils.formatUnits(amount, decimals);
+    } catch {
+      return amount.toString();
+    }
+  };
+
+  if (!quote || !tokenInfo) return null;
 
   return (
     <div className="card mb-4">
       <h3 className="text-lg font-semibold text-gray-800 mb-2">Transaction Summary</h3>
       {!isVerifiedAsset && (
-        <div className="flex items-center p-3 bg-yellow-100 text-yellow-800 rounded-lg mb-4" role="alert">
+        <div className="alert-warning mb-4" role="alert">
           <FaExclamationTriangle className="w-5 h-5 mr-2" />
           <span>
-            This asset ({tokenInfo.symbol}) is unverified. It may have low liquidity or risks. Proceed with caution.
+            This asset ({tokenInfo.symbol || 'Unknown'}) is unverified. It may have low liquidity or risks. Proceed with caution.
           </span>
         </div>
       )}
@@ -126,13 +141,13 @@ const QuoteDisplay = ({ quote, tokenInfo, logoUri, isVerifiedAsset }) => {
         <p className="flex items-center">
           <img
             src={logoUri || 'https://via.placeholder.com/20'}
-            alt={`${tokenInfo.symbol} logo`}
+            alt={`${tokenInfo.symbol || 'Token'} logo`}
             className="w-5 h-5 mr-2 rounded-full"
             onError={(e) => (e.target.src = 'https://via.placeholder.com/20')}
           />
           <span>
             Input: {formatTokenAmount(quote.details?.currencyIn?.amount, tokenInfo.decimals)}{' '}
-            {tokenInfo.symbol} (~${formatUSD(quote.details?.currencyIn?.amountUsd)})
+            {tokenInfo.symbol || 'Token'} (~${formatUSD(quote.details?.currencyIn?.amountUsd)})
           </span>
         </p>
         <p className="flex items-center">
@@ -163,7 +178,7 @@ const QuoteDisplay = ({ quote, tokenInfo, logoUri, isVerifiedAsset }) => {
             </p>
             <p className="flex items-center">
               <FaExchangeAlt className="w-4 h-4 mr-2 text-red-500" />
-              Swap Impact: {quote.details?.swapImpact?.percent}% (~${formatUSD(quote.details?.swapImpact?.usd)})
+              Swap Impact: {quote.details?.swapImpact?.percent || '0'}% (~${formatUSD(quote.details?.swapImpact?.usd)})
             </p>
             <p className="flex items-center">
               <FaShieldAlt className="w-4 h-4 mr-2 text-blue-500" />
@@ -185,15 +200,17 @@ const TransactionStatus = ({ txHash, chainId, status }) => {
   const txLink = txHash ? `${explorerUrl}/tx/${txHash}` : '';
 
   const copyTxHash = () => {
-    navigator.clipboard.write(txHash);
-    toast.info('Transaction hash copied!');
+    if (txHash) {
+      navigator.clipboard.write(txHash);
+      toast.info('Transaction hash copied!');
+    }
   };
 
   return txHash ? (
     <div className="card mb-4">
       <h3 className="text-lg font-semibold text-gray-800 mb-2">Transaction Status</h3>
       <p className="text-sm flex items-center">
-        <span className="font-semibold mr-1">Status:</span> {status}
+        <span className="font-semibold mr-1">Status:</span> {status || 'Pending'}
       </p>
       <p className="text-sm flex items-center">
         <span className="font-semibold mr-1">Tx Hash:</span>
@@ -213,6 +230,21 @@ const TransactionStatus = ({ txHash, chainId, status }) => {
 };
 
 const ConfirmSellModal = ({ isOpen, onClose, onConfirm, quote, tokenInfo, isVerifiedAsset, balance }) => {
+  const formatUSD = (value) => {
+    if (!value || isNaN(value)) return '0.00';
+    return parseFloat(value).toFixed(2);
+  };
+  const formatTokenAmount = (amount, decimals) => {
+    if (!amount || !decimals) return '0';
+    try {
+      return ethers.utils.formatUnits(amount, decimals);
+    } catch {
+      return amount.toString();
+    }
+  };
+
+  if (!quote || !tokenInfo) return null;
+
   const totalFeesUsd =
     parseFloat(quote.fees?.gas?.amountUsd || 0) +
     parseFloat(quote.fees?.relayer?.amountUsd || 0);
@@ -255,7 +287,7 @@ const ConfirmSellModal = ({ isOpen, onClose, onConfirm, quote, tokenInfo, isVeri
                   <p className="text-sm">
                     You’re selling{' '}
                     <strong>
-                      {inputAmount} {tokenInfo.symbol}
+                      {inputAmount} {tokenInfo.symbol || 'Token'}
                     </strong>{' '}
                     for{' '}
                     <strong>
@@ -278,7 +310,7 @@ const ConfirmSellModal = ({ isOpen, onClose, onConfirm, quote, tokenInfo, isVeri
                   )}
                   {isInsufficientBalance && (
                     <p className="text-sm text-[var(--error)]">
-                      ⚠ Insufficient balance: {balance} {tokenInfo.symbol} available, {inputAmount} required.
+                      ⚠ Insufficient balance: {balance} {tokenInfo.symbol || 'Token'} available, {inputAmount} required.
                     </p>
                   )}
                 </div>
@@ -293,8 +325,8 @@ const ConfirmSellModal = ({ isOpen, onClose, onConfirm, quote, tokenInfo, isVeri
                   <button
                     onClick={onConfirm}
                     className="btn-primary"
-                    aria-label="Confirm sell transaction"
                     disabled={isInsufficientBalance}
+                    aria-label="Confirm sell transaction"
                   >
                     Confirm
                   </button>
@@ -339,15 +371,16 @@ const ConnectWalletApp = () => {
   const location = useLocation();
 
   const formatUSD = (value) => {
-    if (!value) return '0.00';
+    if (!value || isNaN(value)) return '0.00';
     return parseFloat(value).toFixed(2);
   };
 
   const formatTokenAmount = (amount, decimals) => {
+    if (!amount || !decimals) return '0';
     try {
       return ethers.utils.formatUnits(amount, decimals);
     } catch {
-      return amount;
+      return amount.toString();
     }
   };
 
@@ -402,7 +435,7 @@ const ConnectWalletApp = () => {
                 [
                   'function symbol() view returns (string)',
                   'function decimals() view returns (uint8)',
-                  'function balanceOf(address) view returns (uint256)'
+                  'function balanceOf(address) view returns (uint256)',
                 ],
                 provider
               );
@@ -411,7 +444,7 @@ const ConnectWalletApp = () => {
                 tokenContract.decimals(),
                 wallets[0]?.address
                   ? tokenContract.balanceOf(wallets[0].address)
-                  : Promise.resolve(ethers.BigNumber.from(0))
+                  : Promise.resolve(ethers.BigNumber.from(0)),
               ]);
               setTokenInfo({ symbol, decimals });
               setBalance(ethers.utils.formatUnits(balance, decimals));
@@ -420,7 +453,7 @@ const ConnectWalletApp = () => {
                 chainIds: [response.data.chainId],
                 term: response.data.token,
                 verified: false,
-                limit: 1
+                limit: 1,
               });
               const assets = logoResponse.data.flat();
               if (assets[0]?.metadata?.logoURI) {
@@ -434,15 +467,16 @@ const ConnectWalletApp = () => {
           } else {
             const chainConfig = SUPPORTED_CHAINS[response.data.chainId];
             setTokenInfo({
-              symbol: chainConfig.nativeCurrency.symbol,
-              decimals: chainConfig.nativeCurrency.decimals,
+              symbol: chainConfig?.nativeCurrency?.symbol || 'Token',
+              decimals: chainConfig?.nativeCurrency?.decimals || 18,
             });
             try {
               const provider = new ethers.providers.JsonRpcProvider(chainConfig.rpcUrl);
               const balance = await provider.getBalance(wallets[0]?.address || ethers.constants.AddressZero);
-              setBalance(ethers.utils.formatUnits(balance, chainConfig.nativeCurrency.decimals));
+              setBalance(ethers.utils.formatUnits(balance, chainConfig?.nativeCurrency?.decimals || 18));
             } catch (err) {
               console.error('Failed to fetch native balance:', err);
+              setBalance('0');
             }
           }
 
@@ -524,14 +558,14 @@ const ConnectWalletApp = () => {
     setLoading(true);
     setStatus('Fetching quote...');
     try {
-      console.log(`Fetching quote for wallet ${wallets[0].address}, session:`, session);
+      console.log(`Fetching quote for wallet ${wallets[0]?.address || 'unknown'}, session:`, session);
       const quote = await getClient().actions.getQuote({
         chainId: session.chainId,
         toChainId: 8453,
         currency: session.token,
         toCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
         tradeType: 'EXACT_INPUT',
-        amount: session.amountInWei,
+        amount: session.amountIn письма,
         wallet: adaptedWallet,
         recipient: session.blockradarWallet,
       });
@@ -540,21 +574,21 @@ const ConnectWalletApp = () => {
       setError(null);
       toast.success('Quote fetched successfully!');
       // Check balance sufficiency
-      const inputAmount = ethers.utils.formatUnits(session.amountInWei, tokenInfo.decimals);
+      const inputAmount = formatTokenAmount(session.amountInWei, tokenInfo.decimals);
       if (balance && parseFloat(balance) < parseFloat(inputAmount)) {
         setError(`Insufficient ${tokenInfo.symbol} balance: ${balance} available, ${inputAmount} required. Please add funds to your wallet.`);
         toast.error('Insufficient balance. Please add funds to your wallet.');
       }
     } catch (err) {
-      let errorMsg = err.message;
+      let errorMsg = err.message || 'Unknown error';
       let suggestion = 'Please try again or contact support at @maxcswap.';
-      if (err.message.includes('insufficient funds')) {
+      if (err.message?.includes('insufficient funds')) {
         errorMsg = 'Insufficient funds for gas or token amount.';
         suggestion = 'Please add funds to your wallet and try again.';
-      } else if (err.message.includes('network')) {
+      } else if (err.message?.includes('network')) {
         errorMsg = 'Network error.';
         suggestion = 'Check your internet connection and try again.';
-      } else if (err.message.includes('unsupported token')) {
+      } else if (err.message?.includes('unsupported token')) {
         errorMsg = `The token ${tokenInfo.symbol} may not be supported for bridging.`;
         suggestion = 'Try a different token or contact support.';
       }
@@ -685,18 +719,18 @@ const ConnectWalletApp = () => {
       }
     } catch (err) {
       console.error('Sell error:', err);
-      let errorMsg = err.message;
+      let errorMsg = err.message || 'Unknown error';
       let suggestion = 'Please try again or contact support at @maxcswap.';
       if (err.name === 'DepositTransactionTimeoutError') {
-        errorMsg = `Deposit transaction ${err.txHash} is still pending.`;
+        errorMsg = `Deposit transaction ${err.txHash || 'unknown'} is still pending.`;
         suggestion = 'Check your wallet for pending transactions or try again later.';
       } else if (err.name === 'TransactionConfirmationError') {
         errorMsg = `Transaction failed: ${err.message}.`;
         suggestion = 'Verify your wallet settings and try again.';
-      } else if (err.message.includes('user rejected')) {
+      } else if (err.message?.includes('user rejected')) {
         errorMsg = 'Transaction rejected.';
         suggestion = 'Please approve the transaction in your wallet.';
-      } else if (err.message.includes('insufficient')) {
+      } else if (err.message?.includes('insufficient')) {
         errorMsg = 'Insufficient funds for the transaction.';
         suggestion = 'Ensure you have enough funds for gas and tokens.';
       }
@@ -744,7 +778,7 @@ const ConnectWalletApp = () => {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center p-4 bg-[var(--background)]">
+    <div className="app-container">
       <div className="card w-full max-w-lg">
         <div className="flex items-center mb-4">
           <img src="/logo.png" alt="DirectPay Logo" className="h-8 mr-2" />
@@ -764,14 +798,14 @@ const ConnectWalletApp = () => {
             <div className="card mb-4" role="region" aria-live="polite" aria-label="Wallet information">
               <p className="text-sm text-gray-600">
                 <span className="font-semibold">Connected:</span>{' '}
-                {wallets[0]?.address.slice(0, 6)}...{wallets[0]?.address.slice(-4)}
+                {wallets[0]?.address ? `${wallets[0].address.slice(0, 6)}...${wallets[0].address.slice(-4)}` : 'Unknown'}
               </p>
               <p className="text-sm text-gray-600">
-                <span className="font-semibold">Status:</span> {status}
+                <span className="font-semibold">Status:</span> {status || 'Idle'}
               </p>
               {balance !== null && (
                 <p className="text-sm text-gray-600">
-                  <span className="font-semibold">Balance:</span> {parseFloat(balance).toFixed(4)} {tokenInfo.symbol}
+                  <span className="font-semibold">Balance:</span> {parseFloat(balance).toFixed(4)} {tokenInfo.symbol || 'Token'}
                 </p>
               )}
             </div>
@@ -782,7 +816,7 @@ const ConnectWalletApp = () => {
                   <h3 className="text-lg font-semibold text-gray-800 mb-2">Sell Details</h3>
                   <p className="text-sm">
                     <span className="font-semibold">Amount:</span>{' '}
-                    {formatTokenAmount(session.amountInWei, tokenInfo.decimals)} {tokenInfo.symbol}
+                    {formatTokenAmount(session.amountInWei, tokenInfo.decimals)} {tokenInfo.symbol || 'Token'}
                   </p>
                   <p className="text-sm">
                     <span className="font-semibold">Chain:</span>{' '}
@@ -790,7 +824,7 @@ const ConnectWalletApp = () => {
                   </p>
                   <p className="text-sm">
                     <span className="font-semibold">To:</span>{' '}
-                    {session.blockradarWallet.slice(0, 6)}...{session.blockradarWallet.slice(-4)}
+                    {session.blockradarWallet ? `${session.blockradarWallet.slice(0, 6)}...${session.blockradarWallet.slice(-4)}` : 'Unknown'}
                   </p>
                 </div>
                 {quote ? (
@@ -850,7 +884,7 @@ const ConnectWalletApp = () => {
               <p className="text-sm text-gray-500">Fetching session...</p>
             )}
             {error && (
-              <div className="mt-4 p-3 bg-red-100 text-red-700 rounded-lg" role="alert">
+              <div className="alert-error" role="alert">
                 {error}
               </div>
             )}
@@ -864,7 +898,7 @@ const ConnectWalletApp = () => {
 
 const App = () => (
   <PrivyProvider
-    appId={process.env.REACT_APP_PRIVY_APP_ID}
+    appId={process.env.REACT_APP_PRIVY_APP_ID || ''}
     config={{
       fetch: (url, options) => {
         if (url.includes('auth.privy.io/api/v1/analytics_events')) {
