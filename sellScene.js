@@ -175,12 +175,11 @@ const sellScene = new Scenes.WizardScene(
         `Ready to connect your wallet to proceed?`;
     await ctx.replyWithMarkdown(confirmMsg);
 
-    const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}&sessionId=${ctx.wizard.state.sessionId}`;
+    const connectUrl = `${sellScene.webhookDomain}/connect?userId=${userId}&sessionId=${ctx.wizard.state.sessionId}`; // Use query parameters
     sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
 
     await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
 
-    // Store session in Firestore
     const sessionData = {
       userId,
       amountInWei: ctx.wizard.state.amountInWei,
