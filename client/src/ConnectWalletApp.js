@@ -15,6 +15,7 @@ const ConnectWalletApp = () => {
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
   const [status, setStatus] = useState('idle');
+  const [isCancelled, setIsCancelled] = useState(false);
   const location = useLocation();
 
   useEffect(() => {
@@ -72,7 +73,7 @@ const ConnectWalletApp = () => {
   }, [ready, authenticated, location.search]);
 
   const fetchQuote = async (adaptedWallet) => {
-    if (!session) return;
+    if (!session || isCancelled) return;
     setLoading(true);
     setStatus('Fetching quote...');
     try {
@@ -91,7 +92,8 @@ const ConnectWalletApp = () => {
       setQuote(quote);
       setError(null);
     } catch (err) {
-      setError(`Failed to fetch quote: ${err.message}`);
+      console.error('Error fetching quote:', err);
+      setError(`Failed to fetch quote: ${err.message || 'Unknown error'}`);
       setStatus('error');
     } finally {
       setLoading(false);
@@ -99,7 +101,7 @@ const ConnectWalletApp = () => {
   };
 
   const handleSell = async () => {
-    if (!wallets.length || !session || !quote) return;
+    if (!wallets.length || !session || !quote || isCancelled) return;
 
     const wallet = wallets[0];
     const provider = await wallet.getEthersProvider();
@@ -115,22 +117,23 @@ const ConnectWalletApp = () => {
         quote,
         wallet: adaptedWallet,
         onProgress: (progress) => {
+          console.log('Transaction progress:', progress);
           if (progress.txHashes && progress.txHashes.length > 0) {
             txHash = progress.txHashes[0].txHash;
             setStatus(`Transaction submitted: ${txHash}`);
           }
           if (progress.error) {
-            throw new Error(progress.error.message);
+            throw new Error(progress.error.message || 'Transaction failed');
           }
           if (progress.refunded) {
-            throw new Error('Operation failed and was refunded.');
+            throw new Error('Operation failed and was refunded');
           }
         },
       });
 
       if (txHash) {
         await axios.post('/webhook/sell-completed', {
-          userId: new URLSearchParams(location.search).get('userId'),
+          userId: session.userId,
           txHash: txHash
         });
         setStatus('Sell completed successfully!');
@@ -138,15 +141,22 @@ const ConnectWalletApp = () => {
         throw new Error('No transaction hash found');
       }
     } catch (err) {
-      setError(`Error during sell: ${err.message}`);
+      console.error('Error during sell:', err);
+      setError(`Error during sell: ${err.message || 'Unknown error'}`);
       setStatus('error');
     } finally {
       setLoading(false);
     }
   };
 
+  const handleCancel = () => {
+    setIsCancelled(true);
+    setStatus('Sell cancelled');
+    setError('You have cancelled the sell process. You can return to Telegram to start over.');
+  };
+
   useEffect(() => {
-    if (wallets.length > 0 && session && !quote && ready && authenticated) {
+    if (wallets.length > 0 && session && !quote && ready && authenticated && !isCancelled) {
       (async () => {
         try {
           const provider = await wallets[0].getEthersProvider();
@@ -154,12 +164,13 @@ const ConnectWalletApp = () => {
           const adaptedWallet = adaptEthersSigner(signer);
           await fetchQuote(adaptedWallet);
         } catch (err) {
-          setError(`Failed to initialize wallet for quote: ${err.message}`);
+          console.error('Error initializing wallet for quote:', err);
+          setError(`Failed to initialize wallet for quote: ${err.message || 'Unknown error'}`);
           setStatus('error');
         }
       })();
     }
-  }, [wallets, session, ready, authenticated]);
+  }, [wallets, session, ready, authenticated, isCancelled]);
 
   if (!ready) return <div>Loading...</div>;
 
@@ -172,7 +183,7 @@ const ConnectWalletApp = () => {
         <>
           <p>Connected: {wallets[0]?.address}</p>
           <p>Status: {status}</p>
-          {session ? (
+          {session && !isCancelled ? (
             <>
               <p>Amount: {ethers.utils.formatUnits(session.amountInWei, 6)} {session.token === '0x0000000000000000000000000000000000000000' ? 'ETH' : 'Token'}</p>
               <p>To: {session.blockradarWallet}</p>
@@ -183,13 +194,16 @@ const ConnectWalletApp = () => {
                   <button onClick={handleSell} disabled={loading}>
                     {loading ? 'Processing...' : 'Execute Sell'}
                   </button>
+                  <button onClick={handleCancel} disabled={loading} style={{ marginLeft: '10px', backgroundColor: '#ff4d4f', color: 'white' }}>
+                    Cancel Sell
+                  </button>
                 </>
               ) : (
                 <p>{loading ? 'Fetching quote...' : 'Waiting for quote...'}</p>
               )}
             </>
           ) : (
-            <p>Parsing session...</p>
+            <p>{isCancelled ? 'Sell process cancelled.' : 'Parsing session...'}</p>
           )}
           <button onClick={logout}>Disconnect</button>
         </>
@@ -197,12 +211,8 @@ const ConnectWalletApp = () => {
       {error && (
         <p className="error">
           {error}
-          {error.includes('Missing userId') && (
-            <>
-              <br />
-              <a href="https://t.me/yourBotUsername">Return to Telegram</a>
-            </>
-          )}
+          <br />
+          <a href="https://t.me/yourBotUsername">Return to Telegram</a>
         </p>
       )}
     </div>
