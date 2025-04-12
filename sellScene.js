@@ -149,9 +149,10 @@ const sellScene = new Scenes.WizardScene(
     const asset = ctx.wizard.state.selectedAsset;
     const bankDetails = ctx.wizard.state.bankDetails;
 
-    sellScene.logger.info(`User ${userId} reached wallet connection step. Asset: ${asset.symbol}, Bank: ${bankDetails.bankName}`);
+    sellScene.logger.info(`User ${userId} reached wallet connection step. Asset: ${asset.symbol}, Bank: ${bankDetails.bankName}, Bank Details: ${JSON.stringify(bankDetails)}`);
 
     if (!bankDetails) {
+      sellScene.logger.error(`No bank details found for user ${userId} at wallet connection step`);
       const errorMsg = userState.usePidgin
         ? '❌ No bank selected. Start again with /sell.'
         : '❌ No bank selected. Please start over with /sell.';
@@ -329,7 +330,15 @@ sellScene.action('confirm_bank', async (ctx) => {
   sellScene.logger.info(`User ${userId} confirmed bank selection`);
 
   try {
-    await ctx.answerCbQuery();
+    // Attempt to answer the callback query, but don't let it block the flow if it fails
+    try {
+      await ctx.answerCbQuery();
+      sellScene.logger.info(`Successfully answered callback query for user ${userId}`);
+    } catch (cbError) {
+      sellScene.logger.warn(`Failed to answer callback query for user ${userId}: ${cbError.message}`);
+      // Proceed anyway, as answering the callback query is not critical
+    }
+
     return await ctx.wizard.selectStep(4);
   } catch (error) {
     sellScene.logger.error(`Error advancing to wallet connection step for user ${userId}: ${error.message}`);
