@@ -1,21 +1,25 @@
 {
   "name": "client",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "dependencies": {
-    "@privy-io/react-auth": "^1.74.1",
-    "axios": "^1.6.0",
-    "ethers": "^5.7.2",
-    "react": "^18.2.0",
-    "react-dom": "^18.2.0",
-    "react-router-dom": "^6.26.1",
-    "react-scripts": "5.0.1"
+    "@privy-io/react-auth": "^1.76.0",
+    "@reservoir0x/relay-sdk": "^1.0.0",
+    "@reservoir0x/relay-ethers-wallet-adapter": "^1.0.0",
+    "axios": "^1.7.7",
+    "ethers": "^6.13.2",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-router-dom": "^6.26.2",
+    "react-scripts": "5.0.1",
+    "viem": "^2.21.15"
   },
   "scripts": {
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",
-    "eject": "react-scripts eject"
+    "eject": "react-scripts eject",
+    "lint": "eslint src/**/*.{js,jsx,ts,tsx}"
   },
   "eslintConfig": {
     "extends": [
@@ -25,7 +29,8 @@
   },
   "browserslist": {
     "production": [
-      ">0.2%",
+      ">0.5%",
+      "last 2 versions",
       "not dead",
       "not op_mini all"
     ],
@@ -36,6 +41,12 @@
     ]
   },
   "devDependencies": {
-    "dotenv": "^16.0.3"
+    "dotenv": "^16.4.5",
+    "typescript": "^5.5.4",
+    "@types/react": "^18.3.5",
+    "@types/react-dom": "^18.3.0",
+    "@types/node": "^20.16.5",
+    "eslint": "^8.57.0",
+    "eslint-plugin-react": "^7.35.2"
   }
 }
