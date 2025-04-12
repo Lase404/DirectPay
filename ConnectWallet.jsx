@@ -1,6 +1,8 @@
+// client/src/ConnectWalletApp.js
 import React, { useEffect, useState } from 'react';
 import { PrivyProvider, usePrivy, useWallets } from '@privy-io/react-auth';
 import axios from 'axios';
+import { ethers } from 'ethers';
 import './ConnectWalletApp.css';
 
 const ConnectWalletApp = () => {
@@ -9,6 +11,7 @@ const ConnectWalletApp = () => {
   const [session, setSession] = useState(null);
   const [quote, setQuote] = useState(null);
   const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     const fetchSession = async () => {
@@ -34,41 +37,52 @@ const ConnectWalletApp = () => {
     }
   }, [ready, authenticated]);
 
+  const fetchQuote = async (walletAddress) => {
+    if (!session) return;
+    setLoading(true);
+    try {
+      const quoteResponse = await axios.post('https://api.relay.link/quote', {
+        user: walletAddress,
+        originChainId: session.chainId,
+        originCurrency: session.token,
+        destinationChainId: 8453, // Base chain
+        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
+        tradeType: 'EXACT_INPUT',
+        recipient: session.blockradarWallet,
+        amount: session.amountInWei,
+        refundTo: walletAddress
+      });
+      setQuote(quoteResponse.data);
+      setError(null);
+    } catch (err) {
+      setError(`Failed to fetch quote: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSell = async () => {
-    if (!wallets.length || !session) return;
+    if (!wallets.length || !session || !quote) return;
 
     const wallet = wallets[0];
     const provider = await wallet.getEthersProvider();
     const signer = provider.getSigner();
 
     try {
-      // Fetch quote with user's wallet address
-      const quoteResponse = await axios.post('https://api.relay.link/quote', {
-        user: wallet.address,
-        originChainId: session.chainId,
-        originCurrency: session.token,
-        destinationChainId: 8453,
-        destinationCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
-        tradeType: 'EXACT_INPUT',
-        recipient: session.blockradarWallet,
-        amount: session.amountInWei,
-        refundTo: wallet.address
-      });
-      setQuote(quoteResponse.data);
-
+      setLoading(true);
       // Approve token if not native
       if (session.token !== '0x0000000000000000000000000000000000000000') {
         const erc20Abi = ['function approve(address spender, uint256 amount) public returns (bool)'];
         const tokenContract = new ethers.Contract(session.token, erc20Abi, signer);
-        const tx = await tokenContract.approve(quoteResponse.data.approvalAddress, session.amountInWei);
+        const tx = await tokenContract.approve(quote.approvalAddress, session.amountInWei);
         await tx.wait();
       }
 
       // Execute transaction
       const txResponse = await signer.sendTransaction({
-        to: quoteResponse.data.to,
-        data: quoteResponse.data.data,
-        value: quoteResponse.data.value ? ethers.BigNumber.from(quoteResponse.data.value) : 0
+        to: quote.to,
+        data: quote.data,
+        value: quote.value ? ethers.BigNumber.from(quote.value) : 0
       });
       await txResponse.wait();
 
@@ -82,8 +96,16 @@ const ConnectWalletApp = () => {
       setError('Sell completed successfully!');
     } catch (err) {
       setError(`Error during sell: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (wallets.length > 0 && session && !quote) {
+      fetchQuote(wallets[0].address);
+    }
+  }, [wallets, session]);
 
   if (!ready) return <div>Loading...</div>;
 
@@ -99,7 +121,17 @@ const ConnectWalletApp = () => {
             <>
               <p>Amount: {ethers.utils.formatUnits(session.amountInWei, 6)} {session.token === '0x0000000000000000000000000000000000000000' ? 'ETH' : 'Token'}</p>
               <p>To: {session.blockradarWallet}</p>
-              <button onClick={handleSell}>Execute Sell</button>
+              {quote ? (
+                <>
+                  <p>Quote: {ethers.utils.formatUnits(quote.amountOut, 6)} USDC</p>
+                  <p>Fees: {ethers.utils.formatEther(quote.feeDetails.totalFee)} ETH</p>
+                  <button onClick={handleSell} disabled={loading}>
+                    {loading ? 'Processing...' : 'Execute Sell'}
+                  </button>
+                </>
+              ) : (
+                <p>{loading ? 'Fetching quote...' : 'Waiting for quote...'}</p>
+              )}
             </>
           ) : (
             <p>Fetching session...</p>
