@@ -3396,7 +3396,6 @@ stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankL
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
 });
-const crypto = require('crypto');
 
 app.get('/api/validate-session', async (req, res) => {
   const { sessionId, hash } = req.query;
