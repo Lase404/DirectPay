@@ -20,7 +20,7 @@ const sellScene = new Scenes.WizardScene(
     if (!ctx.from || !ctx.from.id) {
       sellScene.logger.error('Missing ctx.from or ctx.from.id');
       await ctx.replyWithMarkdown(
-        '❌ Unable to process request. Try again or contact [@maxcswap](https://t.me/maxcswap).',
+        '❌ Unable to process. Try again or contact [@maxcswap](https://t.me/maxcswap).',
         Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]]),
       );
       return ctx.scene.leave();
@@ -70,6 +70,7 @@ const sellScene = new Scenes.WizardScene(
       stepStartedAt: Date.now(),
     };
 
+    await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
     const msg = await ctx.replyWithMarkdown(userState.usePidgin ? '🔄 Dey check asset...' : '🔄 Verifying asset...');
 
     try {
@@ -113,30 +114,23 @@ const sellScene = new Scenes.WizardScene(
           msg.message_id,
           null,
           userState.usePidgin
-            ? `✅ Asset: *${assets[0].symbol}* on ${ctx.wizard.state.chain}`
-            : `✅ Asset: *${assets[0].symbol}* on ${ctx.wizard.state.chain}`,
-          { parse_mode: 'Markdown' },
-        );
-        sellScene.logger.info(`User ${userId} confirmed asset ${assets[0].symbol}, verified: ${assets[0].metadata.verified}`);
-        if (!assets[0].metadata.verified) {
-          await ctx.replyWithMarkdown(
-            userState.usePidgin
-              ? `⚠ *${assets[0].symbol}* no verified on ${ctx.wizard.state.chain}. E fit get risk. Continue? (Step 1/4)`
-              : `⚠ *${assets[0].symbol}* is unverified on ${ctx.wizard.state.chain}. May be risky. Proceed? (Step 1/4)`,
-            Markup.inlineKeyboard([
-              [Markup.button.callback('✅ Yes', 'confirm_unverified')],
+            ? `📝 Selling: *${ctx.wizard.state.amount} ${assets[0].symbol}* on ${ctx.wizard.state.chain}\nCorrect?`
+            : `📝 Selling: *${ctx.wizard.state.amount} ${assets[0].symbol}* on ${ctx.wizard.state.chain}\nIs this correct?`,
+          {
+            parse_mode: 'Markdown',
+            reply_markup: Markup.inlineKeyboard([
+              [Markup.button.callback('✅ Yes', 'confirm_sell')],
               [Markup.button.callback('❌ Cancel', 'cancel_sell')],
-            ]),
-          );
-          return ctx.wizard.next();
-        }
-        sellScene.logger.info(`User ${userId} advancing to bank selection for verified asset`);
-        return ctx.wizard.next(); // Move to Step 2, then Step 3
+            ]).reply_markup,
+          },
+        );
+        sellScene.logger.info(`User ${userId} confirmed asset ${assets[0].symbol}`);
+        return ctx.wizard.next();
       }
 
       const options = assets.map((asset, index) => [
         Markup.button.callback(
-          `${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)${asset.metadata.verified ? '' : ' (Unverified)'}`,
+          `${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)`,
           `select_asset_${index}`,
         ),
       ]);
@@ -145,7 +139,7 @@ const sellScene = new Scenes.WizardScene(
         ctx.chat.id,
         msg.message_id,
         null,
-        userState.usePidgin ? '🤔 Multiple assets dey. Pick one (Step 1/4):' : '🤔 Multiple assets found. Select one (Step 1/4):',
+        userState.usePidgin ? '🤔 Multiple assets dey. Pick one:' : '🤔 Multiple assets found. Select one:',
         Markup.inlineKeyboard(options),
       );
       return ctx.wizard.next();
@@ -164,7 +158,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
-  // Step 2: Select Asset or Confirm Unverified
+  // Step 2: Confirm Sell Details
   async (ctx) => {
     if (!sellScene.logger || !sellScene.db || !sellScene.getUserState) {
       console.error('Sell scene not initialized');
@@ -196,7 +190,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    sellScene.logger.info(`User ${userId} in step 2: checking state ${JSON.stringify(ctx.wizard.state)}`);
+    sellScene.logger.info(`User ${userId} in step 2: awaiting sell confirmation`);
     if (Date.now() - ctx.wizard.state.stepStartedAt > INACTIVITY_TIMEOUT) {
       const errorMsg = userState.usePidgin
         ? '⏰ You don wait too long. Start again with /sell.'
@@ -205,12 +199,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    if (ctx.wizard.state.selectedAsset && ctx.wizard.state.selectedAsset.metadata.verified) {
-      sellScene.logger.info(`User ${userId} has verified asset, moving to bank selection`);
-      return ctx.wizard.next();
-    }
-
-    return; // Handled by actions (select_asset, confirm_unverified)
+    return; // Handled by actions (select_asset, confirm_sell)
   },
   // Step 3: Bank Selection
   async (ctx) => {
@@ -273,14 +262,15 @@ const sellScene = new Scenes.WizardScene(
     const walletsWithBank = userState.wallets.filter((w) => w.bank);
     sellScene.logger.info(`User ${userId} has ${walletsWithBank.length} wallets with bank`);
 
-    const assetMsg = userState.usePidgin
-      ? `✅ *Asset Confirmed* (Step 2/4)\n\n*Symbol:* ${asset.symbol}\n*Name:* ${asset.name}\n*Address:* \`${asset.address}\`\n*Chain:* ${ctx.wizard.state.chain}\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Where you want funds go?`
-      : `✅ *Asset Confirmed* (Step 2/4)\n\n*Symbol:* ${asset.symbol}\n*Name:* ${asset.name}\n*Address:* \`${asset.address}\`\n*Chain:* ${ctx.wizard.state.chain}\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Where would you like funds sent?`;
+    await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
+    const bankMsg = userState.usePidgin
+      ? `✅ Selling *${ctx.wizard.state.amount} ${asset.symbol}* on ${ctx.wizard.state.chain}\nWhere you want funds go?`
+      : `✅ Selling *${ctx.wizard.state.amount} ${asset.symbol}* on ${ctx.wizard.state.chain}\nWhere would you like funds sent?`;
 
     if (walletsWithBank.length === 0) {
       sellScene.logger.info(`User ${userId} has no linked banks, prompting to link`);
       await ctx.replyWithMarkdown(
-        userState.usePidgin ? '🏦 No bank linked. Link one now? (Step 2/4)' : '🏦 No bank linked. Link one? (Step 2/4)',
+        userState.usePidgin ? '🏦 No bank linked. Link one now?' : '🏦 No bank linked. Link one?',
         Markup.inlineKeyboard([
           [Markup.button.callback('✅ Yes', 'link_temp_bank')],
           [Markup.button.callback('❌ Cancel', 'cancel_sell')],
@@ -297,7 +287,8 @@ const sellScene = new Scenes.WizardScene(
     ]);
     bankOptions.push([Markup.button.callback('➕ Use Another Bank', 'link_temp_bank')]);
     bankOptions.push([Markup.button.callback('❌ Cancel', 'cancel_sell')]);
-    await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
+    await ctx.replyWithMarkdown(bankMsg, Markup.inlineKeyboard(bankOptions));
+    sellScene.logger.info(`User ${userId} sent bank selection prompt`);
     return ctx.wizard.next();
   },
   // Step 4: Confirm Bank Selection
@@ -403,9 +394,10 @@ const sellScene = new Scenes.WizardScene(
     ctx.wizard.state.sessionId = uuidv4();
     ctx.wizard.state.stepStartedAt = Date.now();
 
+    await ctx.telegram.sendChatAction(ctx.chat.id, 'typing');
     const confirmMsg = userState.usePidgin
-      ? `📝 *Sell Details* (Step 3/4)\n\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n*Chain:* ${ctx.wizard.state.chain}\n*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Ready to connect wallet?`
-      : `📝 *Sell Details* (Step 3/4)\n\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n*Chain:* ${ctx.wizard.state.chain}\n*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Ready to connect wallet?`;
+      ? `📝 *Sell Details*\n\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n*Chain:* ${ctx.wizard.state.chain}\n*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\nReady to connect wallet?`
+      : `📝 *Sell Details*\n\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n*Chain:* ${ctx.wizard.state.chain}\n*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\nReady to connect wallet?`;
     await ctx.replyWithMarkdown(confirmMsg);
 
     const sessionData = {
@@ -418,7 +410,6 @@ const sellScene = new Scenes.WizardScene(
       status: 'pending',
       createdAt: new Date().toISOString(),
       expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
-      isVerifiedAsset: asset.metadata.verified,
     };
 
     sellScene.logger.info(`Storing session for ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
@@ -450,8 +441,8 @@ const sellScene = new Scenes.WizardScene(
 
     await ctx.replyWithMarkdown(
       userState.usePidgin
-        ? `✅ *Sell Ready!* (Step 4/4)\nConnect wallet in 15 mins:\n[${connectUrl}](${connectUrl})`
-        : `✅ *Sell Ready!* (Step 4/4)\nConnect wallet within 15 minutes:\n[${connectUrl}](${connectUrl})`,
+        ? `✅ *Sell Ready!*\nConnect wallet in 15 mins:\n[${connectUrl}](${connectUrl})`
+        : `✅ *Sell Ready!*\nConnect wallet within 15 minutes:\n[${connectUrl}](${connectUrl})`,
       Markup.inlineKeyboard([
         [Markup.button.url('Connect Wallet', connectUrl)],
         [Markup.button.callback('⬅ Back', 'back_to_bank')],
@@ -537,8 +528,8 @@ const sellScene = new Scenes.WizardScene(
 
       await ctx.replyWithMarkdown(
         userState.usePidgin
-          ? '⏳ Dey wait for wallet connect... (Step 4/4)\nConnect quick!'
-          : '⏳ Waiting for wallet connection... (Step 4/4)\nConnect promptly!',
+          ? '⏳ Dey wait for wallet connect...\nConnect quick!'
+          : '⏳ Waiting for wallet connection...\nConnect promptly!',
         Markup.inlineKeyboard([
           [Markup.button.callback('⬅ Back', 'back_to_bank')],
           [Markup.button.callback('❌ Cancel', 'cancel_sell')],
@@ -708,27 +699,23 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   await ctx.deleteMessage();
   await ctx.answerCbQuery();
 
-  if (!assets[index].metadata.verified) {
-    await ctx.replyWithMarkdown(
-      userState.usePidgin
-        ? `⚠ *${assets[index].symbol}* no verified on ${ctx.wizard.state.chain}. E fit get risk. Continue? (Step 1/4)`
-        : `⚠ *${assets[index].symbol}* is unverified on ${ctx.wizard.state.chain}. May be risky. Proceed? (Step 1/4)`,
-      Markup.inlineKeyboard([
-        [Markup.button.callback('✅ Yes', 'confirm_unverified')],
-        [Markup.button.callback('❌ Cancel', 'cancel_sell')],
-      ]),
-    );
-    return;
-  }
-
-  sellScene.logger.info(`User ${userId} selected verified asset, advancing to bank selection`);
-  return ctx.wizard.selectStep(2);
+  await ctx.replyWithMarkdown(
+    userState.usePidgin
+      ? `📝 Selling: *${ctx.wizard.state.amount} ${assets[index].symbol}* on ${ctx.wizard.state.chain}\nCorrect?`
+      : `📝 Selling: *${ctx.wizard.state.amount} ${assets[index].symbol}* on ${ctx.wizard.state.chain}\nIs this correct?`,
+    Markup.inlineKeyboard([
+      [Markup.button.callback('✅ Yes', 'confirm_sell')],
+      [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+    ]),
+  );
+  sellScene.logger.info(`User ${userId} prompted to confirm sell for ${assets[index].symbol}`);
+  return;
 });
 
-sellScene.action('confirm_unverified', async (ctx) => {
+sellScene.action('confirm_sell', async (ctx) => {
   const userId = ctx.from?.id?.toString();
   if (!userId) {
-    sellScene.logger.error('Missing userId in confirm_unverified');
+    sellScene.logger.error('Missing userId in confirm_sell');
     await ctx.replyWithMarkdown(
       '❌ Unable to process. Try again or contact [@maxcswap](https://t.me/maxcswap).',
       Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]]),
@@ -752,7 +739,7 @@ sellScene.action('confirm_unverified', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  sellScene.logger.info(`User ${userId} confirmed unverified asset`);
+  sellScene.logger.info(`User ${userId} confirmed sell details`);
   ctx.wizard.state.stepStartedAt = Date.now();
   await ctx.deleteMessage();
   await ctx.answerCbQuery();
@@ -807,8 +794,8 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
   ctx.wizard.state.stepStartedAt = Date.now();
 
   const confirmMsg = userState.usePidgin
-    ? `🏦 Funds go to:\n*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\nE correct? (Step 3/4)`
-    : `🏦 Funds will be sent to:\n*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\nIs this correct? (Step 3/4)`;
+    ? `🏦 Funds go to:\n*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\nE correct?`
+    : `🏦 Funds will be sent to:\n*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\nIs this correct?`;
   await ctx.replyWithMarkdown(
     confirmMsg,
     Markup.inlineKeyboard([
@@ -817,6 +804,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
       [Markup.button.callback('❌ Cancel', 'cancel_sell')],
     ]),
   );
+  sellScene.logger.info(`User ${userId} sent bank confirmation prompt`);
   await ctx.answerCbQuery();
 });
 
@@ -938,13 +926,13 @@ sellScene.action('back_to_asset', async (ctx) => {
 
   const options = assets.map((asset, index) => [
     Markup.button.callback(
-      `${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)${asset.metadata.verified ? '' : ' (Unverified)'}`,
+      `${asset.symbol} - ${asset.name} (${asset.address.slice(0, 6)}...)`,
       `select_asset_${index}`,
     ),
   ]);
   options.push([Markup.button.callback('❌ Cancel', 'cancel_sell')]);
   await ctx.replyWithMarkdown(
-    userState.usePidgin ? '🤔 Pick asset (Step 1/4):' : '🤔 Select asset (Step 1/4):',
+    userState.usePidgin ? '🤔 Pick asset:' : '🤔 Select asset:',
     Markup.inlineKeyboard(options),
   );
   ctx.wizard.state.stepStartedAt = Date.now();
@@ -992,6 +980,22 @@ sellScene.action('back_to_bank', async (ctx) => {
   }
 
   const asset = ctx.wizard.state.selectedAsset;
+  const bankMsg = userState.usePidgin
+    ? `✅ Selling *${ctx.wizard.state.amount} ${asset.symbol}* on ${ctx.wizard.state.chain}\nWhere you want funds go?`
+    : `✅ Selling *${ctx.wizard.state.amount} ${asset.symbol}* on ${ctx.wizard.state.chain}\nWhere would you like funds sent?`;
+
+  if (walletsWithBank.length === 0) {
+    await ctx.replyWithMarkdown(
+      userState.usePidgin ? '🏦 No bank linked. Link one now?' : '🏦 No bank linked. Link one?',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes', 'link_temp_bank')],
+        [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+      ]),
+    );
+    await ctx.answerCbQuery();
+    return ctx.wizard.selectStep(3);
+  }
+
   const bankOptions = walletsWithBank.map((wallet, index) => [
     Markup.button.callback(
       `${wallet.bank.bankName} (****${wallet.bank.accountNumber.slice(-4)})`,
@@ -1001,10 +1005,7 @@ sellScene.action('back_to_bank', async (ctx) => {
   bankOptions.push([Markup.button.callback('➕ Use Another Bank', 'link_temp_bank')]);
   bankOptions.push([Markup.button.callback('❌ Cancel', 'cancel_sell')]);
 
-  const assetMsg = userState.usePidgin
-    ? `✅ *Asset Confirmed* (Step 2/4)\n\n*Symbol:* ${asset.symbol}\n*Name:* ${asset.name}\n*Address:* \`${asset.address}\`\n*Chain:* ${ctx.wizard.state.chain}\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Where you want funds go?`
-    : `✅ *Asset Confirmed* (Step 2/4)\n\n*Symbol:* ${asset.symbol}\n*Name:* ${asset.name}\n*Address:* \`${asset.address}\`\n*Chain:* ${ctx.wizard.state.chain}\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Where would you like funds sent?`;
-  await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
+  await ctx.replyWithMarkdown(bankMsg, Markup.inlineKeyboard(bankOptions));
   ctx.wizard.state.stepStartedAt = Date.now();
   await ctx.answerCbQuery();
   return ctx.wizard.selectStep(2);
