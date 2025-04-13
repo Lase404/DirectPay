@@ -3396,61 +3396,38 @@ stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankL
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
 });
-// /api/session endpoint to retrieve session data by sessionId
-router.get('/session', async (req, res) => {
-  const { sessionId } = req.query;
+const crypto = require('crypto');
 
-  if (!sessionId || typeof sessionId !== 'string') {
-    return res.status(400).json({ error: 'Missing or invalid sessionId' });
-  }
-
+app.get('/api/validate-session', async (req, res) => {
+  const { sessionId, hash } = req.query;
   try {
     const sessionDoc = await db.collection('sessions').doc(sessionId).get();
     if (!sessionDoc.exists) {
       return res.status(404).json({ error: 'Session not found' });
     }
-
-    const sessionData = sessionDoc.data();
-    const now = new Date();
-
-    // Check if session is expired
-    if (new Date(sessionData.expiresAt) < now) {
-      await db.collection('sessions').doc(sessionId).update({ status: 'expired' });
-      return res.status(410).json({ error: 'Session has expired' });
+    const session = sessionDoc.data();
+    const secret = process.env.SESSION_SECRET || 'your-secret-key';
+    const expectedHash = crypto.createHmac('sha256', secret)
+      .update(`${sessionId}:${session.amountInWei}:${session.token}:${session.chainId}:${session.blockradarWallet}`)
+      .digest('hex');
+    if (hash !== expectedHash) {
+      return res.status(403).json({ error: 'Invalid session hash' });
     }
-
-    // Validate required fields
-    const requiredFields = ['userId', 'amountInWei', 'token', 'chainId', 'bankDetails', 'blockradarWallet', 'status', 'createdAt', 'expiresAt'];
-    const missingFields = requiredFields.filter(field => !(field in sessionData));
-    if (missingFields.length > 0) {
-      return res.status(400).json({ error: `Invalid session data: Missing fields - ${missingFields.join(', ')}` });
-    }
-
-    // Validate bankDetails
-    const bankRequiredFields = ['bankName', 'accountNumber', 'accountName'];
-    const missingBankFields = bankRequiredFields.filter(field => !(field in sessionData.bankDetails));
-    if (missingBankFields.length > 0) {
-      return res.status(400).json({ error: `Invalid bank details: Missing fields - ${missingBankFields.join(', ')}` });
-    }
-
-    // Return session data
-    res.json({
-      userId: sessionData.userId,
-      amountInWei: sessionData.amountInWei,
-      token: sessionData.token,
-      chainId: sessionData.chainId,
-      bankDetails: sessionData.bankDetails,
-      blockradarWallet: sessionData.blockradarWallet,
-      status: sessionData.status,
-      createdAt: sessionData.createdAt,
-      expiresAt: sessionData.expiresAt
-    });
-  } catch (error) {
-    console.error(`Error fetching session ${sessionId}:`, error);
-    res.status(500).json({ error: 'Failed to fetch session' });
+    res.json(session);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
   }
 });
-
+app.post('/webhook/sell-completed', async (req, res) => {
+  const { sessionId, txHash } = req.body;
+  try {
+    await db.collection('sessions').doc(sessionId).update({ status: 'completed', txHash });
+    // Process bank payout using session.bankDetails
+    res.status(200).send('Success');
+  } catch (err) {
+    res.status(500).send('Error');
+  }
+});
 
 // =================== Server Startup ===================
 app.listen(PORT, () => {
