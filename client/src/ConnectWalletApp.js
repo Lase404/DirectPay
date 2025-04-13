@@ -96,7 +96,7 @@ const switchChain = async (chainId, retryCount = 2) => {
     } catch (err) {
       attempt++;
       if (attempt > retryCount) {
-        throw err;
+        throw new Error(`Failed to switch to chain ID ${chainId}: ${err.message}`);
       }
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
@@ -107,8 +107,8 @@ const getTokenInfo = async (token, chainId) => {
   if (token === '0x0000000000000000000000000000000000000000') {
     const chainConfig = SUPPORTED_CHAINS[chainId];
     return {
-      symbol: chainConfig.nativeCurrency.symbol,
-      decimals: chainConfig.nativeCurrency.decimals,
+      symbol: chainConfig?.nativeCurrency.symbol || 'Token',
+      decimals: chainConfig?.nativeCurrency.decimals || 18,
     };
   }
 
@@ -157,9 +157,10 @@ const fetchQuote = async (wallet, session, setQuote, setError, setLoading, setSt
     setError(null);
     toast.success('Quote fetched successfully!');
   } catch (err) {
-    setError(`Failed to fetch quote: ${err.message}`);
+    const errorMsg = `Failed to fetch quote: ${err.message}`;
+    setError(errorMsg);
     setStatus('error');
-    toast.error('Failed to fetch quote.');
+    toast.error(errorMsg);
   } finally {
     setLoading(false);
   }
@@ -179,6 +180,7 @@ const handleSell = async (wallet, session, quote, setLoading, setStatus, setTxHa
     await switchChain(session.chainId);
     let approvalCompleted = false;
     let signatureCompleted = false;
+    let latestTxHash = null;
 
     await getClient().actions.execute({
       quote,
@@ -228,26 +230,27 @@ const handleSell = async (wallet, session, quote, setLoading, setStatus, setTxHa
         }
 
         if (txHashes && txHashes.length > 0) {
-          const txHash = txHashes[txHashes.length - 1].txHash;
+          latestTxHash = txHashes[txHashes.length - 1].txHash;
           const isBatch = txHashes[txHashes.length - 1].isBatchTx || false;
-          setTxHash(txHash);
-          setStatus(`Transaction ${isBatch ? 'batch ' : ''}submitted: ${txHash.slice(0, 6)}...`);
-          toast.success(`Transaction ${isBatch ? 'batch ' : ''}submitted: ${txHash.slice(0, 6)}...`);
+          setTxHash(latestTxHash);
+          setStatus(`Transaction ${isBatch ? 'batch ' : ''}submitted: ${latestTxHash.slice(0, 6)}...`);
+          toast.success(`Transaction ${isBatch ? 'batch ' : ''}submitted: ${latestTxHash.slice(0, 6)}...`);
           setStatus('Awaiting relayer confirmation...');
         }
       },
     });
 
-    if (txHash) {
+    if (latestTxHash) {
       try {
         await axios.post('/webhook/sell-completed', {
           sessionId: new URLSearchParams(location.search).get('sessionId'),
-          txHash,
+          txHash: latestTxHash,
         });
         setStatus('Sell completed successfully!');
         toast.success('Sell completed! Funds will be sent to your bank.');
       } catch (webhookErr) {
-        setError(`Sell completed, but failed to notify server: ${webhookErr.message}`);
+        const errorMsg = `Sell completed, but failed to notify server: ${webhookErr.message}`;
+        setError(errorMsg);
         toast.warn('Sell completed, but server notification failed. Contact support.');
       }
     } else {
@@ -259,10 +262,12 @@ const handleSell = async (wallet, session, quote, setLoading, setStatus, setTxHa
       errorMsg = `Deposit transaction ${err.txHash} is still pending. Please wait or check your wallet.`;
     } else if (err.name === 'TransactionConfirmationError') {
       errorMsg = `Transaction failed: ${err.message}. Receipt: ${JSON.stringify(err.receipt)}`;
+    } else {
+      errorMsg = `Error during sell: ${err.message}`;
     }
-    setError(`Error during sell: ${errorMsg}`);
+    setError(errorMsg);
     setStatus('error');
-    toast.error(`Sell failed: ${errorMsg}`);
+    toast.error(errorMsg);
   } finally {
     setLoading(false);
   }
@@ -554,8 +559,9 @@ const ConnectWalletApp = () => {
           break;
         } catch (err) {
           if (attempt === retryCount) {
-            setError(`Failed to fetch session: ${err.message}`);
-            toast.error('Failed to fetch session.');
+            const errorMsg = `Failed to fetch session: ${err.message}`;
+            setError(errorMsg);
+            toast.error(errorMsg);
           }
           await new Promise(resolve => setTimeout(resolve, delay));
         }
@@ -633,7 +639,11 @@ const ConnectWalletApp = () => {
                   <>
                     <QuoteDisplay quote={quote} tokenInfo={tokenInfo} />
                     {txHash && (
-                      <TransactionStatus txHash={txHash} chainId={session.chainId} status={status} />
+                      <TransactionStatus
+                        txHash={txHash}
+                        chainId={session.chainId}
+                        status={status}
+                      />
                     )}
                     <button
                       onClick={handleSellClick}
