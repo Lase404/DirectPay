@@ -449,7 +449,7 @@ sellScene.action('confirm_bank', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
+  const webhookDomain = sellScene.webhookDomain || 'https://directpay-1.onrender.com';
   const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.wizard.state.sessionId}`;
   await ctx.replyWithMarkdown(
     `[Connect Wallet](${connectUrl})`,
