@@ -2,6 +2,7 @@ const { Scenes, Markup } = require('telegraf');
 const axios = require('axios');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
+const crypto = require('crypto');
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
@@ -50,8 +51,13 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    ctx.wizard.state.amount = amount; // Store amount in state
-    ctx.wizard.state.chain = chain.toLowerCase();
+    ctx.wizard.state = {
+      userId,
+      amount,
+      assetInput,
+      chain: chain.toLowerCase(),
+      stepStartedAt: Date.now(),
+    };
 
     await ctx.replyWithMarkdown(
       userState.usePidgin
@@ -101,7 +107,8 @@ const sellScene = new Scenes.WizardScene(
         sellScene.logger.info(`User ${userId} prompted to select asset from ${assets.length} options`);
         return;
       } else {
-        ctx.wizard.state.selectedAsset = assets[0]; // Store selectedAsset
+        ctx.wizard.state.selectedAsset = assets[0];
+        ctx.wizard.state.amount = amount; // Ensure amount is preserved
         sellScene.logger.info(`User ${userId} auto-selected single asset: ${assets[0].symbol}`);
         await promptBankSelection(ctx);
         return;
@@ -192,6 +199,12 @@ async function validateAssetByTerm(term, chainId, relayClient, retries = 2) {
   }
 }
 
+function generateSessionHash(sessionData) {
+  const secret = process.env.SESSION_SECRET || 'your-secret-key';
+  const dataString = `${sessionData.sessionId}:${sessionData.amountInWei}:${sessionData.token}:${sessionData.chainId}:${sessionData.blockradarWallet}`;
+  return crypto.createHmac('sha256', secret).update(dataString).digest('hex');
+}
+
 async function promptBankSelection(ctx) {
   const userId = ctx.wizard.state.userId;
   let userState;
@@ -209,7 +222,7 @@ async function promptBankSelection(ctx) {
 
   const walletsWithBank = userState.wallets?.filter((w) => w.bank) || [];
   const asset = ctx.wizard.state.selectedAsset;
-  const amount = ctx.wizard.state.amount; // Retrieve stored amount
+  const amount = ctx.wizard.state.amount;
 
   if (!asset || !amount) {
     sellScene.logger.error(`Missing asset or amount for user ${userId}: asset=${!!asset}, amount=${!!amount}`);
@@ -295,7 +308,8 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
     return;
   }
 
-  ctx.wizard.state.selectedAsset = assets[index]; // Store selectedAsset
+  ctx.wizard.state.selectedAsset = assets[index];
+  ctx.wizard.state.amount = ctx.wizard.state.amount; // Preserve amount
   await ctx.answerCbQuery();
   await ctx.replyWithMarkdown(
     userState.usePidgin
@@ -449,8 +463,31 @@ sellScene.action('confirm_bank', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  const webhookDomain = sellScene.webhookDomain || 'https://directpay-1.onrender.com';
-  const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.wizard.state.sessionId}`;
+  // Generate session hash to secure URL data
+  const sessionHash = generateSessionHash({
+    sessionId: ctx.wizard.state.sessionId,
+    amountInWei,
+    token: asset.address,
+    chainId: sessionData.chainId,
+    blockradarWallet: selectedWalletAddress,
+  });
+
+  const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
+  const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.wizard.state.sessionId}&hash=${sessionHash}`;
+
+  const confirmMsg = userState.usePidgin
+    ? `📝 *Sell Details* (Step 4/4)\n\n` +
+      `*Amount:* ${amount} ${asset.symbol}\n` +
+      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `Connect your wallet now!`
+    : `📝 *Sell Details* (Step 4/4)\n\n` +
+      `*Amount:* ${amount} ${asset.symbol}\n` +
+      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `Connect your wallet now!`;
+  await ctx.replyWithMarkdown(confirmMsg);
+
   await ctx.replyWithMarkdown(
     `[Connect Wallet](${connectUrl})`,
     Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'cancel_sell')]])
@@ -477,6 +514,123 @@ sellScene.action('cancel_sell', async (ctx) => {
 sellScene.action('retry_sell', async (ctx) => {
   await ctx.answerCbQuery();
   await ctx.replyWithMarkdown('🔄 Restarting sell process. Use /sell to begin.');
+  return ctx.scene.leave();
+});
+
+// **Handle Temporary Bank Linking Completion**
+sellScene.action('confirm_bank_temp', async (ctx) => {
+  const userId = ctx.wizard.state.userId;
+  let userState;
+  try {
+    userState = await sellScene.getUserState(userId);
+    if (!userState) throw new Error('User state not found');
+  } catch (err) {
+    sellScene.logger.error(`Failed to fetch user state for user ${userId}: ${err.message}`);
+    await ctx.replyWithMarkdown(
+      '❌ Error fetching your profile. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const { selectedAsset: asset, amount } = ctx.wizard.state;
+  const bankDetails = ctx.scene.state.bankDetails;
+  const selectedWalletAddress = ctx.scene.state.walletAddress || ctx.wizard.state.selectedWalletAddress;
+
+  if (!asset || !bankDetails || !selectedWalletAddress || !amount) {
+    sellScene.logger.error(`Missing details for user ${userId}: asset=${!!asset}, bankDetails=${!!bankDetails}, walletAddress=${!!selectedWalletAddress}, amount=${!!amount}`);
+    const errorMsg = userState.usePidgin
+      ? '❌ Something miss for your sell. Start again with /sell.'
+      : '❌ Missing details for your sell. Please start over with /sell.';
+    await ctx.replyWithMarkdown(
+      errorMsg,
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  let amountInWei;
+  try {
+    amountInWei = ethers.utils.parseUnits(amount.toString(), asset.decimals).toString();
+  } catch (error) {
+    sellScene.logger.error(`Error parsing amount for user ${userId}: ${error.message}`);
+    const errorMsg = userState.usePidgin
+      ? '❌ Amount no valid for this asset. Start again with /sell.'
+      : '❌ Invalid amount for this asset. Please start over with /sell.';
+    await ctx.replyWithMarkdown(
+      errorMsg,
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  ctx.wizard.state.amountInWei = amountInWei;
+  ctx.wizard.state.sessionId = uuidv4();
+  ctx.wizard.state.bankDetails = bankDetails;
+  ctx.wizard.state.selectedWalletAddress = selectedWalletAddress;
+
+  const sessionData = {
+    userId,
+    amountInWei,
+    token: asset.address,
+    chainId: mapChainToId(ctx.wizard.state.chain),
+    bankDetails,
+    blockradarWallet: selectedWalletAddress,
+    status: 'pending',
+    createdAt: new Date().toISOString(),
+    expiresAt: new Date(Date.now() + 15 * 60 * 1000).toISOString(),
+  };
+
+  try {
+    await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
+    sellScene.logger.info(`Session stored for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
+  } catch (error) {
+    sellScene.logger.error(`Failed to store session for user ${userId}: ${error.message}`);
+    const errorMsg = userState.usePidgin
+      ? '❌ Error saving your sell details. Try again or contact [@maxcswap](https://t.me/maxcswap).'
+      : '❌ Error saving your sell details. Try again or contact [@maxcswap](https://t.me/maxcswap).';
+    await ctx.replyWithMarkdown(
+      errorMsg,
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
+
+  const sessionHash = generateSessionHash({
+    sessionId: ctx.wizard.state.sessionId,
+    amountInWei,
+    token: asset.address,
+    chainId: sessionData.chainId,
+    blockradarWallet: selectedWalletAddress,
+  });
+
+  const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
+  const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.wizard.state.sessionId}&hash=${sessionHash}`;
+
+  const confirmMsg = userState.usePidgin
+    ? `📝 *Sell Details* (Step 4/4)\n\n` +
+      `*Amount:* ${amount} ${asset.symbol}\n` +
+      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `Connect your wallet now!`
+    : `📝 *Sell Details* (Step 4/4)\n\n` +
+      `*Amount:* ${amount} ${asset.symbol}\n` +
+      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `Connect your wallet now!`;
+  await ctx.replyWithMarkdown(confirmMsg);
+
+  await ctx.replyWithMarkdown(
+    `[Connect Wallet](${connectUrl})`,
+    Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'cancel_sell')]])
+  );
+  sellScene.logger.info(`User ${userId} prompted to connect wallet: ${connectUrl}`);
+  ctx.wizard.state.awaitingTempBank = false;
+  await ctx.answerCbQuery();
   return ctx.scene.leave();
 });
 
