@@ -135,8 +135,11 @@ const sellScene = new Scenes.WizardScene(
             ]),
           );
           return ctx.wizard.next();
+        } else {
+          ctx.wizard.state.assetConfirmed = true;
+          sellScene.logger.info(`User ${userId} has verified asset, proceeding to bank selection`);
+          return ctx.wizard.selectStep(2); // Directly go to Step 3: Bank Selection
         }
-        return ctx.wizard.selectStep(2); // Skip to bank selection
       }
     } catch (error) {
       sellScene.logger.error(`Error validating asset for user ${userId}: ${error.message}`);
@@ -200,6 +203,7 @@ const sellScene = new Scenes.WizardScene(
         ? '⏳ Dey wait for you to pick or confirm asset...'
         : '⏳ Waiting for you to select or confirm asset...',
     );
+    // Note: This step waits for user action (handled by action handlers)
   },
   // Step 3: Bank Selection
   async (ctx) => {
@@ -790,9 +794,24 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   }
 
   ctx.wizard.state.selectedAsset = assets[index];
-  ctx.wizard.state.stepStartedAt = Date.now();
+  if (!assets[index].metadata.verified) {
+    await ctx.replyWithMarkdown(
+      userState.usePidgin
+        ? '⚠ This asset no verified. E fit get risk. You wan continue? (Step 1/4)'
+        : '⚠ This asset is unverified and may carry risks. Proceed with caution? (Step 1/4)',
+      Markup.inlineKeyboard([
+        [Markup.button.callback('✅ Yes', 'confirm_unverified')],
+        [Markup.button.callback('❌ Cancel', 'cancel_sell')],
+      ]),
+    );
+    await ctx.answerCbQuery();
+    return;
+  }
+
+  ctx.wizard.state.assetConfirmed = true;
+  sellScene.logger.info(`User ${userId} selected verified asset, proceeding to bank selection`);
   await ctx.answerCbQuery();
-  return ctx.wizard.selectStep(2);
+  return ctx.wizard.selectStep(2); // Go to Step 3: Bank Selection
 });
 
 sellScene.action('confirm_unverified', async (ctx) => {
@@ -824,9 +843,10 @@ sellScene.action('confirm_unverified', async (ctx) => {
   }
 
   sellScene.logger.info(`User ${userId} confirmed unverified asset`);
-  ctx.wizard.state.stepStartedAt = Date.now();
+  ctx.wizard.state.assetConfirmed = true;
+  await ctx.deleteMessage(); // Clean up the confirmation message
   await ctx.answerCbQuery();
-  return ctx.wizard.selectStep(2);
+  return ctx.wizard.selectStep(2); // Go to Step 3: Bank Selection
 });
 
 sellScene.action(/select_bank_(\d+)/, async (ctx) => {
@@ -927,21 +947,9 @@ sellScene.action('confirm_bank', async (ctx) => {
   }
 
   sellScene.logger.info(`User ${userId} confirmed bank selection`);
-
-  try {
-    ctx.wizard.state.stepStartedAt = Date.now();
-    await ctx.answerCbQuery();
-    return ctx.wizard.selectStep(4);
-  } catch (error) {
-    sellScene.logger.error(`Error advancing to wallet connection for user ${userId}: ${error.message}`);
-    const errorMsg = userState.usePidgin
-      ? '❌ Error going to wallet connection. Try again or contact [@maxcswap](https://t.me/maxcswap).'
-      : '❌ Error proceeding to wallet connection. Try again or contact [@maxcswap](https://t.me/maxcswap).';
-    await ctx.replyWithMarkdown(errorMsg, Markup.inlineKeyboard([
-      [Markup.button.callback('🔄 Retry', 'retry_sell')],
-    ]));
-    return ctx.scene.leave();
-  }
+  ctx.wizard.state.stepStartedAt = Date.now();
+  await ctx.answerCbQuery();
+  return ctx.wizard.selectStep(4); // Go to Step 5: Prompt Wallet Connection
 });
 
 sellScene.action('link_temp_bank', async (ctx) => {
@@ -1036,7 +1044,7 @@ sellScene.action('back_to_asset', async (ctx) => {
   );
   ctx.wizard.state.stepStartedAt = Date.now();
   await ctx.answerCbQuery();
-  return ctx.wizard.selectStep(1);
+  return ctx.wizard.selectStep(1); // Back to Step 2
 });
 
 sellScene.action('back_to_bank', async (ctx) => {
@@ -1045,7 +1053,7 @@ sellScene.action('back_to_bank', async (ctx) => {
     await ctx.replyWithMarkdown(
       '❌ Unable to process your request due to missing user information. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
       Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]]),
-    );
+jack    );
     await ctx.answerCbQuery();
     return ctx.scene.leave();
   }
@@ -1110,7 +1118,7 @@ sellScene.action('back_to_bank', async (ctx) => {
   await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
   ctx.wizard.state.stepStartedAt = Date.now();
   await ctx.answerCbQuery();
-  return ctx.wizard.selectStep(2);
+  return ctx.wizard.selectStep(2); // Back to Step 3
 });
 
 sellScene.action('retry_sell', async (ctx) => {
@@ -1172,7 +1180,7 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
         ctx.wizard.state.selectedWalletAddress = ctx.scene.state.walletAddress || ctx.wizard.state.selectedWalletAddress;
         ctx.wizard.state.stepStartedAt = Date.now();
         await ctx.answerCbQuery();
-        await ctx.wizard.selectStep(3);
+        await ctx.wizard.selectStep(3); // Go to Step 4: Confirm Bank Selection
       }
     }
   });
