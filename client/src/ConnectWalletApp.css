@@ -2,108 +2,107 @@
 @tailwind components;
 @tailwind utilities;
 
-
 :root {
---primary: #2563eb; / Trustworthy blue /
---success: #16a34a; / Green for completed actions /
---error: #dc2626; / Red for errors /
---background: #f9fafb; / Light gray background */
+  --primary: #2563eb; /* Trustworthy blue */
+  --success: #16a34a; /* Green for completed actions */
+  --error: #dc2626; /* Red for errors */
+  --background: #f9fafb; /* Light gray background */
 }
 
 /* Base styles */
 body {
-font-family: 'Inter', sans-serif;
-background: linear-gradient(to bottom, var(--background), #e5e7eb);
-margin: 0;
-padding: 0;
+  font-family: 'Inter', sans-serif;
+  background: linear-gradient(to bottom, var(--background), #e5e7eb);
+  margin: 0;
+  padding: 0;
 }
 
 /* Component styles */
 .card {
-@apply bg-white rounded-xl shadow-lg p-6 border border-gray-100;
+  @apply bg-white rounded-xl shadow-lg p-6 border border-gray-100;
 }
 
 .btn-primary {
-@apply bg-[var(--primary)] text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
+  @apply bg-[var(--primary)] text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 disabled:opacity-50 disabled:cursor-not-allowed;
 }
 
 .btn-secondary {
-@apply bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600 transition focus:ring-2 focus:ring-gray-400 focus:ring-offset-2;
+  @apply bg-gray-500 text-white py-2 px-4 rounded-lg hover:bg-gray-600 transition focus:ring-2 focus:ring-gray-400 focus:ring-offset-2;
 }
 
 /* Animations */
 @keyframes fadeIn {
-from { opacity: 0; }
-to { opacity: 1; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 .animate-fade-in {
-animation: fadeIn 0.3s ease-in;
+  animation: fadeIn 0.3s ease-in;
 }
 
 @keyframes pulse {
-0% { transform: scale(1); }
-50% { transform: scale(1.1); }
-100% { transform: scale(1); }
+  0% { transform: scale(1); }
+  50% { transform: scale(1.1); }
+  100% { transform: scale(1); }
 }
 
 /* Accessibility */
 button:focus, a:focus, [role="button"]:focus {
-outline: 2px solid var(--primary);
-outline-offset: 2px;
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
 }
 
 /* Timeline-specific styles */
 .timeline-step {
-@apply relative flex flex-col items-center;
+  @apply relative flex flex-col items-center;
 }
 
 .timeline-connector {
-@apply absolute top-4 left-10 w-full h-1 bg-gray-200;
+  @apply absolute top-4 left-10 w-full h-1 bg-gray-200;
 }
 
 .timeline-connector-filled {
-@apply h-full bg-[var(--success)];
+  @apply h-full bg-[var(--success)];
 }
 
 /* Modal overlay */
 .modal-overlay {
-@apply fixed inset-0 bg-black bg-opacity-25;
+  @apply fixed inset-0 bg-black bg-opacity-25;
 }
 
 /* QR code container */
 .qr-code {
-@apply p-2 bg-white rounded-lg border border-gray-200;
+  @apply p-2 bg-white rounded-lg border border-gray-200;
 }
 
 /* Toast container adjustments */
 .Toastify__toast-container {
-@apply z-50;
+  @apply z-50;
 }
 
 .Toastify__toast {
-@apply rounded-lg shadow-lg;
+  @apply rounded-lg shadow-lg;
 }
 
 /* Responsive adjustments */
 @media (max-width: 640px) {
-.card {
-@apply p-4;
-}
+  .card {
+    @apply p-4;
+  }
 
-.btn-primary, .btn-secondary {
-@apply py-2 px-3 text-sm;
-}
+  .btn-primary, .btn-secondary {
+    @apply py-2 px-3 text-sm;
+  }
 
-.timeline-step {
-@apply text-xs;
-}
+  .timeline-step {
+    @apply text-xs;
+  }
 
-.timeline-step > div {
-@apply w-8 h-8;
-}
+  .timeline-step > div {
+    @apply w-8 h-8;
+  }
 
-.timeline-step svg {
-@apply w-4 h-4;
-}
+  .timeline-step svg {
+    @apply w-4 h-4;
+  }
 }
