@@ -173,7 +173,14 @@ async function validateAssetByAddress(address, chainId, relayClient) {
       depositAddressOnly: true
     }, { headers: { 'Content-Type': 'application/json' } });
     sellScene.logger.info(`Relay.link response for address ${address}: ${JSON.stringify(response.data)}`);
-    return response.data.flat();
+    return response.data.flat().map(asset => ({
+      ...asset,
+      verified: asset.verified || false,
+      symbol: asset.symbol || 'Unknown',
+      decimals: asset.decimals || 18,
+      logoURI: asset.metadata?.logoURI || '',
+      name: asset.name || 'Unknown Token'
+    }));
   } catch (error) {
     sellScene.logger.error(`Address validation failed for address ${address}: ${error.message}`);
     throw new Error(`Address validation failed: ${error.message}`);
@@ -193,7 +200,14 @@ async function validateAssetByTerm(term, chainId, relayClient) {
       depositAddressOnly: true
     }, { headers: { 'Content-Type': 'application/json' } });
     sellScene.logger.info(`Relay.link response for term ${term}: ${JSON.stringify(response.data)}`);
-    return response.data.flat();
+    return response.data.flat().map(asset => ({
+      ...asset,
+      verified: asset.verified || false,
+      symbol: asset.symbol || 'Unknown',
+      decimals: asset.decimals || 18,
+      logoURI: asset.metadata?.logoURI || '',
+      name: asset.name || 'Unknown Token'
+    }));
   } catch (error) {
     sellScene.logger.error(`Term validation failed for term ${term}: ${error.message}`);
     throw new Error(`Term validation failed: ${error.message}`);
@@ -203,13 +217,55 @@ async function validateAssetByTerm(term, chainId, relayClient) {
 // Actions
 sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   const index = parseInt(ctx.match[1], 10);
-  const userState = await sellScene.getUserState(ctx.wizard.state.userId);
+  const userId = ctx.wizard.state.userId;
+  const userState = await sellScene.getUserState(userId);
   const assets = ctx.wizard.state.validatedAssets;
 
-  sellScene.logger.info(`User ${ctx.wizard.state.userId} selected asset index ${index}`);
+  sellScene.logger.info(`User ${userId} selected asset index ${index}`);
 
   if (index >= 0 && index < assets.length) {
     ctx.wizard.state.selectedAsset = assets[index];
+
+    // Optional: Check balance
+    if (userState.wallets.length > 0) {
+      try {
+        const chainConfig = {
+          1: { rpcUrl: `https://mainnet.infura.io/v3/${process.env.INFURA_PROJECT_ID}` },
+          56: { rpcUrl: 'https://bsc-dataseed.binance.org/' },
+          137: { rpcUrl: `https://polygon-mainnet.infura.io/v3/${process.env.INFURA_PROJECT_ID}` },
+          8453: { rpcUrl: `https://base-mainnet.infura.io/v3/${process.env.INFURA_PROJECT_ID}` },
+        }[mapChainToId(ctx.wizard.state.chain)];
+        const provider = new ethers.providers.JsonRpcProvider(chainConfig.rpcUrl);
+        const amountInWei = ctx.wizard.state.amountInWei;
+        let balance;
+
+        const walletAddress = userState.wallets[0].address; // Assume first wallet
+        if (assets[index].address !== '0x0000000000000000000000000000000000000000') {
+          const tokenContract = new ethers.Contract(
+            assets[index].address,
+            ['function balanceOf(address) view returns (uint256)'],
+            provider
+          );
+          balance = await tokenContract.balanceOf(walletAddress);
+        } else {
+          balance = await provider.getBalance(walletAddress);
+        }
+
+        if (ethers.BigNumber.from(balance).lt(amountInWei)) {
+          const balanceFormatted = ethers.utils.formatUnits(balance, assets[index].decimals);
+          const amountFormatted = ethers.utils.formatUnits(amountInWei, assets[index].decimals);
+          await ctx.replyWithMarkdown(userState.usePidgin
+            ? `❌ Money no reach: You get ${balanceFormatted} ${assets[index].symbol}, but you need ${amountFormatted}.`
+            : `❌ Insufficient balance: You have ${balanceFormatted} ${assets[index].symbol}, but need ${amountFormatted}.`);
+          await ctx.answerCbQuery();
+          return ctx.scene.leave();
+        }
+      } catch (error) {
+        sellScene.logger.error(`Balance check failed for user ${userId}: ${error.message}`);
+        // Continue without failing
+      }
+    }
+
     await ctx.answerCbQuery();
     return ctx.wizard.selectStep(2);
   } else {
@@ -236,7 +292,6 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
     const asset = ctx.wizard.state.selectedAsset;
     const bankDetails = ctx.wizard.state.bankDetails;
 
-    // Directly prompt for wallet connection without a separate confirmation step
     const confirmMsg = userState.usePidgin
       ? `📝 *Sell Details*\n\n` +
         `*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n` +
@@ -250,28 +305,40 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
         `Ready to connect your wallet to proceed?`;
     await ctx.replyWithMarkdown(confirmMsg);
 
-    // Prepare session data to pass in the URL
+    // Prepare session data
     const sessionData = {
       userId,
       amountInWei: ctx.wizard.state.amountInWei,
       token: asset.address,
-      chainId: asset.chainId,
-      bankDetails: JSON.stringify(bankDetails),
+      chainId: mapChainToId(ctx.wizard.state.chain),
       blockradarWallet: ctx.wizard.state.selectedWalletAddress,
       status: 'pending',
-      createdAt: new Date().toISOString()
+      createdAt: new Date().toISOString(),
+      expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+      isVerifiedAsset: asset.verified || false,
+      bankDetails,
+      tokenMetadata: {
+        symbol: asset.symbol,
+        decimals: asset.decimals,
+        logoURI: asset.logoURI
+      },
+      usePidgin: userState.usePidgin || false
     };
 
-    // Encode session data as query parameters
+    // Encode session data as query parameters (exclude bankDetails)
     const queryParams = new URLSearchParams({
       userId: sessionData.userId,
       amountInWei: sessionData.amountInWei,
       token: sessionData.token,
       chainId: sessionData.chainId.toString(),
-      bankDetails: sessionData.bankDetails,
       blockradarWallet: sessionData.blockradarWallet,
       status: sessionData.status,
-      createdAt: sessionData.createdAt
+      createdAt: sessionData.createdAt,
+      expiresAt: sessionData.expiresAt,
+      isVerifiedAsset: sessionData.isVerifiedAsset.toString(),
+      sessionId: ctx.wizard.state.sessionId,
+      tokenMetadata: JSON.stringify(sessionData.tokenMetadata),
+      usePidgin: sessionData.usePidgin.toString()
     }).toString();
 
     const connectUrl = `${sellScene.webhookDomain}/connect?${queryParams}`;
@@ -279,7 +346,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
 
     await ctx.replyWithMarkdown(`[Connect Wallet](${connectUrl})`);
 
-    // Optionally store the session in Firestore for backend logging
+    // Store session in Firestore
     sellScene.logger.info(`Storing session for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}, data: ${JSON.stringify(sessionData)}`);
     try {
       await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
@@ -289,7 +356,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
     }
 
     await ctx.answerCbQuery();
-    return ctx.wizard.selectStep(3); // Move to waiting for wallet connection
+    return ctx.wizard.selectStep(3);
   }
 });
 
@@ -328,7 +395,7 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
         sellScene.logger.info(`User ${ctx.wizard.state.userId} confirmed temporary bank linking`);
         ctx.wizard.state.bankDetails = ctx.scene.state.bankDetails;
         ctx.wizard.state.sessionId = uuidv4();
-        await ctx.wizard.selectStep(2); // Return to bank selection step
+        await ctx.wizard.selectStep(2);
       }
     }
   });
