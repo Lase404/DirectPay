@@ -1039,7 +1039,7 @@ function setup(bot, db, logger, getUserState, updateUserState, relayClient, priv
           return ctx.scene.leave();
         }
 
-        const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
+        const webhookDomain = sellScene.webhookDomain || 'https://directpay.onrender.com';
         const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.wizard.state.sessionId}`;
         sellScene.logger.info(`Wallet Connection URL for user ${userId}: ${connectUrl}`);
 
