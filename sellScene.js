@@ -117,6 +117,7 @@ const sellScene = new Scenes.WizardScene(
             : `✅ Asset: *${assets[0].symbol}* on ${ctx.wizard.state.chain}`,
           { parse_mode: 'Markdown' },
         );
+        sellScene.logger.info(`User ${userId} confirmed asset ${assets[0].symbol}, verified: ${assets[0].metadata.verified}`);
         if (!assets[0].metadata.verified) {
           await ctx.replyWithMarkdown(
             userState.usePidgin
@@ -129,7 +130,8 @@ const sellScene = new Scenes.WizardScene(
           );
           return ctx.wizard.next();
         }
-        return ctx.wizard.selectStep(2);
+        sellScene.logger.info(`User ${userId} advancing to bank selection for verified asset`);
+        return ctx.wizard.next(); // Move to Step 2, then Step 3
       }
 
       const options = assets.map((asset, index) => [
@@ -194,6 +196,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
+    sellScene.logger.info(`User ${userId} in step 2: checking state ${JSON.stringify(ctx.wizard.state)}`);
     if (Date.now() - ctx.wizard.state.stepStartedAt > INACTIVITY_TIMEOUT) {
       const errorMsg = userState.usePidgin
         ? '⏰ You don wait too long. Start again with /sell.'
@@ -202,7 +205,12 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    return; // Handled by actions
+    if (ctx.wizard.state.selectedAsset && ctx.wizard.state.selectedAsset.metadata.verified) {
+      sellScene.logger.info(`User ${userId} has verified asset, moving to bank selection`);
+      return ctx.wizard.next();
+    }
+
+    return; // Handled by actions (select_asset, confirm_unverified)
   },
   // Step 3: Bank Selection
   async (ctx) => {
@@ -236,10 +244,9 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    const walletsWithBank = userState.wallets.filter((w) => w.bank);
-    sellScene.logger.info(`User ${userId} in bank selection. Wallets with bank: ${walletsWithBank.length}`);
-
+    sellScene.logger.info(`User ${userId} in bank selection. State: ${JSON.stringify(ctx.wizard.state)}`);
     if (!ctx.wizard.state.selectedAsset) {
+      sellScene.logger.error(`No selectedAsset for user ${userId}`);
       const errorMsg = userState.usePidgin
         ? '❌ No asset selected. Start again with /sell.'
         : '❌ No asset selected. Start over with /sell.';
@@ -263,11 +270,15 @@ const sellScene = new Scenes.WizardScene(
     ctx.wizard.state.amountInWei = amountInWei;
     ctx.wizard.state.stepStartedAt = Date.now();
 
+    const walletsWithBank = userState.wallets.filter((w) => w.bank);
+    sellScene.logger.info(`User ${userId} has ${walletsWithBank.length} wallets with bank`);
+
     const assetMsg = userState.usePidgin
       ? `✅ *Asset Confirmed* (Step 2/4)\n\n*Symbol:* ${asset.symbol}\n*Name:* ${asset.name}\n*Address:* \`${asset.address}\`\n*Chain:* ${ctx.wizard.state.chain}\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Where you want funds go?`
       : `✅ *Asset Confirmed* (Step 2/4)\n\n*Symbol:* ${asset.symbol}\n*Name:* ${asset.name}\n*Address:* \`${asset.address}\`\n*Chain:* ${ctx.wizard.state.chain}\n*Amount:* ${ctx.wizard.state.amount} ${asset.symbol}\n${asset.metadata.verified ? '' : '*Note:* Unverified asset.\n\n'}Where would you like funds sent?`;
 
     if (walletsWithBank.length === 0) {
+      sellScene.logger.info(`User ${userId} has no linked banks, prompting to link`);
       await ctx.replyWithMarkdown(
         userState.usePidgin ? '🏦 No bank linked. Link one now? (Step 2/4)' : '🏦 No bank linked. Link one? (Step 2/4)',
         Markup.inlineKeyboard([
@@ -321,6 +332,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
+    sellScene.logger.info(`User ${userId} in bank confirmation`);
     if (!ctx.wizard.state.bankDetails || !ctx.wizard.state.selectedWalletAddress) {
       const errorMsg = userState.usePidgin
         ? '❌ No bank selected. Go back or start again.'
@@ -380,7 +392,6 @@ const sellScene = new Scenes.WizardScene(
 
     const { selectedAsset: asset, bankDetails, selectedWalletAddress, amountInWei } = ctx.wizard.state;
     sellScene.logger.info(`User ${userId} in step 5: wallet connection`);
-
     if (!asset || !bankDetails || !selectedWalletAddress || !amountInWei) {
       const errorMsg = userState.usePidgin
         ? '❌ Something miss for sell. Start again.'
@@ -710,6 +721,7 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
     return;
   }
 
+  sellScene.logger.info(`User ${userId} selected verified asset, advancing to bank selection`);
   return ctx.wizard.selectStep(2);
 });
 
