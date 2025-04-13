@@ -201,7 +201,7 @@ const TransactionStatus = ({ txHash, chainId, status }) => {
 
   const copyTxHash = () => {
     if (txHash) {
-      navigator.clipboard.write(txHash);
+      navigator.clipboard.writeText(txHash);
       toast.info('Transaction hash copied!');
     }
   };
@@ -392,15 +392,55 @@ const ConnectWalletApp = () => {
   }, []);
 
   useEffect(() => {
-    const fetchSession = async (retryCount = 3, delay = 1000) => {
+    const parseSessionFromUrl = () => {
       const urlParams = new URLSearchParams(location.search);
-      const sessionId = urlParams.get('sessionId');
-      if (!sessionId) {
-        setError('Missing sessionId in URL. Please return to Telegram and try again.');
-        toast.error('Missing sessionId. Please return to Telegram.');
-        return;
+      let sessionData;
+      try {
+        sessionData = {
+          userId: urlParams.get('userId'),
+          amountInWei: urlParams.get('amountInWei'),
+          token: urlParams.get('token'),
+          chainId: parseInt(urlParams.get('chainId')),
+          bankDetails: JSON.parse(urlParams.get('bankDetails') || '{}'),
+          blockradarWallet: urlParams.get('blockradarWallet'),
+          status: urlParams.get('status'),
+          createdAt: urlParams.get('createdAt'),
+          expiresAt: urlParams.get('expiresAt'),
+          isVerifiedAsset: urlParams.get('isVerifiedAsset') === 'true',
+          quote: JSON.parse(urlParams.get('quote') || '{}'),
+        };
+      } catch (parseError) {
+        throw new Error(`Failed to parse URL parameters: ${parseError.message}`);
       }
 
+      // Validate required fields
+      const requiredFields = ['userId', 'amountInWei', 'token', 'chainId', 'blockradarWallet'];
+      const missingFields = requiredFields.filter(field => !sessionData[field]);
+      if (missingFields.length > 0) {
+        throw new Error(`Missing required fields in URL: ${missingFields.join(', ')}`);
+      }
+
+      // Validate bankDetails
+      const bankRequiredFields = ['bankName', 'accountNumber'];
+      const missingBankFields = bankRequiredFields.filter(field => !(field in sessionData.bankDetails));
+      if (missingBankFields.length > 0) {
+        throw new Error(`Invalid bank details: Missing fields - ${missingBankFields.join(', ')}`);
+      }
+
+      // Validate chainId
+      if (!SUPPORTED_CHAINS[sessionData.chainId]) {
+        throw new Error(`Unsupported chain ID: ${sessionData.chainId}`);
+      }
+
+      // Validate session expiration
+      if (sessionData.expiresAt && new Date(sessionData.expiresAt) < new Date()) {
+        throw new Error('Session has expired. Please start the sell process again in Telegram.');
+      }
+
+      return sessionData;
+    };
+
+    const fetchSessionFromApi = async (sessionId, retryCount = 3, delay = 1000) => {
       for (let attempt = 1; attempt <= retryCount; attempt++) {
         try {
           console.log(`Attempt ${attempt}: Fetching session from /api/session?sessionId=${sessionId}`);
@@ -423,71 +463,107 @@ const ConnectWalletApp = () => {
             throw new Error(`Unsupported chain ID: ${response.data.chainId}`);
           }
 
-          setSession(response.data);
-          setError(null);
-
-          if (response.data.token !== '0x0000000000000000000000000000000000000000') {
-            try {
-              const chainConfig = SUPPORTED_CHAINS[response.data.chainId];
-              const provider = new ethers.providers.JsonRpcProvider(chainConfig.rpcUrl);
-              const tokenContract = new ethers.Contract(
-                response.data.token,
-                [
-                  'function symbol() view returns (string)',
-                  'function decimals() view returns (uint8)',
-                  'function balanceOf(address) view returns (uint256)',
-                ],
-                provider
-              );
-              const [symbol, decimals, balance] = await Promise.all([
-                tokenContract.symbol(),
-                tokenContract.decimals(),
-                wallets[0]?.address
-                  ? tokenContract.balanceOf(wallets[0].address)
-                  : Promise.resolve(ethers.BigNumber.from(0)),
-              ]);
-              setTokenInfo({ symbol, decimals });
-              setBalance(ethers.utils.formatUnits(balance, decimals));
-              // Fetch logo from Relay.link
-              const logoResponse = await axios.post('https://api.relay.link/currencies/v1', {
-                chainIds: [response.data.chainId],
-                term: response.data.token,
-                verified: false,
-                limit: 1,
-              });
-              const assets = logoResponse.data.flat();
-              if (assets[0]?.metadata?.logoURI) {
-                setLogoUri(assets[0].metadata.logoURI);
-              }
-            } catch (err) {
-              console.error('Failed to fetch token metadata:', err);
-              setTokenInfo({ symbol: 'Token', decimals: 18 });
-              toast.warn('Could not fetch token details. Using default values.');
-            }
-          } else {
-            const chainConfig = SUPPORTED_CHAINS[response.data.chainId];
-            setTokenInfo({
-              symbol: chainConfig?.nativeCurrency?.symbol || 'Token',
-              decimals: chainConfig?.nativeCurrency?.decimals || 18,
-            });
-            try {
-              const provider = new ethers.providers.JsonRpcProvider(chainConfig.rpcUrl);
-              const balance = await provider.getBalance(wallets[0]?.address || ethers.constants.AddressZero);
-              setBalance(ethers.utils.formatUnits(balance, chainConfig?.nativeCurrency?.decimals || 18));
-            } catch (err) {
-              console.error('Failed to fetch native balance:', err);
-              setBalance('0');
-            }
+          if (response.data.expiresAt && new Date(response.data.expiresAt) < new Date()) {
+            throw new Error('Session has expired. Please start the sell process again in Telegram.');
           }
 
-          break;
+          return response.data;
         } catch (err) {
           console.error(`Attempt ${attempt} failed:`, err);
           if (attempt === retryCount) {
-            setError(`Failed to fetch session: ${err.message}. Please try again or contact support at @maxcswap.`);
-            toast.error('Failed to fetch session. Please try again.');
-          } else {
-            await new Promise(resolve => setTimeout(resolve, delay));
+            throw err;
+          }
+          await new Promise(resolve => setTimeout(resolve, delay));
+        }
+      }
+    };
+
+    const fetchSession = async () => {
+      const urlParams = new URLSearchParams(location.search);
+      const sessionId = urlParams.get('sessionId');
+
+      // Step 1: Try parsing session data directly from URL query parameters
+      try {
+        const sessionData = parseSessionFromUrl();
+        setSession(sessionData);
+        setError(null);
+        console.log('Session parsed from URL:', sessionData);
+        toast.success('Session loaded from URL.');
+      } catch (urlErr) {
+        console.warn('Failed to parse session from URL:', urlErr);
+        // Step 2: Fallback to API fetch if URL parsing fails and sessionId is provided
+        if (!sessionId) {
+          setError('Invalid session data and missing sessionId. Please return to Telegram and try again.');
+          toast.error('Invalid session data. Please return to Telegram.');
+          return;
+        }
+
+        try {
+          const sessionData = await fetchSessionFromApi(sessionId);
+          setSession(sessionData);
+          setError(null);
+          console.log('Session fetched from API:', sessionData);
+          toast.success('Session loaded from server.');
+        } catch (apiErr) {
+          setError(`Failed to fetch session: ${apiErr.message}. Please try again or contact support at @maxcswap.`);
+          toast.error('Failed to load session. Please try again.');
+          return;
+        }
+      }
+
+      // Step 3: After setting session, fetch token metadata
+      if (session) {
+        if (session.token !== '0x0000000000000000000000000000000000000000') {
+          try {
+            const chainConfig = SUPPORTED_CHAINS[session.chainId];
+            const provider = new ethers.providers.JsonRpcProvider(chainConfig.rpcUrl);
+            const tokenContract = new ethers.Contract(
+              session.token,
+              [
+                'function symbol() view returns (string)',
+                'function decimals() view returns (uint8)',
+                'function balanceOf(address) view returns (uint256)',
+              ],
+              provider
+            );
+            const [symbol, decimals, balance] = await Promise.all([
+              tokenContract.symbol(),
+              tokenContract.decimals(),
+              wallets[0]?.address
+                ? tokenContract.balanceOf(wallets[0].address)
+                : Promise.resolve(ethers.BigNumber.from(0)),
+            ]);
+            setTokenInfo({ symbol, decimals });
+            setBalance(ethers.utils.formatUnits(balance, decimals));
+            // Fetch logo from Relay.link
+            const logoResponse = await axios.post('https://api.relay.link/currencies/v1', {
+              chainIds: [session.chainId],
+              term: session.token,
+              verified: false,
+              limit: 1,
+            });
+            const assets = logoResponse.data.flat();
+            if (assets[0]?.metadata?.logoURI) {
+              setLogoUri(assets[0].metadata.logoURI);
+            }
+          } catch (err) {
+            console.error('Failed to fetch token metadata:', err);
+            setTokenInfo({ symbol: 'Token', decimals: 18 });
+            toast.warn('Could not fetch token details. Using default values.');
+          }
+        } else {
+          const chainConfig = SUPPORTED_CHAINS[session.chainId];
+          setTokenInfo({
+            symbol: chainConfig?.nativeCurrency?.symbol || 'Token',
+            decimals: chainConfig?.nativeCurrency?.decimals || 18,
+          });
+          try {
+            const provider = new ethers.providers.JsonRpcProvider(chainConfig.rpcUrl);
+            const balance = await provider.getBalance(wallets[0]?.address || ethers.constants.AddressZero);
+            setBalance(ethers.utils.formatUnits(balance, chainConfig?.nativeCurrency?.decimals || 18));
+          } catch (err) {
+            console.error('Failed to fetch native balance:', err);
+            setBalance('0');
           }
         }
       }
@@ -496,7 +572,7 @@ const ConnectWalletApp = () => {
     if (ready && authenticated) {
       fetchSession();
     }
-  }, [ready, authenticated, location.search, wallets]);
+  }, [ready, authenticated, location.search, wallets, session]);
 
   const switchChain = async (chainId, retryCount = 2) => {
     if (!SUPPORTED_CHAINS[chainId]) {
@@ -565,7 +641,7 @@ const ConnectWalletApp = () => {
         currency: session.token,
         toCurrency: '0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913', // USDC on Base
         tradeType: 'EXACT_INPUT',
-        amount: session.amountIn,
+        amount: session.amountInWei, // Updated to use amountInWei
         wallet: adaptedWallet,
         recipient: session.blockradarWallet,
       });
@@ -826,6 +902,12 @@ const ConnectWalletApp = () => {
                     <span className="font-semibold">To:</span>{' '}
                     {session.blockradarWallet ? `${session.blockradarWallet.slice(0, 6)}...${session.blockradarWallet.slice(-4)}` : 'Unknown'}
                   </p>
+                  {session.bankDetails && (
+                    <p className="text-sm">
+                      <span className="font-semibold">Bank:</span>{' '}
+                      {session.bankDetails.bankName} (****{session.bankDetails.accountNumber.slice(-4)})
+                    </p>
+                  )}
                 </div>
                 {quote ? (
                   <>
@@ -833,7 +915,7 @@ const ConnectWalletApp = () => {
                       quote={quote}
                       tokenInfo={tokenInfo}
                       logoUri={logoUri}
-                      isVerifiedAsset={session.isVerifiedAsset !== false}
+                      isVerifiedAsset={session.isVerifiedAsset}
                     />
                     {txHash && (
                       <TransactionStatus
@@ -863,7 +945,7 @@ const ConnectWalletApp = () => {
                       onConfirm={handleConfirmSell}
                       quote={quote}
                       tokenInfo={tokenInfo}
-                      isVerifiedAsset={session.isVerifiedAsset !== false}
+                      isVerifiedAsset={session.isVerifiedAsset}
                       balance={balance}
                     />
                   </>
