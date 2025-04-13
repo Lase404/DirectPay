@@ -3,8 +3,6 @@ const axios = require('axios');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
 
-const INACTIVITY_TIMEOUT = 0
-
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
   // **Step 0: Parse and Validate Input**
@@ -602,18 +600,6 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
     sellScene.logger.error(`Failed to fetch user state for user ${userId}: ${err.message}`);
     await ctx.replyWithMarkdown(
       '❌ Error fetching your profile. Please try again or contact [@maxcswap](https://t.me/maxcswap).',
-      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
-    );
-    await ctx.answerCbQuery();
-    return ctx.scene.leave();
-  }
-
-  if (!ctx.wizard.state.stepStartedAt || Date.now() - ctx.wizard.state.stepStartedAt > INACTIVITY_TIMEOUT) {
-    sellScene.logger.info(`User ${userId} timed out in select_bank action`);
-    await ctx.replyWithMarkdown(
-      userState.usePidgin
-        ? '⏰ You don wait too long. Start again with /sell.'
-        : '⏰ You’ve been inactive too long. Please start over with /sell.',
       Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
     );
     await ctx.answerCbQuery();
