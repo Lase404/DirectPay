@@ -45,11 +45,12 @@ const SUPPORTED_CHAINS = {
 
 // Utility Functions
 const formatUSD = (value) => (!value ? '0.00' : parseFloat(value).toFixed(2));
+
 const formatTokenAmount = (amount, decimals) => {
   try {
     return ethers.utils.formatUnits(amount, decimals);
   } catch {
-    return amount;
+    return amount.toString();
   }
 };
 
@@ -152,14 +153,17 @@ const handleSell = async (wallet, session, quote, setLoading, setStatus, setTxHa
 
         if (currentStep?.id === 'approve' && currentStepItem?.status === 'incomplete') {
           setStatus('Awaiting approval in your wallet...');
+          toast.info('Please approve the transaction in your wallet.');
         } else if (currentStep?.id === 'deposit' && currentStepItem?.status === 'incomplete') {
           setStatus('Depositing funds to relayer...');
+          toast.info('Please confirm the deposit transaction.');
         }
 
         if (txHashes && txHashes.length > 0) {
           latestTxHash = txHashes[txHashes.length - 1].txHash;
           setTxHash(latestTxHash);
           setStatus(`Transaction submitted: ${latestTxHash.slice(0, 6)}...`);
+          toast.success(`Transaction submitted: ${latestTxHash.slice(0, 6)}...`);
         }
       },
     });
@@ -204,72 +208,89 @@ const ConnectWalletApp = () => {
   }, []);
 
   useEffect(() => {
-    const parseSessionFromUrl = async () => {
+    const validateSession = async () => {
       const params = new URLSearchParams(location.search);
       const sessionId = params.get('sessionId');
-      const amountInWei = params.get('amountInWei');
-      const token = params.get('token');
-      const chainId = parseInt(params.get('chainId'), 10);
-      const blockradarWallet = params.get('blockradarWallet');
-      const bankName = params.get('bankName');
-      const accountNumber = params.get('accountNumber');
+      const hash = params.get('hash');
 
-      if (!sessionId || !amountInWei || !token || !chainId || !blockradarWallet || !bankName || !accountNumber) {
-        toast.error('Missing session details in URL');
-        return;
-      }
-
-      if (!SUPPORTED_CHAINS[chainId]) {
-        toast.error(`Unsupported chain ID: ${chainId}`);
-        return;
-      }
-
-      if (!ethers.utils.isAddress(token) && token !== '0x0000000000000000000000000000000000000000') {
-        toast.error('Invalid token address');
-        return;
-      }
-
-      if (!ethers.utils.isAddress(blockradarWallet)) {
-        toast.error('Invalid wallet address');
+      if (!sessionId || !hash) {
+        toast.error('Missing session ID or hash');
         return;
       }
 
       try {
-        ethers.utils.parseUnits(amountInWei, 0); // Validate amountInWei
-      } catch {
-        toast.error('Invalid amount');
-        return;
+        const response = await axios.get(`/api/validate-session?sessionId=${sessionId}&hash=${hash}`);
+        const data = response.data;
+
+        // Validate required fields
+        const requiredFields = ['amountInWei', 'token', 'chainId', 'blockradarWallet', 'bankDetails'];
+        const missingFields = requiredFields.filter(field => !(field in data));
+        if (missingFields.length > 0) {
+          throw new Error(`Missing session fields: ${missingFields.join(', ')}`);
+        }
+
+        if (!data.bankDetails.bankName || !data.bankDetails.accountNumber || !data.bankDetails.accountName) {
+          throw new Error('Incomplete bank details');
+        }
+
+        if (!SUPPORTED_CHAINS[data.chainId]) {
+          throw new Error(`Unsupported chain ID: ${data.chainId}`);
+        }
+
+        if (!ethers.utils.isAddress(data.token) && data.token !== '0x0000000000000000000000000000000000000000') {
+          throw new Error('Invalid token address');
+        }
+
+        if (!ethers.utils.isAddress(data.blockradarWallet)) {
+          throw new Error('Invalid wallet address');
+        }
+
+        try {
+          ethers.utils.parseUnits(data.amountInWei, 0); // Validate amountInWei
+        } catch {
+          throw new Error('Invalid amount');
+        }
+
+        setSession(data);
+        setTokenInfo(await getTokenInfo(data.token, data.chainId));
+      } catch (err) {
+        toast.error(`Invalid session: ${err.message}`);
+        setSession(null);
       }
-
-      const sessionData = {
-        sessionId,
-        amountInWei,
-        token,
-        chainId,
-        blockradarWallet,
-        bankDetails: { bankName, accountNumber },
-      };
-
-      setSession(sessionData);
-      setTokenInfo(await getTokenInfo(token, chainId));
     };
 
-    if (ready && authenticated) parseSessionFromUrl();
+    if (ready && authenticated) validateSession();
   }, [ready, authenticated, location.search]);
 
   useEffect(() => {
     if (wallets.length > 0 && session && !quote) {
-      fetchQuote(wallets[0], session).then(setQuote).catch((err) => toast.error(`Quote failed: ${err.message}`));
+      setStatus('Fetching quote...');
+      fetchQuote(wallets[0], session)
+        .then((quoteData) => {
+          setQuote(quoteData);
+          setStatus('Quote received');
+          toast.success('Quote fetched successfully!');
+        })
+        .catch((err) => {
+          setStatus('Failed to fetch quote');
+          toast.error(`Quote failed: ${err.message}`);
+        });
     }
   }, [wallets, session, quote]);
 
   const copyTxHash = () => {
-    navigator.clipboard.writeText(txHash);
-    toast.info('Transaction hash copied!');
+    if (txHash) {
+      navigator.clipboard.writeText(txHash);
+      toast.info('Transaction hash copied!');
+    }
   };
 
   if (!ready) {
-    return <div className="flex items-center justify-center h-screen"><FaSpinner className="animate-spin h-12 w-12" /></div>;
+    return (
+      <div className="flex items-center justify-center h-screen">
+        <FaSpinner className="animate-spin h-12 w-12 text-blue-600" />
+      </div>
+    );
   }
 
   return (
@@ -279,54 +300,106 @@ const ConnectWalletApp = () => {
           <img src="/logo.png" alt="DirectPay Logo" className="h-8 mr-2" />
           <h1 className="text-2xl font-bold text-gray-800">DirectPay</h1>
         </div>
-        <ToastContainer />
+        <ToastContainer position="top-right" autoClose={5000} />
         {!authenticated ? (
-          <button onClick={login} className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700">
+          <button
+            onClick={login}
+            className="w-full bg-blue-600 text-white py-2 rounded hover:bg-blue-700 transition"
+          >
             Connect Wallet
           </button>
         ) : (
           <>
             <div className="mb-4 p-4 bg-gray-50 rounded">
-              <p className="text-sm"><strong>Connected:</strong> {wallets[0]?.address.slice(0, 6)}...{wallets[0]?.address.slice(-4)}</p>
-              <p className="text-sm"><strong>Status:</strong> {status}</p>
+              <p className="text-sm">
+                <strong>Connected:</strong> {wallets[0]?.address.slice(0, 6)}...{wallets[0]?.address.slice(-4)}
+              </p>
+              <p className="text-sm">
+                <strong>Status:</strong> {status}
+              </p>
             </div>
             {session ? (
               <div className="mb-4 p-4 bg-gray-50 rounded">
                 <h3 className="text-lg font-semibold mb-2">Sell Details</h3>
-                <p><strong>Amount:</strong> {formatTokenAmount(session.amountInWei, tokenInfo.decimals)} {tokenInfo.symbol}</p>
-                <p><strong>Chain:</strong> {SUPPORTED_CHAINS[session.chainId]?.name || 'Unknown'}</p>
-                <p><strong>Bank:</strong> {session.bankDetails.bankName} (****{session.bankDetails.accountNumber})</p>
+                <p>
+                  <strong>Amount:</strong> {formatTokenAmount(session.amountInWei, tokenInfo.decimals)} {tokenInfo.symbol}
+                </p>
+                <p>
+                  <strong>Chain:</strong> {SUPPORTED_CHAINS[session.chainId]?.name || 'Unknown'}
+                </p>
+                <p>
+                  <strong>Bank:</strong> {session.bankDetails.bankName} (****{session.bankDetails.accountNumber.slice(-4)})
+                </p>
               </div>
             ) : (
-              <p className="text-sm text-red-500">Invalid session details</p>
+              <p className="text-sm text-red-500 mb-4">Unable to load session details. Please try again.</p>
             )}
             {quote && (
               <div className="mb-4 p-4 bg-gray-50 rounded">
                 <h3 className="text-lg font-semibold mb-2">Quote</h3>
-                <p><strong>Input:</strong> {formatTokenAmount(quote.details?.currencyIn?.amount, tokenInfo.decimals)} {tokenInfo.symbol}</p>
-                <p><strong>Output:</strong> {formatTokenAmount(quote.details?.currencyOut?.amount, 6)} USDC (~${formatUSD(quote.details?.currencyOut?.amountUsd)})</p>
+                <p>
+                  <strong>Input:</strong> {formatTokenAmount(quote.details?.currencyIn?.amount, tokenInfo.decimals)} {tokenInfo.symbol}
+                </p>
+                <p>
+                  <strong>Output:</strong> {formatTokenAmount(quote.details?.currencyOut?.amount, 6)} USDC (~${formatUSD(quote.details?.currencyOut?.amountUsd)})
+                </p>
+                <p>
+                  <strong>Fees:</strong> ~${formatUSD((parseFloat(quote.fees?.gas?.amountUsd || 0) + parseFloat(quote.fees?.relayer?.amountUsd || 0)).toFixed(2))}
+                </p>
               </div>
             )}
             {txHash && (
               <div className="mb-4 p-4 bg-gray-50 rounded">
-                <p><strong>Tx Hash:</strong> <a href={`${SUPPORTED_CHAINS[session?.chainId]?.blockExplorer}/tx/${txHash}`} target="_blank" rel="noopener noreferrer" className="text-blue-600">{txHash.slice(0, 6)}...{txHash.slice(-4)}</a> <FaCopy onClick={copyTxHash} className="inline ml-2 cursor-pointer" /></p>
-                <QRCode value={`${SUPPORTED_CHAINS[session?.chainId]?.blockExplorer}/tx/${txHash}`} size={100} className="mt-2" />
+                <p>
+                  <strong>Tx Hash:</strong>{' '}
+                  <a
+                    href={`${SUPPORTED_CHAINS[session?.chainId]?.blockExplorer}/tx/${txHash}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-blue-600 hover:underline"
+                  >
+                    {txHash.slice(0, 6)}...{txHash.slice(-4)} <FaExternalLinkAlt className="inline w-3 h-3" />
+                  </a>
+                  <FaCopy
+                    onClick={copyTxHash}
+                    className="inline ml-2 cursor-pointer text-gray-600 hover:text-gray-800"
+                  />
+                </p>
+                <QRCode
+                  value={`${SUPPORTED_CHAINS[session?.chainId]?.blockExplorer}/tx/${txHash}`}
+                  size={100}
+                  className="mt-2"
+                />
               </div>
             )}
-            {quote && session && (
+            {quote && session ? (
               <button
                 onClick={() => handleSell(wallets[0], session, quote, setLoading, setStatus, setTxHash, session.sessionId)}
                 disabled={loading}
-                className={`w-full py-2 rounded ${loading ? 'bg-gray-400' : 'bg-blue-600 text-white hover:bg-blue-700'}`}
+                className={`w-full py-2 rounded ${loading ? 'bg-gray-400 cursor-not-allowed' : 'bg-blue-600 text-white hover:bg-blue-700 transition'}`}
               >
                 {loading ? <FaSpinner className="animate-spin h-5 w-5 mx-auto" /> : 'Execute Sell'}
               </button>
+            ) : (
+              <p className="text-sm text-gray-500">{loading ? 'Loading...' : 'Waiting for quote...'}</p>
             )}
-            <button onClick={logout} className="w-full mt-4 bg-gray-300 py-2 rounded hover:bg-gray-400">Disconnect</button>
+            <button
+              onClick={logout}
+              className="w-full mt-4 bg-gray-300 py-2 rounded hover:bg-gray-400 transition"
+            >
+              Disconnect
+            </button>
           </>
         )}
         <div className="mt-4 text-center">
-          <a href="https://t.me/maxcswap" target="_blank" rel="noopener noreferrer" className="text-blue-600 text-sm">Need help? Contact @maxcswap</a>
+          <a
+            href="https://t.me/maxcswap"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="text-blue-600 text-sm hover:underline"
+          >
+            Need help? Contact @maxcswap
+          </a>
         </div>
       </div>
     </div>
