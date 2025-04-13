@@ -3,7 +3,7 @@ const axios = require('axios');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
 
-const INACTIVITY_TIMEOUT = 5 * 60 * 1000; // 5 minutes
+const INACTIVITY_TIMEOUT = 0
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
