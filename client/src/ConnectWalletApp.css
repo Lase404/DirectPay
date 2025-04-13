@@ -31,3 +31,9 @@
 .inline { display: inline; }
 .ml-2 { margin-left: 0.5rem; }
 .cursor-pointer { cursor: pointer; }
+.transition { transition: all 0.2s ease-in-out; }
+.cursor-not-allowed { cursor: not-allowed; }
+.text-gray-600 { color: #4b5563; }
+.hover\:text-gray-800:hover { color: #1f2937; }
+.w-3 { width: 0.75rem; }
+.h-3 { height: 0.75rem; }
