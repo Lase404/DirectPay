@@ -3388,28 +3388,69 @@ app.post('/webhook/wallet-connected', async (req, res) => {
   res.status(200).send('OK');
 });
 
+
+app.use(express.static(path.join(__dirname, 'client', 'build')));
+// Utility function to generate session hash
+function generateSessionHash(sessionId, amountInWei, token, chainId, blockradarWallet) {
+  const secret = process.env.SESSION_SECRET || 'your-secret-key';
+  const dataString = `${sessionId}:${amountInWei}:${token}:${chainId}:${blockradarWallet}`;
+  return crypto.createHmac('sha256', secret).update(dataString).digest('hex');
+}
+
+// API Routes
 app.get('/api/validate-session', async (req, res) => {
   const { sessionId, hash } = req.query;
+
+  if (!sessionId || !hash) {
+    return res.status(400).json({ error: 'Missing sessionId or hash' });
+  }
+
   try {
     const sessionDoc = await db.collection('sessions').doc(sessionId).get();
     if (!sessionDoc.exists) {
       return res.status(404).json({ error: 'Session not found' });
     }
+
     const session = sessionDoc.data();
-    const secret = process.env.SESSION_SECRET || 'your-secret-key';
-    const expectedHash = crypto.createHmac('sha256', secret)
-      .update(`${sessionId}:${session.amountInWei}:${session.token}:${session.chainId}:${session.blockradarWallet}`)
-      .digest('hex');
+    const requiredFields = ['amountInWei', 'token', 'chainId', 'blockradarWallet', 'bankDetails'];
+    const missingFields = requiredFields.filter(field => !(field in session));
+    if (missingFields.length > 0) {
+      return res.status(400).json({ error: `Missing session fields: ${missingFields.join(', ')}` });
+    }
+
+    const expectedHash = generateSessionHash(
+      sessionId,
+      session.amountInWei,
+      session.token,
+      session.chainId,
+      session.blockradarWallet
+    );
+
     if (hash !== expectedHash) {
       return res.status(403).json({ error: 'Invalid session hash' });
     }
-    res.json(session);
+
+    if (!session.bankDetails.bankName || !session.bankDetails.accountNumber || !session.bankDetails.accountName) {
+      return res.status(400).json({ error: 'Incomplete bank details' });
+    }
+
+    res.json({
+      sessionId,
+      amountInWei: session.amountInWei,
+      token: session.token,
+      chainId: session.chainId,
+      blockradarWallet: session.blockradarWallet,
+      bankDetails: session.bankDetails,
+      userId: session.userId,
+      status: session.status,
+      createdAt: session.createdAt,
+      expiresAt: session.expiresAt
+    });
   } catch (err) {
-    res.status(500).json({ error: err.message });
+    console.error('Error validating session:', err);
+    res.status(500).json({ error: 'Internal server error' });
   }
 });
-// Serve React frontend static files
-app.use(express.static(path.join(__dirname, 'client', 'build')));
 
 stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 app.get('*', (req, res) => {
