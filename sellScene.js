@@ -9,7 +9,8 @@ const sellScene = new Scenes.WizardScene(
   // Step 0: Parse and Validate Input
   async (ctx) => {
     const userId = ctx.from.id.toString();
-    ctx.wizard.state.userId = userId;
+    ctx.session.wizardState = ctx.session.wizardState || {};
+    ctx.session.wizardState.userId = userId;
 
     let userState;
     try {
@@ -51,7 +52,7 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
 
-    ctx.wizard.state = {
+    ctx.session.wizardState = {
       userId,
       amount,
       assetInput,
@@ -66,9 +67,9 @@ const sellScene = new Scenes.WizardScene(
     );
 
     try {
-      const chainId = mapChainToId(ctx.wizard.state.chain);
+      const chainId = mapChainToId(ctx.session.wizardState.chain);
       if (!chainId) {
-        throw new Error(`Unsupported chain: ${ctx.wizard.state.chain}. Supported: eth, base, bnb, polygon`);
+        throw new Error(`Unsupported chain: ${ctx.session.wizardState.chain}. Supported: eth, base, bnb, polygon`);
       }
 
       let assets;
@@ -89,7 +90,7 @@ const sellScene = new Scenes.WizardScene(
         return ctx.scene.leave();
       }
 
-      ctx.wizard.state.validatedAssets = assets;
+      ctx.session.wizardState.validatedAssets = assets;
       if (assets.length > 1) {
         const options = assets.map((asset, index) => [
           Markup.button.callback(
@@ -107,8 +108,8 @@ const sellScene = new Scenes.WizardScene(
         sellScene.logger.info(`User ${userId} prompted to select asset from ${assets.length} options`);
         return;
       } else {
-        ctx.wizard.state.selectedAsset = assets[0];
-        ctx.wizard.state.amount = amount; // Explicitly preserve amount
+        ctx.session.wizardState.selectedAsset = assets[0];
+        ctx.session.wizardState.amount = amount;
         sellScene.logger.info(`User ${userId} auto-selected single asset: ${assets[0].symbol}`);
         await promptBankSelection(ctx);
         return;
@@ -205,7 +206,7 @@ function generateSessionHash(sessionData) {
 }
 
 async function promptBankSelection(ctx) {
-  const userId = ctx.wizard.state.userId;
+  const userId = ctx.session.wizardState.userId;
   let userState;
   try {
     userState = await sellScene.getUserState(userId);
@@ -220,8 +221,8 @@ async function promptBankSelection(ctx) {
   }
 
   const walletsWithBank = userState.wallets?.filter((w) => w.bank) || [];
-  const asset = ctx.wizard.state.selectedAsset;
-  const amount = ctx.wizard.state.amount;
+  const asset = ctx.session.wizardState.selectedAsset;
+  const amount = ctx.session.wizardState.amount;
 
   sellScene.logger.info(`Prompting bank selection for user ${userId}: asset=${!!asset}, amount=${amount}`);
 
@@ -263,14 +264,14 @@ async function promptBankSelection(ctx) {
         `*Symbol:* ${asset.symbol}\n` +
         `*Name:* ${asset.name}\n` +
         `*Address:* \`${asset.address}\`\n` +
-        `*Chain:* ${ctx.wizard.state.chain}\n` +
+        `*Chain:* ${ctx.session.wizardState.chain}\n` +
         `*Amount:* ${amount} ${asset.symbol}\n\n` +
         `Where you want the funds go?`
       : `✅ *Asset Confirmed* (Step 2/4)\n\n` +
         `*Symbol:* ${asset.symbol}\n` +
         `*Name:* ${asset.name}\n` +
         `*Address:* \`${asset.address}\`\n` +
-        `*Chain:* ${ctx.wizard.state.chain}\n` +
+        `*Chain:* ${ctx.session.wizardState.chain}\n` +
         `*Amount:* ${amount} ${asset.symbol}\n\n` +
         `Where would you like to receive the funds?`;
     await ctx.replyWithMarkdown(assetMsg, Markup.inlineKeyboard(bankOptions));
@@ -280,7 +281,7 @@ async function promptBankSelection(ctx) {
 
 // Action Handlers
 sellScene.action(/select_asset_(\d+)/, async (ctx) => {
-  const userId = ctx.wizard.state.userId;
+  const userId = ctx.session.wizardState.userId;
   let userState;
   try {
     userState = await sellScene.getUserState(userId);
@@ -296,7 +297,7 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   }
 
   const index = parseInt(ctx.match[1], 10);
-  const assets = ctx.wizard.state.validatedAssets;
+  const assets = ctx.session.wizardState.validatedAssets;
   if (!assets || index < 0 || index >= assets.length) {
     await ctx.replyWithMarkdown(
       userState.usePidgin
@@ -308,8 +309,7 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
     return;
   }
 
-  ctx.wizard.state.selectedAsset = assets[index];
-  ctx.wizard.state.amount = ctx.wizard.state.amount; // Preserve amount
+  ctx.session.wizardState.selectedAsset = assets[index];
   await ctx.answerCbQuery();
   await ctx.replyWithMarkdown(
     userState.usePidgin
@@ -321,7 +321,7 @@ sellScene.action(/select_asset_(\d+)/, async (ctx) => {
 });
 
 sellScene.action(/select_bank_(\d+)/, async (ctx) => {
-  const userId = ctx.wizard.state.userId;
+  const userId = ctx.session.wizardState.userId;
   let userState;
   try {
     userState = await sellScene.getUserState(userId);
@@ -336,10 +336,10 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
     return ctx.scene.leave();
   }
 
-  sellScene.logger.info(`Selecting bank for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${ctx.wizard.state.amount}`);
+  sellScene.logger.info(`Selecting bank for user ${userId}: asset=${!!ctx.session.wizardState.selectedAsset}, amount=${ctx.session.wizardState.amount}`);
 
-  if (!ctx.wizard.state.selectedAsset || !ctx.wizard.state.amount) {
-    sellScene.logger.error(`Missing asset or amount for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${!!ctx.wizard.state.amount}`);
+  if (!ctx.session.wizardState.selectedAsset || !ctx.session.wizardState.amount) {
+    sellScene.logger.error(`Missing asset or amount for user ${userId}: asset=${!!ctx.session.wizardState.selectedAsset}, amount=${!!ctx.session.wizardState.amount}`);
     await ctx.replyWithMarkdown(
       userState.usePidgin
         ? '❌ No asset or amount selected. Start again with /sell.'
@@ -363,19 +363,19 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
     return;
   }
 
-  ctx.wizard.state.bankDetails = walletsWithBank[index].bank;
-  ctx.wizard.state.selectedWalletAddress = walletsWithBank[index].address;
+  ctx.session.wizardState.bankDetails = walletsWithBank[index].bank;
+  ctx.session.wizardState.selectedWalletAddress = walletsWithBank[index].address;
 
   const confirmMsg = userState.usePidgin
     ? `🏦 Funds go enter:\n` +
-      `*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n` +
-      `*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n` +
-      `*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\n` +
+      `*Bank:* ${ctx.session.wizardState.bankDetails.bankName}\n` +
+      `*Account:* ****${ctx.session.wizardState.bankDetails.accountNumber.slice(-4)}\n` +
+      `*Name:* ${ctx.session.wizardState.bankDetails.accountName}\n\n` +
       `E correct? (Step 3/4)`
     : `🏦 Funds will be sent to:\n` +
-      `*Bank:* ${ctx.wizard.state.bankDetails.bankName}\n` +
-      `*Account:* ****${ctx.wizard.state.bankDetails.accountNumber.slice(-4)}\n` +
-      `*Name:* ${ctx.wizard.state.bankDetails.accountName}\n\n` +
+      `*Bank:* ${ctx.session.wizardState.bankDetails.bankName}\n` +
+      `*Account:* ****${ctx.session.wizardState.bankDetails.accountNumber.slice(-4)}\n` +
+      `*Name:* ${ctx.session.wizardState.bankDetails.accountName}\n\n` +
       `Is this correct? (Step 3/4)`;
   await ctx.replyWithMarkdown(
     confirmMsg,
@@ -389,7 +389,7 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
 });
 
 sellScene.action('confirm_bank', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
+  const userId = ctx.session.wizardState.userId;
   let userState;
   try {
     userState = await sellScene.getUserState(userId);
@@ -404,9 +404,9 @@ sellScene.action('confirm_bank', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  sellScene.logger.info(`Confirming bank for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${ctx.wizard.state.amount}`);
+  sellScene.logger.info(`Confirming bank for user ${userId}: asset=${!!ctx.session.wizardState.selectedAsset}, amount=${ctx.session.wizardState.amount}`);
 
-  const { selectedAsset: asset, bankDetails, selectedWalletAddress, amount } = ctx.wizard.state;
+  const { selectedAsset: asset, bankDetails, selectedWalletAddress, amount } = ctx.session.wizardState;
   if (!asset || !bankDetails || !selectedWalletAddress || !amount) {
     sellScene.logger.error(`Missing details for user ${userId}: asset=${!!asset}, bankDetails=${!!bankDetails}, walletAddress=${!!selectedWalletAddress}, amount=${!!amount}`);
     const errorMsg = userState.usePidgin
@@ -436,14 +436,14 @@ sellScene.action('confirm_bank', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  ctx.wizard.state.amountInWei = amountInWei;
-  ctx.wizard.state.sessionId = uuidv4();
+  ctx.session.wizardState.amountInWei = amountInWei;
+  ctx.session.wizardState.sessionId = uuidv4();
 
   const sessionData = {
     userId,
     amountInWei,
     token: asset.address,
-    chainId: mapChainToId(ctx.wizard.state.chain),
+    chainId: mapChainToId(ctx.session.wizardState.chain),
     bankDetails,
     blockradarWallet: selectedWalletAddress,
     status: 'pending',
@@ -452,8 +452,8 @@ sellScene.action('confirm_bank', async (ctx) => {
   };
 
   try {
-    await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
-    sellScene.logger.info(`Session stored for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
+    await sellScene.db.collection('sessions').doc(ctx.session.wizardState.sessionId).set(sessionData);
+    sellScene.logger.info(`Session stored for user ${userId}, sessionId: ${ctx.session.wizardState.sessionId}`);
   } catch (error) {
     sellScene.logger.error(`Failed to store session for user ${userId}: ${error.message}`);
     const errorMsg = userState.usePidgin
@@ -468,7 +468,7 @@ sellScene.action('confirm_bank', async (ctx) => {
   }
 
   const sessionHash = generateSessionHash({
-    sessionId: ctx.wizard.state.sessionId,
+    sessionId: ctx.session.wizardState.sessionId,
     amountInWei,
     token: asset.address,
     chainId: sessionData.chainId,
@@ -476,17 +476,17 @@ sellScene.action('confirm_bank', async (ctx) => {
   });
 
   const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
-  const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.wizard.state.sessionId}&hash=${sessionHash}`;
+  const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.session.wizardState.sessionId}&hash=${sessionHash}`;
 
   const confirmMsg = userState.usePidgin
     ? `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
-      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Chain:* ${ctx.session.wizardState.chain}\n` +
       `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
       `Connect your wallet now!`
     : `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
-      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Chain:* ${ctx.session.wizardState.chain}\n` +
       `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
       `Connect your wallet now!`;
   await ctx.replyWithMarkdown(confirmMsg);
@@ -501,10 +501,10 @@ sellScene.action('confirm_bank', async (ctx) => {
 });
 
 sellScene.action('link_temp_bank', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
+  const userId = ctx.session.wizardState.userId;
   sellScene.logger.info(`User ${userId} chose to link a temporary bank`);
-  if (!ctx.wizard.state.selectedAsset || !ctx.wizard.state.amount) {
-    sellScene.logger.error(`Missing asset or amount for user ${userId} in link_temp_bank: asset=${!!ctx.wizard.state.selectedAsset}, amount=${!!ctx.wizard.state.amount}`);
+  if (!ctx.session.wizardState.selectedAsset || !ctx.session.wizardState.amount) {
+    sellScene.logger.error(`Missing asset or amount for user ${userId} in link_temp_bank: asset=${!!ctx.session.wizardState.selectedAsset}, amount=${!!ctx.session.wizardState.amount}`);
     await ctx.replyWithMarkdown(
       '❌ No asset or amount selected. Please start over with /sell.',
       Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
@@ -512,7 +512,7 @@ sellScene.action('link_temp_bank', async (ctx) => {
     await ctx.answerCbQuery();
     return ctx.scene.leave();
   }
-  ctx.wizard.state.awaitingTempBank = true;
+  ctx.session.wizardState.awaitingTempBank = true;
   await ctx.scene.enter('bank_linking_scene_temp');
   await ctx.answerCbQuery();
 });
@@ -531,7 +531,7 @@ sellScene.action('retry_sell', async (ctx) => {
 
 // Handle Temporary Bank Linking Completion
 sellScene.action('confirm_bank_temp', async (ctx) => {
-  const userId = ctx.wizard.state.userId;
+  const userId = ctx.session.wizardState.userId;
   let userState;
   try {
     userState = await sellScene.getUserState(userId);
@@ -546,11 +546,11 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  sellScene.logger.info(`Confirming temp bank for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${ctx.wizard.state.amount}`);
+  sellScene.logger.info(`Confirming temp bank for user ${userId}: asset=${!!ctx.session.wizardState.selectedAsset}, amount=${ctx.session.wizardState.amount}`);
 
-  const { selectedAsset: asset, amount } = ctx.wizard.state;
+  const { selectedAsset: asset, amount } = ctx.session.wizardState;
   const bankDetails = ctx.scene.state.bankDetails;
-  const selectedWalletAddress = ctx.scene.state.walletAddress || ctx.wizard.state.selectedWalletAddress;
+  const selectedWalletAddress = ctx.scene.state.walletAddress || ctx.session.wizardState.selectedWalletAddress;
 
   if (!asset || !bankDetails || !selectedWalletAddress || !amount) {
     sellScene.logger.error(`Missing details for user ${userId}: asset=${!!asset}, bankDetails=${!!bankDetails}, walletAddress=${!!selectedWalletAddress}, amount=${!!amount}`);
@@ -581,16 +581,16 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  ctx.wizard.state.amountInWei = amountInWei;
-  ctx.wizard.state.sessionId = uuidv4();
-  ctx.wizard.state.bankDetails = bankDetails;
-  ctx.wizard.state.selectedWalletAddress = selectedWalletAddress;
+  ctx.session.wizardState.amountInWei = amountInWei;
+  ctx.session.wizardState.sessionId = uuidv4();
+  ctx.session.wizardState.bankDetails = bankDetails;
+  ctx.session.wizardState.selectedWalletAddress = selectedWalletAddress;
 
   const sessionData = {
     userId,
     amountInWei,
     token: asset.address,
-    chainId: mapChainToId(ctx.wizard.state.chain),
+    chainId: mapChainToId(ctx.session.wizardState.chain),
     bankDetails,
     blockradarWallet: selectedWalletAddress,
     status: 'pending',
@@ -599,8 +599,8 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
   };
 
   try {
-    await sellScene.db.collection('sessions').doc(ctx.wizard.state.sessionId).set(sessionData);
-    sellScene.logger.info(`Session stored for user ${userId}, sessionId: ${ctx.wizard.state.sessionId}`);
+    await sellScene.db.collection('sessions').doc(ctx.session.wizardState.sessionId).set(sessionData);
+    sellScene.logger.info(`Session stored for user ${userId}, sessionId: ${ctx.session.wizardState.sessionId}`);
   } catch (error) {
     sellScene.logger.error(`Failed to store session for user ${userId}: ${error.message}`);
     const errorMsg = userState.usePidgin
@@ -615,7 +615,7 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
   }
 
   const sessionHash = generateSessionHash({
-    sessionId: ctx.wizard.state.sessionId,
+    sessionId: ctx.session.wizardState.sessionId,
     amountInWei,
     token: asset.address,
     chainId: sessionData.chainId,
@@ -623,17 +623,17 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
   });
 
   const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
-  const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.wizard.state.sessionId}&hash=${sessionHash}`;
+  const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.session.wizardState.sessionId}&hash=${sessionHash}`;
 
   const confirmMsg = userState.usePidgin
     ? `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
-      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Chain:* ${ctx.session.wizardState.chain}\n` +
       `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
       `Connect your wallet now!`
     : `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
-      `*Chain:* ${ctx.wizard.state.chain}\n` +
+      `*Chain:* ${ctx.session.wizardState.chain}\n` +
       `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
       `Connect your wallet now!`;
   await ctx.replyWithMarkdown(confirmMsg);
@@ -643,7 +643,7 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
     Markup.inlineKeyboard([[Markup.button.callback('❌ Cancel', 'cancel_sell')]])
   );
   sellScene.logger.info(`User ${userId} prompted to connect wallet: ${connectUrl}`);
-  ctx.wizard.state.awaitingTempBank = false;
+  ctx.session.wizardState.awaitingTempBank = false;
   await ctx.answerCbQuery();
   return ctx.scene.leave();
 });
