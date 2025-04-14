@@ -199,9 +199,9 @@ async function validateAssetByTerm(term, chainId, relayClient, retries = 2) {
   }
 }
 
-function generateSessionHash(sessionData) {
+function generateSessionHash(sessionId, amountInWei, token, chainId, blockradarWallet) {
   const secret = process.env.SESSION_SECRET || 'your-secret-key';
-  const dataString = `${sessionData.sessionId}:${sessionData.amountInWei}:${sessionData.token}:${sessionData.chainId}:${sessionData.blockradarWallet}`;
+  const dataString = `${sessionId}:${amountInWei}:${token}:${chainId}:${blockradarWallet}`;
   return crypto.createHmac('sha256', secret).update(dataString).digest('hex');
 }
 
@@ -416,6 +416,7 @@ sellScene.action('confirm_bank', async (ctx) => {
       errorMsg,
       Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
     );
+    await ctx.answerCbQueryreferrerpolicy: no-referrer
     await ctx.answerCbQuery();
     return ctx.scene.leave();
   }
@@ -439,11 +440,12 @@ sellScene.action('confirm_bank', async (ctx) => {
   ctx.session.wizardState.amountInWei = amountInWei;
   ctx.session.wizardState.sessionId = uuidv4();
 
+  const chainId = mapChainToId(ctx.session.wizardState.chain);
   const sessionData = {
     userId,
     amountInWei,
     token: asset.address,
-    chainId: mapChainToId(ctx.session.wizardState.chain),
+    chainId,
     bankDetails,
     blockradarWallet: selectedWalletAddress,
     status: 'pending',
@@ -470,11 +472,11 @@ sellScene.action('confirm_bank', async (ctx) => {
   // Example quote response (replace with actual API call in production)
   const quote = {
     fees: {
-      gas: { amountUsd: "30.901612" },
-      relayer: { amountUsd: "30.901612" },
-      relayerGas: { amountUsd: "30.901612" },
-      relayerService: { amountUsd: "30.901612" },
-      app: { amountUsd: "30.901612" }
+      gas: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      relayer: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      relayerGas: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      relayerService: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      app: { amountUsd: "30.901612", amountFormatted: "30.75492" }
     },
     details: {
       currencyIn: {
@@ -498,21 +500,33 @@ sellScene.action('confirm_bank', async (ctx) => {
     .toFixed(2);
 
   // Format quote summary for Telegram
-  const quoteSummary = `
-*Transaction Summary:*
-- *You Sell:* ${amount} ${asset.symbol}
-- *You Receive:* ${quote.details.currencyOut.amountFormatted} ${quote.details.currencyOut.currency.symbol}
-- *Total Fees:* $${totalFeesUsd} (Gas: $${quote.fees.gas.amountUsd}, Relayer: $${quote.fees.relayer.amountUsd}, App: $${quote.fees.app.amountUsd})
-- *Impact:* $${quote.details.totalImpact.usd} (${quote.details.totalImpact.percent}%)
-`;
+  const quoteSummary = userState.usePidgin
+    ? `\n*Transaction Summary:*\n` +
+      `- *You Sell:* ${amount} ${asset.symbol}\n` +
+      `- *You Receive:* ${quote.details.currencyOut.amountFormatted} ${quote.details.currencyOut.currency.symbol}\n` +
+      `- *Total Fees:* $${totalFeesUsd}\n` +
+      `  - Gas: $${quote.fees.gas.amountUsd}\n` +
+      `  - Relayer: $${quote.fees.relayer.amountUsd}\n` +
+      `  - App: $${quote.fees.app.amountUsd}\n` +
+      `- *Total Impact:* $${quote.details.totalImpact.usd} (${quote.details.totalImpact.percent}%)\n` +
+      `- *Swap Impact:* $${quote.details.swapImpact.usd} (${quote.details.swapImpact.percent}%)\n`
+    : `\n*Transaction Summary:*\n` +
+      `- *You Sell:* ${amount} ${asset.symbol}\n` +
+      `- *You Receive:* ${quote.details.currencyOut.amountFormatted} ${quote.details.currencyOut.currency.symbol}\n` +
+      `- *Total Fees:* $${totalFeesUsd}\n` +
+      `  - Gas Fee: $${quote.fees.gas.amountUsd}\n` +
+      `  - Relayer Fee: $${quote.fees.relayer.amountUsd}\n` +
+      `  - App Fee: $${quote.fees.app.amountUsd}\n` +
+      `- *Total Impact:* $${quote.details.totalImpact.usd} (${quote.details.totalImpact.percent}%)\n` +
+      `- *Swap Impact:* $${quote.details.swapImpact.usd} (${quote.details.swapImpact.percent}%)\n`;
 
-  const sessionHash = generateSessionHash({
-    sessionId: ctx.session.wizardState.sessionId,
+  const sessionHash = generateSessionHash(
+    ctx.session.wizardState.sessionId,
     amountInWei,
-    token: asset.address,
-    chainId: sessionData.chainId,
-    blockradarWallet: selectedWalletAddress,
-  });
+    asset.address,
+    chainId,
+    selectedWalletAddress
+  );
 
   const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
   const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.session.wizardState.sessionId}&hash=${sessionHash}`;
@@ -521,19 +535,16 @@ sellScene.action('confirm_bank', async (ctx) => {
     ? `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
       `*Chain:* ${ctx.session.wizardState.chain}\n` +
-      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n` +
       `${quoteSummary}\n` +
-      `Connect your wallet now!`
+      `Connect your wallet now to proceed!`
     : `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
       `*Chain:* ${ctx.session.wizardState.chain}\n` +
-      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n` +
       `${quoteSummary}\n` +
-      `Connect your wallet now!`;
+      `Connect your wallet now to proceed!`;
   await ctx.replyWithMarkdown(confirmMsg);
-
-  // Store quote data for connect wallet UI
-  ctx.session.wizardState.quote = quote;
 
   await ctx.replyWithMarkdown(
     `[Connect Wallet](${connectUrl})`,
@@ -630,11 +641,12 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
   ctx.session.wizardState.bankDetails = bankDetails;
   ctx.session.wizardState.selectedWalletAddress = selectedWalletAddress;
 
+  const chainId = mapChainToId(ctx.session.wizardState.chain);
   const sessionData = {
     userId,
     amountInWei,
     token: asset.address,
-    chainId: mapChainToId(ctx.session.wizardState.chain),
+    chainId,
     bankDetails,
     blockradarWallet: selectedWalletAddress,
     status: 'pending',
@@ -661,11 +673,11 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
   // Example quote response (replace with actual API call in production)
   const quote = {
     fees: {
-      gas: { amountUsd: "30.901612" },
-      relayer: { amountUsd: "30.901612" },
-      relayerGas: { amountUsd: "30.901612" },
-      relayerService: { amountUsd: "30.901612" },
-      app: { amountUsd: "30.901612" }
+      gas: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      relayer: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      relayerGas: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      relayerService: { amountUsd: "30.901612", amountFormatted: "30.75492" },
+      app: { amountUsd: "30.901612", amountFormatted: "30.75492" }
     },
     details: {
       currencyIn: {
@@ -689,21 +701,33 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
     .toFixed(2);
 
   // Format quote summary for Telegram
-  const quoteSummary = `
-*Transaction Summary:*
-- *You Sell:* ${amount} ${asset.symbol}
-- *You Receive:* ${quote.details.currencyOut.amountFormatted} ${quote.details.currencyOut.currency.symbol}
-- *Total Fees:* $${totalFeesUsd} (Gas: $${quote.fees.gas.amountUsd}, Relayer: $${quote.fees.relayer.amountUsd}, App: $${quote.fees.app.amountUsd})
-- *Impact:* $${quote.details.totalImpact.usd} (${quote.details.totalImpact.percent}%)
-`;
+  const quoteSummary = userState.usePidgin
+    ? `\n*Transaction Summary:*\n` +
+      `- *You Sell:* ${amount} ${asset.symbol}\n` +
+      `- *You Receive:* ${quote.details.currencyOut.amountFormatted} ${quote.details.currencyOut.currency.symbol}\n` +
+      `- *Total Fees:* $${totalFeesUsd}\n` +
+      `  - Gas: $${quote.fees.gas.amountUsd}\n` +
+      `  - Relayer: $${quote.fees.relayer.amountUsd}\n` +
+      `  - App: $${quote.fees.app.amountUsd}\n` +
+      `- *Total Impact:* $${quote.details.totalImpact.usd} (${quote.details.totalImpact.percent}%)\n` +
+      `- *Swap Impact:* $${quote.details.swapImpact.usd} (${quote.details.swapImpact.percent}%)\n`
+    : `\n*Transaction Summary:*\n` +
+      `- *You Sell:* ${amount} ${asset.symbol}\n` +
+      `- *You Receive:* ${quote.details.currencyOut.amountFormatted} ${quote.details.currencyOut.currency.symbol}\n` +
+      `- *Total Fees:* $${totalFeesUsd}\n` +
+      `  - Gas Fee: $${quote.fees.gas.amountUsd}\n` +
+      `  - Relayer Fee: $${quote.fees.relayer.amountUsd}\n` +
+      `  - App Fee: $${quote.fees.app.amountUsd}\n` +
+      `- *Total Impact:* $${quote.details.totalImpact.usd} (${quote.details.totalImpact.percent}%)\n` +
+      `- *Swap Impact:* $${quote.details.swapImpact.usd} (${quote.details.swapImpact.percent}%)\n`;
 
-  const sessionHash = generateSessionHash({
-    sessionId: ctx.session.wizardState.sessionId,
+  const sessionHash = generateSessionHash(
+    ctx.session.wizardState.sessionId,
     amountInWei,
-    token: asset.address,
-    chainId: sessionData.chainId,
-    blockradarWallet: selectedWalletAddress,
-  });
+    asset.address,
+    chainId,
+    selectedWalletAddress
+  );
 
   const webhookDomain = sellScene.webhookDomain || 'https://fallback-domain.com';
   const connectUrl = `${webhookDomain}/connect?sessionId=${ctx.session.wizardState.sessionId}&hash=${sessionHash}`;
@@ -712,19 +736,16 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
     ? `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
       `*Chain:* ${ctx.session.wizardState.chain}\n` +
-      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n` +
       `${quoteSummary}\n` +
-      `Connect your wallet now!`
+      `Connect your wallet now to proceed!`
     : `📝 *Sell Details* (Step 4/4)\n\n` +
       `*Amount:* ${amount} ${asset.symbol}\n` +
       `*Chain:* ${ctx.session.wizardState.chain}\n` +
-      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n\n` +
+      `*Bank:* ${bankDetails.bankName} (****${bankDetails.accountNumber.slice(-4)})\n` +
       `${quoteSummary}\n` +
-      `Connect your wallet now!`;
+      `Connect your wallet now to proceed!`;
   await ctx.replyWithMarkdown(confirmMsg);
-
-  // Store quote data for connect wallet UI
-  ctx.session.wizardState.quote = quote;
 
   await ctx.replyWithMarkdown(
     `[Connect Wallet](${connectUrl})`,
@@ -745,34 +766,4 @@ function setup(bot, db, logger, getUserState, relayClient) {
   sellScene.webhookDomain = process.env.WEBHOOK_DOMAIN;
 }
 
-// Connect Wallet UI (assuming this is fetched after connecting wallet)
-function getConnectWalletUI(session) {
-  const { quote, amountInWei, selectedAsset: tokenInfo } = session.wizardState;
-  if (!quote) return '<p>No quote data available.</p>';
-
-  const totalFeesUsd = Object.values(quote.fees)
-    .reduce((sum, fee) => sum + parseFloat(fee.amountUsd), 0)
-    .toFixed(2);
-
-  return `
-<div className="quote-details">
-  <h3>Transaction Summary</h3>
-  <p><strong>You Sell:</strong> ${ethers.utils.formatUnits(amountInWei, tokenInfo.decimals)} ${tokenInfo.symbol}</p>
-  <p><strong>You Receive:</strong> ${quote.details.currencyOut.amountFormatted} ${quote.details.currencyOut.currency.symbol}</p>
-  <div className="fees">
-    <h4>Fees</h4>
-    <ul>
-      ${Object.entries(quote.fees).map(([key, fee]) => `<li>${key.charAt(0).toUpperCase() + key.slice(1)} Fee: $${fee.amountUsd}</li>`).join('')}
-      <li><strong>Total Fees:</strong> $${totalFeesUsd}</li>
-    </ul>
-  </div>
-  <div className="impact">
-    <h4>Impact</h4>
-    <p>Total Impact: $${quote.details.totalImpact.usd} (${quote.details.totalImpact.percent}%)</p>
-    <p>Swap Impact: $${quote.details.swapImpact.usd} (${quote.details.swapImpact.percent}%)</p>
-  </div>
-</div>
-  `;
-}
-
-module.exports = { sellScene, setup, getConnectWalletUI };
+module.exports = { sellScene, setup };
