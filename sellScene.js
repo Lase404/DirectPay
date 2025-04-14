@@ -6,7 +6,7 @@ const crypto = require('crypto');
 
 const sellScene = new Scenes.WizardScene(
   'sell_scene',
-  // **Step 0: Parse and Validate Input**
+  // Step 0: Parse and Validate Input
   async (ctx) => {
     const userId = ctx.from.id.toString();
     ctx.wizard.state.userId = userId;
@@ -108,7 +108,7 @@ const sellScene = new Scenes.WizardScene(
         return;
       } else {
         ctx.wizard.state.selectedAsset = assets[0];
-        ctx.wizard.state.amount = amount; // Ensure amount is preserved
+        ctx.wizard.state.amount = amount; // Explicitly preserve amount
         sellScene.logger.info(`User ${userId} auto-selected single asset: ${assets[0].symbol}`);
         await promptBankSelection(ctx);
         return;
@@ -125,15 +125,14 @@ const sellScene = new Scenes.WizardScene(
       return ctx.scene.leave();
     }
   },
-  // **Step 1: Handle Unexpected Messages**
+  // Step 1: Handle Unexpected Messages
   async (ctx) => {
     await ctx.replyWithMarkdown('Please use the buttons to proceed.');
     return;
   }
 );
 
-// **Helper Functions**
-
+// Helper Functions
 function mapChainToId(chain) {
   const chainMap = {
     eth: 1,
@@ -224,6 +223,8 @@ async function promptBankSelection(ctx) {
   const asset = ctx.wizard.state.selectedAsset;
   const amount = ctx.wizard.state.amount;
 
+  sellScene.logger.info(`Prompting bank selection for user ${userId}: asset=${!!asset}, amount=${amount}`);
+
   if (!asset || !amount) {
     sellScene.logger.error(`Missing asset or amount for user ${userId}: asset=${!!asset}, amount=${!!amount}`);
     await ctx.replyWithMarkdown(
@@ -277,8 +278,7 @@ async function promptBankSelection(ctx) {
   }
 }
 
-// **Action Handlers**
-
+// Action Handlers
 sellScene.action(/select_asset_(\d+)/, async (ctx) => {
   const userId = ctx.wizard.state.userId;
   let userState;
@@ -335,6 +335,8 @@ sellScene.action(/select_bank_(\d+)/, async (ctx) => {
     await ctx.answerCbQuery();
     return ctx.scene.leave();
   }
+
+  sellScene.logger.info(`Selecting bank for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${ctx.wizard.state.amount}`);
 
   if (!ctx.wizard.state.selectedAsset || !ctx.wizard.state.amount) {
     sellScene.logger.error(`Missing asset or amount for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${!!ctx.wizard.state.amount}`);
@@ -402,6 +404,8 @@ sellScene.action('confirm_bank', async (ctx) => {
     return ctx.scene.leave();
   }
 
+  sellScene.logger.info(`Confirming bank for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${ctx.wizard.state.amount}`);
+
   const { selectedAsset: asset, bankDetails, selectedWalletAddress, amount } = ctx.wizard.state;
   if (!asset || !bankDetails || !selectedWalletAddress || !amount) {
     sellScene.logger.error(`Missing details for user ${userId}: asset=${!!asset}, bankDetails=${!!bankDetails}, walletAddress=${!!selectedWalletAddress}, amount=${!!amount}`);
@@ -463,7 +467,6 @@ sellScene.action('confirm_bank', async (ctx) => {
     return ctx.scene.leave();
   }
 
-  // Generate session hash to secure URL data
   const sessionHash = generateSessionHash({
     sessionId: ctx.wizard.state.sessionId,
     amountInWei,
@@ -500,6 +503,15 @@ sellScene.action('confirm_bank', async (ctx) => {
 sellScene.action('link_temp_bank', async (ctx) => {
   const userId = ctx.wizard.state.userId;
   sellScene.logger.info(`User ${userId} chose to link a temporary bank`);
+  if (!ctx.wizard.state.selectedAsset || !ctx.wizard.state.amount) {
+    sellScene.logger.error(`Missing asset or amount for user ${userId} in link_temp_bank: asset=${!!ctx.wizard.state.selectedAsset}, amount=${!!ctx.wizard.state.amount}`);
+    await ctx.replyWithMarkdown(
+      '❌ No asset or amount selected. Please start over with /sell.',
+      Markup.inlineKeyboard([[Markup.button.callback('🔄 Retry', 'retry_sell')]])
+    );
+    await ctx.answerCbQuery();
+    return ctx.scene.leave();
+  }
   ctx.wizard.state.awaitingTempBank = true;
   await ctx.scene.enter('bank_linking_scene_temp');
   await ctx.answerCbQuery();
@@ -517,7 +529,7 @@ sellScene.action('retry_sell', async (ctx) => {
   return ctx.scene.leave();
 });
 
-// **Handle Temporary Bank Linking Completion**
+// Handle Temporary Bank Linking Completion
 sellScene.action('confirm_bank_temp', async (ctx) => {
   const userId = ctx.wizard.state.userId;
   let userState;
@@ -533,6 +545,8 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
     await ctx.answerCbQuery();
     return ctx.scene.leave();
   }
+
+  sellScene.logger.info(`Confirming temp bank for user ${userId}: asset=${!!ctx.wizard.state.selectedAsset}, amount=${ctx.wizard.state.amount}`);
 
   const { selectedAsset: asset, amount } = ctx.wizard.state;
   const bankDetails = ctx.scene.state.bankDetails;
@@ -634,7 +648,7 @@ sellScene.action('confirm_bank_temp', async (ctx) => {
   return ctx.scene.leave();
 });
 
-// **Setup Function**
+// Setup Function
 function setup(bot, db, logger, getUserState, relayClient) {
   sellScene.getUserState = getUserState;
   sellScene.db = db;
