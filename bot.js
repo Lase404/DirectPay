@@ -3388,15 +3388,6 @@ app.post('/webhook/wallet-connected', async (req, res) => {
   res.status(200).send('OK');
 });
 
-
-// Serve React frontend static files
-app.use(express.static(path.join(__dirname, 'client', 'build')));
-
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
-});
-
 app.get('/api/validate-session', async (req, res) => {
   const { sessionId, hash } = req.query;
   try {
@@ -3417,6 +3408,15 @@ app.get('/api/validate-session', async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+// Serve React frontend static files
+app.use(express.static(path.join(__dirname, 'client', 'build')));
+
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
+});
+
+
 app.post('/webhook/sell-completed', async (req, res) => {
   const { sessionId, txHash } = req.body;
   try {
