@@ -1086,34 +1086,6 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
-// Placeholder for sellScene (assumed to be in sellScene.js)
-const sellSceneModule = require('./sellScene');
-const sellScene = sellSceneModule.sellScene;
-
-// Register all scenes
-const stage = new Scenes.Stage([bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene]);
-bot.use(stage.middleware());
-sellSceneModule.setup(bot, db, logger, getUserState);
-
-// /sell command handler
-bot.command('sell', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const userState = await getUserState(userId);
-  await bot.telegram.sendChatAction(ctx.chat.id, 'typing');
-  if (userState.wallets.length === 0 || !userState.wallets.some((w) => w.bank)) {
-    const errorMsg = userState.usePidgin
-      ? '❌ You no get wallet or bank linked yet. Go "💼 Generate Wallet" and link bank first.'
-      : '❌ You don’t have a wallet or linked bank yet. Please generate a wallet and link a bank first.';
-    await ctx.replyWithMarkdown(errorMsg);
-    return;
-  }
-  try {
-    await ctx.scene.enter('sell_scene');
-  } catch (error) {
-    logger.error(`Error entering sell_scene for user ${userId}: ${error.message}`);
-    await ctx.replyWithMarkdown('❌ Something went wrong. Try again later.');
-  }
-});
 
 // =================== Webhook Setup ===================
 if (WEBHOOK_DOMAIN && WEBHOOK_PATH) {
