@@ -1,12 +1,12 @@
+// client/src/index.js
 import React from 'react';
-import { createRoot } from 'react-dom/client';
+import ReactDOM from 'react-dom';
 import { BrowserRouter } from 'react-router-dom';
 import App from './ConnectWalletApp';
-import './index.css';
 
-const root = createRoot(document.getElementById('root'));
-root.render(
+ReactDOM.render(
   <BrowserRouter>
     <App />
-  </BrowserRouter>
+  </BrowserRouter>,
+  document.getElementById('root')
 );
