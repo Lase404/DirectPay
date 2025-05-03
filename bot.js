@@ -1056,8 +1056,6 @@ const stage = new Scenes.Stage([
   bankLinkingScene,
   sendMessageScene,
   receiptGenerationScene,
-  bankLinkingSceneTemp,
-  sellScene,
 ]);
 bot.use(stage.middleware());
 sellSceneModule.setup(bot, db, logger, getUserState);
