@@ -13,8 +13,8 @@ const unlinkAsync = promisify(unlink);
 const path = require('path');
 const sharp = require('sharp');
 const requestIp = require('request-ip');
-const ethers = require('ethers'); // Added for wallet generation if needed
-require('dotenv').config(); // Load environment variables from .env file
+const ethers = require('ethers');
+require('dotenv').config();
 
 // =================== Initialize Logging ===================
 const logger = winston.createLogger({
