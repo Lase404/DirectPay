@@ -1049,9 +1049,7 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
-// Import sellScene
-const sellSceneModule = require('./sellScene');
-const sellScene = sellSceneModule.sellScene
+
 
 // Register all scenes
 const stage = new Scenes.Stage([
