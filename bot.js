@@ -19,7 +19,6 @@ const QRCode = require('qrcode');
 const { PrivyClient } = require('@privy-io/server-auth');
 const relayClient = createClient({
   baseUrl: 'https://api.relay.link'
-  source: 'DirectPayBot',
 });
 require('dotenv').config();
 
