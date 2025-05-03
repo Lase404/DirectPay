@@ -1,3 +1,4 @@
+// =================== Import Required Libraries ===================
 const { Telegraf, Scenes, session, Markup } = require('telegraf');
 const express = require('express');
 const bodyParser = require('body-parser');
@@ -14,12 +15,12 @@ const sharp = require('sharp');
 const requestIp = require('request-ip');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
-const { createClient } = require('@reservoir0x/relay-sdk');
-const QRCode = require('qrcode');
+const { createClient } = require('@reservoir0x/relay-sdk'); // New: Relay SDK
+const QRCode = require('qrcode'); // New: For QR code generation
 const { PrivyClient } = require('@privy-io/server-auth');
 const relayClient = createClient({
-  baseUrl: 'https://api.relay.link',
-  source: 'DirectPayBot',
+  baseUrl: 'https://api.relay.link', // Adjust as per Relay SDK docs
+  source: 'DirectPayBot', // Optional identifier
 });
 require('dotenv').config();
 
@@ -27,7 +28,7 @@ const router = express.Router();
 ///////////////
 
 
-
+// =================== Initialize Logging ===================
 const logger = winston.createLogger({
   level: 'info',
   format: winston.format.combine(
@@ -56,6 +57,7 @@ const db = admin.firestore();
 
 ///////////////////////////
 
+// =================== Environment Variables ===================
 const {
   BOT_TOKEN: TELEGRAM_BOT_TOKEN,
   PAYCREST_API_KEY,
@@ -102,7 +104,7 @@ const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
 const PAYOUT_SUCCESS_IMAGE = './payout_success.png';
 const ERROR_IMAGE = './error.png';
 
-
+// =================== Initialize Express and Telegraf ===================
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
@@ -110,7 +112,7 @@ const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 
 bot.use(session());
 
-// ===================  Supported Banks ===================
+// =================== Define Supported Banks ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ACCESSNGLA' },
   { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZENITHNGLA' },
@@ -138,7 +140,7 @@ const networkMap = {
   bnb: 56,
 };
 
-// ===================  Supported Chains (Enhanced) ===================
+// =================== Define Supported Chains (Enhanced) ===================
 const chains = {
   Base: {
     id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
@@ -428,7 +430,7 @@ function findClosestBank(input, bankList) {
 }
 //////////////////////////////////////////////////////
 
-// ===================  Scenes ===================
+// =================== Define Scenes ===================
 const bankLinkingSceneTemp = new Scenes.WizardScene(
   'bank_linking_scene_temp',
   async (ctx) => {
