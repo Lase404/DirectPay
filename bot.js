@@ -1,5 +1,4 @@
-// =================== Import Required Libraries ===================
-const { Telegraf, Scenes, session, Markup } = require('telegraf');
+
 const express = require('express');
 const bodyParser = require('body-parser');
 const admin = require('firebase-admin');
@@ -15,16 +14,15 @@ const sharp = require('sharp');
 const requestIp = require('request-ip');
 const ethers = require('ethers');
 const { v4: uuidv4 } = require('uuid');
-const { createClient } = require('@reservoir0x/relay-sdk'); // New: Relay SDK
-const QRCode = require('qrcode'); // New: For QR code generation
+const { createClient } = require('@reservoir0x/relay-sdk');
+const QRCode = require('qrcode');
 const { PrivyClient } = require('@privy-io/server-auth');
 const relayClient = createClient({
-  baseUrl: 'https://api.relay.link', // Adjust as per Relay SDK docs
-  source: 'DirectPayBot', // Optional identifier
+  baseUrl: 'https://api.relay.link'
+  source: 'DirectPayBot',
 });
 require('dotenv').config();
 
-const router = express.Router();
 ///////////////
 
 
@@ -104,7 +102,7 @@ const DEPOSIT_SUCCESS_IMAGE = './deposit_success.png';
 const PAYOUT_SUCCESS_IMAGE = './payout_success.png';
 const ERROR_IMAGE = './error.png';
 
-// =================== Initialize Express and Telegraf ===================
+// ===================  Express and Telegraf ===================
 const app = express();
 const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 // Register all scenes
@@ -112,7 +110,7 @@ const bot = new Telegraf(TELEGRAM_BOT_TOKEN);
 
 bot.use(session());
 
-// =================== Define Supported Banks ===================
+// ===================  Supported Banks ===================
 const bankList = [
   { name: 'Access Bank', code: '044', aliases: ['access', 'access bank', 'accessb', 'access bank nigeria'], paycrestInstitutionCode: 'ACCESSNGLA' },
   { name: 'Zenith Bank', code: '057', aliases: ['zenith', 'zenith bank', 'zenithb', 'zenith bank nigeria'], paycrestInstitutionCode: 'ZENITHNGLA' },
@@ -131,7 +129,7 @@ const bankList = [
   { name: 'Safe Haven MFB', code: '999994', aliases: ['safe haven', 'safe haven mfb', 'safe haven nigeria'], paycrestInstitutionCode: 'SAHVNGPC' },
 ];
 
-// =================== Network Mapping ===================
+// ===================  Mapping ===================
 const networkMap = {
   eth: 1,
   base: 8453,
@@ -140,7 +138,7 @@ const networkMap = {
   bnb: 56,
 };
 
-// =================== Define Supported Chains (Enhanced) ===================
+// ===================  Supported Chains (Enhanced) ===================
 const chains = {
   Base: {
     id: 'e31c44d6-0344-4ee1-bcd1-c88e89a9e3f1',
@@ -1049,31 +1047,26 @@ const receiptGenerationScene = new Scenes.WizardScene(
   }
 );
 
-
+// Import sellScene
+const sellSceneModule = require('./sellScene');
+const sellScene = sellSceneModule.sellScene
 
 // Register all scenes
 const stage = new Scenes.Stage([
   bankLinkingScene,
   sendMessageScene,
   receiptGenerationScene,
+  bankLinkingSceneTemp,
+  sellScene,
 ]);
 bot.use(stage.middleware());
 sellSceneModule.setup(bot, db, logger, getUserState);
-// /sell command handler
+// Add /sell command handler
 bot.command('sell', async (ctx) => {
-  const userId = ctx.from.id.toString();
-  const userState = await getUserState(userId); // This works because getUserState is defined in bot.js
-  if (userState.wallets.length === 0 || !userState.wallets.some(w => w.bank)) {
-    const errorMsg = userState.usePidgin
-      ? '❌ You no get wallet or bank linked yet. Go "💼 Generate Wallet" and link bank first.'
-      : '❌ You don’t have a wallet or linked bank yet. Please generate a wallet and link a bank first.';
-    await ctx.replyWithMarkdown(errorMsg);
-    return;
-  }
   try {
     await ctx.scene.enter('sell_scene');
   } catch (error) {
-    logger.error(`Error entering sell_scene for user ${userId}: ${error.message}`);
+    logger.error(`Error entering sell_scene for user ${ctx.from.id}: ${error.message}`);
     await ctx.replyWithMarkdown('❌ Something went wrong. Try again later.');
   }
 });
@@ -1134,6 +1127,17 @@ async function fetchExchangeRates() {
 fetchExchangeRates();
 setInterval(fetchExchangeRates, 300000); // 5 minutes
 
+app.post('/webhook/deposit-signed', async (req, res) => {
+  const { userId, txHash } = req.body;
+  await db.collection('transactions').doc(txHash).set({
+    userId,
+    txHash,
+    status: 'pending',
+    createdAt: admin.firestore.FieldValue.serverTimestamp()
+  });
+  await bot.telegram.sendMessage(userId, `Deposit confirmed: ${txHash}. Processing...`);
+  res.sendStatus(200);
+});
 
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
@@ -3377,12 +3381,37 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     });
   }
 });
+app.post('/webhook/wallet-connected', async (req, res) => {
+  const { userId, walletAddress, accessToken } = req.body;
+  logger.info(`Wallet connected for user ${userId}: ${walletAddress}`);
+  await bot.telegram.sendMessage(userId, `✅ Wallet connected: \`${walletAddress}\`. Approving and depositing...`, { parse_mode: 'Markdown' });
+  res.status(200).send('OK');
+});
 
+app.get('/api/session', async (req, res) => {
+  const { userId } = req.query;
+  const sessionSnapshot = await db.collection('sessions')
+    .where('userId', '==', userId)
+    .where('status', '==', 'pending')
+    .orderBy('createdAt', 'desc')
+    .limit(1)
+    .get();
 
+  if (sessionSnapshot.empty) {
+    return res.status(404).json({ error: 'No pending session found' });
+  }
+
+  const session = sessionSnapshot.docs[0].data();
+  res.json({
+    amount: session.amountInWei,
+    token: session.token,
+    blockradarWallet: session.walletAddress
+  });
+});
+// Serve React frontend static files
 app.use(express.static(path.join(__dirname, 'client', 'build')));
 
-
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
 });
