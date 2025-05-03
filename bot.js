@@ -3384,7 +3384,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
 app.use(express.static(path.join(__dirname, 'client', 'build')));
 
 
-stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene, bankLinkingSceneTemp, sellScene);
+stage.register(bankLinkingScene, sendMessageScene, receiptGenerationScene);
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname, 'client', 'build', 'index.html'));
 });
