@@ -1195,13 +1195,22 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
 });
 app.use(bodyParser.json());
 
-app.get('/cron/fetch-rates', async (req, res) => {
+// Add this before your routes
+const cronRateLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  max: 12, // Allow 12 requests per minute (slightly more than 1 per 5 seconds)
+  message: 'Too many requests, please try again later.'
+});
+
+// Apply to the cron endpoint
+app.get('/cron/fetch-rates', cronRateLimiter, async (req, res) => {
   try {
     await fetchExchangeRates();
     logger.info('Cron job: Exchange rates fetched successfully');
     res.status(200).json({ status: 'success', message: 'Exchange rates updated' });
   } catch (error) {
     logger.error(`Cron job error: ${error.message}`);
+    await bot.telegram.sendMessage(PERSONAL_CHAT_ID, `🚨 Cron job failed: ${error.message}`, { parse_mode: 'Markdown' });
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
