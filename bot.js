@@ -1195,6 +1195,16 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
 });
 app.use(bodyParser.json());
 
+app.get('/cron/fetch-rates', async (req, res) => {
+  try {
+    await fetchExchangeRates();
+    logger.info('Cron job: Exchange rates fetched successfully');
+    res.status(200).json({ status: 'success', message: 'Exchange rates updated' });
+  } catch (error) {
+    logger.error(`Cron job error: ${error.message}`);
+    res.status(500).json({ status: 'error', message: error.message });
+  }
+});
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
