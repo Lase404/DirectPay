@@ -3300,7 +3300,7 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
   }
 });
 
-/ =================== Server Startup ===================
+// =================== Server Startup ===================
 app.listen(PORT, () => {
   logger.info(Server running on port ${PORT});
   bot.telegram.getMe().then((botInfo) => {
