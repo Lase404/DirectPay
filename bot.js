@@ -1194,16 +1194,7 @@ app.post(WEBHOOK_PAYCREST_PATH, bodyParser.raw({ type: 'application/json' }), as
   await handlePaycrestWebhook(req, res);
 });
 app.use(bodyParser.json());
-
-// Add this before your routes
-const cronRateLimiter = rateLimit({
-  windowMs: 60 * 1000, // 1 minute
-  max: 12, // Allow 12 requests per minute (slightly more than 1 per 5 seconds)
-  message: 'Too many requests, please try again later.'
-});
-
-// Apply to the cron endpoint
-app.get('/cron/fetch-rates', cronRateLimiter, async (req, res) => {
+app.get('/cron/fetch-rates', async (req, res) => {
   try {
     await fetchExchangeRates();
     logger.info('Cron job: Exchange rates fetched successfully');
@@ -1214,11 +1205,12 @@ app.get('/cron/fetch-rates', cronRateLimiter, async (req, res) => {
     res.status(500).json({ status: 'error', message: error.message });
   }
 });
+
 // =================== Main Menu ===================
 const getMainMenu = (walletExists, hasBankLinked) =>
   Markup.keyboard([
     [walletExists ? "💼 View Wallet" : "💼 Generate Wallet", "⚙️ Settings"],
-    ["💰 Transactions", "🌉 Bridge & Cash Out", "ℹ️ Support"],
+    ["💰 Transactions", "ℹ️ Support"],
     ["📈 View Current Rates"],
   ]).resize();
 
