@@ -3299,26 +3299,25 @@ app.post(WEBHOOK_BLOCKRADAR_PATH, async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
-
 // =================== Server Startup ===================
 app.listen(PORT, () => {
-  logger.info(Server running on port ${PORT});
+  logger.info(`Server running on port ${PORT}`);
   bot.telegram.getMe().then((botInfo) => {
-    logger.info(Bot ${botInfo.username} started successfully);
-    bot.telegram.sendMessage(PERSONAL_CHAT_ID,  Bot ${botInfo.username} don start on port ${PORT}!, { parse_mode: 'Markdown' })
-      .catch((err) => logger.error(Failed to send startup message: ${err.message}));
-  }).catch((err) => logger.error(Error getting bot info: ${err.message}));
+    logger.info(`Bot ${botInfo.username} started successfully`);
+    bot.telegram.sendMessage(PERSONAL_CHAT_ID, `✅ Bot ${botInfo.username} don start on port ${PORT}!`, { parse_mode: 'Markdown' })
+      .catch((err) => logger.error(`Failed to send startup message: ${err.message}`));
+  }).catch((err) => logger.error(`Error getting bot info: ${err.message}`));
 });
 
 // =================== Error Handling ===================
 process.on('unhandledRejection', (reason, promise) => {
-  logger.error(Unhandled Rejection at: ${promise}, reason: ${reason});
+  logger.error(`Unhandled Rejection at: ${promise}, reason: ${reason}`);
 });
+
 process.on('uncaughtException', (error) => {
-  logger.error(Uncaught Exception: ${error.stack});
-  bot.telegram.sendMessage(PERSONAL_CHAT_ID,  Bot crash: ${error.message}, { parse_mode: 'Markdown' })
-    .catch((err) => logger.error(Failed to send crash notification: ${err.message}));
+  logger.error(`Uncaught Exception: ${error.stack}`);
+  bot.telegram.sendMessage(PERSONAL_CHAT_ID, `❗️ Bot crash: ${error.message}`, { parse_mode: 'Markdown' })
+    .catch((err) => logger.error(`Failed to send crash notification: ${err.message}`));
 });
 
 module.exports = app;
-
